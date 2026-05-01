@@ -26,7 +26,7 @@ export function resolveRepoLocationForFsPath(candidatePath: string): RepoLocatio
     }
 
     const absolutePath = path.resolve(candidatePath);
-    const repoRoot = findNearestRepoRoot(absolutePath);
+    const repoRoot = resolveRepoRootForFsPath(absolutePath);
     if (!repoRoot) {
         return null;
     }
@@ -49,6 +49,14 @@ export function normalizeFsLikePath(candidatePath: string | null | undefined): s
     }
 
     return path.normalize(candidatePath).toLowerCase();
+}
+
+export function resolveRepoRootForFsPath(candidatePath: string): string | null {
+    if (!candidatePath) {
+        return null;
+    }
+
+    return findNearestRepoRoot(path.resolve(candidatePath));
 }
 
 function findNearestRepoRoot(candidatePath: string): string | null {

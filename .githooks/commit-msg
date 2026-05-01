@@ -1,0 +1,43 @@
+#!/bin/sh
+
+# AILoc2 managed hook: commit-msg
+
+MESSAGE_FILE="$1"
+CLI_PATH="./.githooks/ailoc2-hook-runtime.cjs"
+DELEGATE_HOOK_PATH=""
+PLACEHOLDER_SUFFIX=' (AI unavailable)'
+
+run_delegate_hook() {
+    if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
+        return 0
+    fi
+
+    "$DELEGATE_HOOK_PATH" "$@"
+}
+
+append_placeholder_suffix() {
+    if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
+        return 0
+    fi
+
+    TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
+    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\(AI [^)]*\)$//')
+
+    {
+        if [ -n "$SUBJECT_LINE" ]; then
+            printf '%s%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUFFIX"
+        else
+            printf '%s\n' "${PLACEHOLDER_SUFFIX# }"
+        fi
+        sed '1d' "$MESSAGE_FILE"
+    } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"
+}
+
+if [ -n "$MESSAGE_FILE" ] && command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
+    node "$CLI_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_suffix
+else
+    append_placeholder_suffix
+fi
+
+run_delegate_hook "$@"
+exit $?

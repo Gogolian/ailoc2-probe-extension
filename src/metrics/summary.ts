@@ -6,6 +6,7 @@ import {
     FileRollingState,
     getAttributionBucketForSignal,
     HUMAN_SIGNAL_KEYS,
+    LineAttributionSpan,
     METRICS_SCHEMA_VERSION,
     RepoCleanBaselineEntry,
     SaveAttributionCheckpoint,
@@ -28,6 +29,19 @@ const execFile = util.promisify(childProcess.execFile);
 type GitDiffStatEntry = {
     repoRelativePath: string;
     changedLines: number;
+    currentLineRanges: DiffLineRange[];
+};
+
+type DiffLineRange = {
+    startLine: number;
+    lineCount: number;
+};
+
+type ChangedLineAttributionSummary = {
+    repoRelativePath: string;
+    aiWeight: number;
+    humanWeight: number;
+    unknownWeight: number;
 };
 
 export type DiffSliceAttributionSummary = {
@@ -60,11 +74,21 @@ export type RepoHookSummaryFile = RepoUncommittedAttributionSummary & {
     };
 };
 
+export type RepoHookSummaryRefreshResult = {
+    summary: RepoUncommittedAttributionSummary;
+    summaryLine: string;
+    summaryFilePath: string;
+};
+
 export async function computeRepoUncommittedAttributionSummary(args: {
     repoRoot: string;
 }): Promise<RepoUncommittedAttributionSummary> {
-    const stagedEntries = await getGitDiffStatEntries(args.repoRoot, ['diff', '--cached', '--numstat', '--find-renames']);
-    const unstagedEntries = await getGitDiffStatEntries(args.repoRoot, ['diff', '--numstat', '--find-renames']);
+    const stagedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--cached', '--unified=0', '--find-renames', '--no-color']);
+    const unstagedTrackedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color']);
+    const unstagedUntrackedEntries = await getGitUntrackedEntries(args.repoRoot);
+    const unstagedEntries = unstagedTrackedEntries !== null && unstagedUntrackedEntries !== null
+        ? mergeGitDiffEntries(unstagedTrackedEntries, unstagedUntrackedEntries)
+        : null;
     const isGitSummaryAvailable = stagedEntries !== null && unstagedEntries !== null;
 
     if (!isGitSummaryAvailable) {
@@ -120,6 +144,32 @@ export async function writeRepoHookSummaryFile(summary: RepoUncommittedAttributi
     return summaryFilePath;
 }
 
+export async function refreshRepoHookSummary(args: {
+    repoRoot: string;
+}): Promise<RepoHookSummaryRefreshResult> {
+    const summary = await computeRepoUncommittedAttributionSummary(args);
+    const summaryLine = formatRepoUncommittedAttributionSummary(summary);
+    const summaryFilePath = await writeRepoHookSummaryFile(summary);
+
+    return {
+        summary,
+        summaryLine,
+        summaryFilePath
+    };
+}
+
+export async function readRepoHookSummaryFile(repoRoot: string): Promise<RepoHookSummaryFile | null> {
+    const summaryFilePath = getMetricsSummaryFilePath(repoRoot);
+
+    try {
+        const fileContents = await fs.promises.readFile(summaryFilePath, 'utf8');
+        return JSON.parse(fileContents) as RepoHookSummaryFile;
+    }
+    catch {
+        return null;
+    }
+}
+
 function createEmptyRepoSummary(
     repoRoot: string,
     baselineRefreshed: boolean,
@@ -164,6 +214,8 @@ async function summarizeDiffSlices(
 
     const stagedEntriesByPath = new Map(stagedEntries.map((entry) => [entry.repoRelativePath, entry]));
     const unstagedEntriesByPath = new Map(unstagedEntries.map((entry) => [entry.repoRelativePath, entry]));
+    const stagedLineWeightsByPath = new Map<string, number[] | null>();
+    const workingTreeLineWeightsByPath = new Map<string, number[] | null>();
     const allRepoRelativePaths = Array.from(new Set([
         ...stagedEntriesByPath.keys(),
         ...unstagedEntriesByPath.keys()
@@ -190,24 +242,71 @@ async function summarizeDiffSlices(
 
         const stagedEntry = stagedEntriesByPath.get(repoRelativePath);
         if (stagedEntry) {
-            const stagedAttribution = stagedCheckpointAttribution ?? {
-                ...currentAttribution,
-                usedFallbackAttribution: true
-            };
-            applyDiffSliceContribution(stagedSummary, stagedEntry, stagedAttribution);
+            const stagedLineWeights = await getCachedIndexLineWeights(
+                stagedLineWeightsByPath,
+                repoRoot,
+                repoRelativePath
+            );
+            const stagedChangedLineAttribution = stagedCheckpointAttribution?.lineAttributionSpans.length
+                && stagedLineWeights
+                ? deriveChangedLineAttributionFromSpans(
+                    stagedCheckpointAttribution.lineAttributionSpans,
+                    stagedEntry.currentLineRanges,
+                    repoRelativePath,
+                    stagedLineWeights
+                )
+                : !unstagedEntriesByPath.has(repoRelativePath)
+                && stagedLineWeights
+                ? deriveChangedLineAttributionFromSpans(
+                    rollingState.lineAttributionSpans,
+                    stagedEntry.currentLineRanges,
+                    repoRelativePath,
+                    stagedLineWeights
+                )
+                : null;
+
+            if (stagedChangedLineAttribution && applyChangedLineAttributionSummary(stagedSummary, stagedChangedLineAttribution)) {
+                stagedSummary.usedFallbackAttribution = stagedSummary.usedFallbackAttribution || stagedChangedLineAttribution.unknownWeight > 0;
+            }
+            else {
+                const stagedAttribution = stagedCheckpointAttribution ?? {
+                    ...currentAttribution,
+                    usedFallbackAttribution: true
+                };
+                applyDiffSliceContribution(stagedSummary, stagedEntry, stagedAttribution);
+            }
         }
 
         const unstagedEntry = unstagedEntriesByPath.get(repoRelativePath);
         if (unstagedEntry) {
-            const unstagedAttribution = stagedCheckpointAttribution
-                ? subtractAttribution(currentAttribution, stagedCheckpointAttribution)
-                : {
-                    ...currentAttribution,
-                    usedFallbackAttribution: stagedEntriesByPath.has(repoRelativePath)
-                        ? true
-                        : currentAttribution.usedFallbackAttribution
-                };
-            applyDiffSliceContribution(unstagedSummary, unstagedEntry, unstagedAttribution);
+            const workingTreeLineWeights = await getCachedWorkingTreeLineWeights(
+                workingTreeLineWeightsByPath,
+                repoRoot,
+                repoRelativePath
+            );
+            const unstagedChangedLineAttribution = workingTreeLineWeights
+                ? deriveChangedLineAttributionFromSpans(
+                    rollingState.lineAttributionSpans,
+                    unstagedEntry.currentLineRanges,
+                    repoRelativePath,
+                    workingTreeLineWeights
+                )
+                : null;
+
+            if (unstagedChangedLineAttribution && applyChangedLineAttributionSummary(unstagedSummary, unstagedChangedLineAttribution)) {
+                unstagedSummary.usedFallbackAttribution = unstagedSummary.usedFallbackAttribution || unstagedChangedLineAttribution.unknownWeight > 0;
+            }
+            else {
+                const unstagedAttribution = stagedCheckpointAttribution
+                    ? subtractAttribution(currentAttribution, stagedCheckpointAttribution)
+                    : {
+                        ...currentAttribution,
+                        usedFallbackAttribution: stagedEntriesByPath.has(repoRelativePath)
+                            ? true
+                            : currentAttribution.usedFallbackAttribution
+                    };
+                applyDiffSliceContribution(unstagedSummary, unstagedEntry, unstagedAttribution);
+            }
         }
     }
 
@@ -240,6 +339,21 @@ function applyDiffSliceContribution(
     const humanRatio = attribution.humanMagnitude / totalMagnitude;
     summary.aiWeightedChangedLines += diffEntry.changedLines * aiRatio;
     summary.humanWeightedChangedLines += diffEntry.changedLines * humanRatio;
+}
+
+function applyChangedLineAttributionSummary(
+    summary: DiffSliceAttributionSummary,
+    attribution: ChangedLineAttributionSummary
+): boolean {
+    const totalAttributedWeight = attribution.aiWeight + attribution.humanWeight;
+    if (totalAttributedWeight <= 0) {
+        return false;
+    }
+
+    summary.attributedChangedFileCount += 1;
+    summary.aiWeightedChangedLines += attribution.aiWeight;
+    summary.humanWeightedChangedLines += attribution.humanWeight;
+    return true;
 }
 
 function finalizeDiffSliceSummary(summary: DiffSliceAttributionSummary): void {
@@ -343,6 +457,7 @@ async function deriveStagedCheckpointAttribution(
     aiMagnitude: number;
     humanMagnitude: number;
     usedFallbackAttribution: boolean;
+    lineAttributionSpans: LineAttributionSpan[];
 } | null> {
     const indexGitBlobOid = await getIndexGitBlobOid(repoRoot, rollingState.repoRelativePath);
     if (!indexGitBlobOid) {
@@ -365,8 +480,57 @@ async function deriveStagedCheckpointAttribution(
     return {
         aiMagnitude: Math.max(0, matchingCheckpoint.cumulativeAiChangeMagnitude - baseline.aiChangeMagnitude),
         humanMagnitude: Math.max(0, matchingCheckpoint.cumulativeHumanChangeMagnitude - baseline.humanChangeMagnitude),
-        usedFallbackAttribution: false
+        usedFallbackAttribution: false,
+        lineAttributionSpans: matchingCheckpoint.lineAttributionSpans
     };
+}
+
+function deriveChangedLineAttributionFromSpans(
+    spans: LineAttributionSpan[],
+    ranges: DiffLineRange[],
+    repoRelativePath: string,
+    lineWeights: number[]
+): ChangedLineAttributionSummary {
+    const expandedLineAttribution = expandLineAttributionSpans(spans);
+    let aiWeight = 0;
+    let humanWeight = 0;
+    let unknownWeight = 0;
+
+    for (const range of ranges) {
+        for (let index = 0; index < range.lineCount; index += 1) {
+            const lineIndex = range.startLine + index;
+            const attribution = expandedLineAttribution[lineIndex] ?? 'Unknown';
+            const lineWeight = getLineWeight(lineWeights[lineIndex]);
+            if (attribution === 'AI') {
+                aiWeight += lineWeight;
+            }
+            else if (attribution === 'Human') {
+                humanWeight += lineWeight;
+            }
+            else {
+                unknownWeight += lineWeight;
+            }
+        }
+    }
+
+    return {
+        repoRelativePath,
+        aiWeight,
+        humanWeight,
+        unknownWeight
+    };
+}
+
+function expandLineAttributionSpans(spans: LineAttributionSpan[]): Array<LineAttributionSpan['attribution']> {
+    const expanded: Array<LineAttributionSpan['attribution']> = [];
+
+    for (const span of spans) {
+        for (let index = 0; index < span.lineCount; index += 1) {
+            expanded.push(span.attribution);
+        }
+    }
+
+    return expanded;
 }
 
 function findMatchingCheckpointByGitBlobOid(
@@ -383,7 +547,84 @@ function findMatchingCheckpointByGitBlobOid(
     return null;
 }
 
-async function getGitDiffStatEntries(repoRoot: string, args: string[]): Promise<GitDiffStatEntry[] | null> {
+async function getCachedIndexLineWeights(
+    cache: Map<string, number[] | null>,
+    repoRoot: string,
+    repoRelativePath: string
+): Promise<number[] | null> {
+    const cacheKey = `${repoRoot}::${repoRelativePath}`;
+    if (cache.has(cacheKey)) {
+        return cache.get(cacheKey) ?? null;
+    }
+
+    const fileText = await readIndexFileText(repoRoot, repoRelativePath);
+    const lineWeights = fileText === null ? null : createLineWeights(fileText);
+    cache.set(cacheKey, lineWeights);
+    return lineWeights;
+}
+
+async function getCachedWorkingTreeLineWeights(
+    cache: Map<string, number[] | null>,
+    repoRoot: string,
+    repoRelativePath: string
+): Promise<number[] | null> {
+    const cacheKey = `${repoRoot}::${repoRelativePath}`;
+    if (cache.has(cacheKey)) {
+        return cache.get(cacheKey) ?? null;
+    }
+
+    const fileText = await readWorkingTreeFileText(repoRoot, repoRelativePath);
+    const lineWeights = fileText === null ? null : createLineWeights(fileText);
+    cache.set(cacheKey, lineWeights);
+    return lineWeights;
+}
+
+async function readIndexFileText(repoRoot: string, repoRelativePath: string): Promise<string | null> {
+    try {
+        const gitPath = repoRelativePath.split(path.sep).join('/');
+        const { stdout } = await execFile(
+            'git',
+            ['-c', 'core.quotepath=false', 'show', `:${gitPath}`],
+            {
+                cwd: repoRoot,
+                windowsHide: true,
+                maxBuffer: 1024 * 1024
+            }
+        );
+
+        return stdout;
+    }
+    catch {
+        return null;
+    }
+}
+
+async function readWorkingTreeFileText(repoRoot: string, repoRelativePath: string): Promise<string | null> {
+    try {
+        return await fs.promises.readFile(path.join(repoRoot, repoRelativePath), 'utf8');
+    }
+    catch {
+        return null;
+    }
+}
+
+function createLineWeights(text: string): number[] {
+    if (text.length === 0) {
+        return [];
+    }
+
+    return text.split(/\r\n|\r|\n/).map((line) => getLineWeight(line.length));
+}
+
+function getLineWeight(lineLength: number | undefined): number {
+    if (typeof lineLength !== 'number' || !Number.isFinite(lineLength)) {
+        return 1;
+    }
+
+    return Math.max(1, lineLength);
+}
+
+async function getGitDiffEntries(repoRoot: string, args: string[]): Promise<GitDiffStatEntry[] | null> {
     try {
         const { stdout } = await execFile(
             'git',
@@ -395,60 +636,180 @@ async function getGitDiffStatEntries(repoRoot: string, args: string[]): Promise<
             }
         );
 
-        const mergedEntries = new Map<string, number>();
-        for (const line of stdout.split(/\r?\n/)) {
-            const parsedEntry = parseGitDiffStatLine(line);
-            if (!parsedEntry) {
-                continue;
-            }
-
-            mergedEntries.set(
-                parsedEntry.repoRelativePath,
-                (mergedEntries.get(parsedEntry.repoRelativePath) ?? 0) + parsedEntry.changedLines
-            );
-        }
-
-        return Array.from(mergedEntries.entries()).map(([repoRelativePath, changedLines]) => ({
-            repoRelativePath,
-            changedLines
-        }));
+        return parseGitDiffEntries(stdout);
     }
     catch {
         return null;
     }
 }
 
-function parseGitDiffStatLine(line: string): GitDiffStatEntry | null {
-    if (!line.trim()) {
+async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntry[] | null> {
+    try {
+        const { stdout } = await execFile(
+            'git',
+            ['ls-files', '--others', '--exclude-standard'],
+            {
+                cwd: repoRoot,
+                windowsHide: true,
+                maxBuffer: 1024 * 1024
+            }
+        );
+
+        const entries: GitDiffStatEntry[] = [];
+        for (const line of stdout.split(/\r?\n/)) {
+            const repoRelativePath = normalizeDiffPath(line.trim());
+            if (!repoRelativePath) {
+                continue;
+            }
+
+            try {
+                const fileContents = await fs.promises.readFile(path.join(repoRoot, repoRelativePath), 'utf8');
+                const lineCount = countTextLines(fileContents);
+                entries.push({
+                    repoRelativePath,
+                    changedLines: lineCount,
+                    currentLineRanges: lineCount > 0 ? [{ startLine: 0, lineCount }] : []
+                });
+            }
+            catch {
+                continue;
+            }
+        }
+
+        return entries;
+    }
+    catch {
+        return null;
+    }
+}
+
+function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
+    const entries = new Map<string, GitDiffStatEntry>();
+    let currentRepoRelativePath: string | null = null;
+    let pendingHeaderPath: string | null = null;
+
+    for (const line of stdout.split(/\r?\n/)) {
+        if (line.startsWith('diff --git ')) {
+            pendingHeaderPath = parseGitDiffHeaderPath(line);
+            currentRepoRelativePath = pendingHeaderPath;
+            continue;
+        }
+
+        if (line.startsWith('+++ ')) {
+            currentRepoRelativePath = normalizePatchPath(line.slice(4)) ?? pendingHeaderPath;
+            continue;
+        }
+
+        if (!currentRepoRelativePath || !line.startsWith('@@ ')) {
+            continue;
+        }
+
+        const parsedHunk = parseGitDiffHunk(line);
+        if (!parsedHunk) {
+            continue;
+        }
+
+        const entry = entries.get(currentRepoRelativePath) ?? {
+            repoRelativePath: currentRepoRelativePath,
+            changedLines: 0,
+            currentLineRanges: []
+        };
+
+        entry.changedLines += parsedHunk.oldLineCount + parsedHunk.newLineCount;
+        if (parsedHunk.newLineCount > 0) {
+            entry.currentLineRanges.push({
+                startLine: parsedHunk.newStartLine - 1,
+                lineCount: parsedHunk.newLineCount
+            });
+        }
+
+        entries.set(currentRepoRelativePath, entry);
+    }
+
+    return Array.from(entries.values());
+}
+
+function parseGitDiffHeaderPath(line: string): string | null {
+    const quotedMatch = /^diff --git "a\/(.*)" "b\/(.*)"$/u.exec(line);
+    if (quotedMatch) {
+        return normalizeDiffPath(quotedMatch[2]);
+    }
+
+    const simpleMatch = /^diff --git a\/(.+) b\/(.+)$/u.exec(line);
+    if (simpleMatch) {
+        return normalizeDiffPath(simpleMatch[2]);
+    }
+
+    return null;
+}
+
+function normalizePatchPath(rawPath: string): string | null {
+    const trimmedPath = rawPath.trim();
+    if (!trimmedPath || trimmedPath === '/dev/null') {
         return null;
     }
 
-    const fields = line.split('\t');
-    if (fields.length < 3) {
+    const unquotedPath = trimmedPath.startsWith('"') && trimmedPath.endsWith('"')
+        ? trimmedPath.slice(1, -1)
+        : trimmedPath;
+
+    if (unquotedPath.startsWith('a/') || unquotedPath.startsWith('b/')) {
+        return normalizeDiffPath(unquotedPath.slice(2));
+    }
+
+    return normalizeDiffPath(unquotedPath);
+}
+
+function parseGitDiffHunk(line: string): {
+    oldLineCount: number;
+    newStartLine: number;
+    newLineCount: number;
+} | null {
+    const match = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/u.exec(line);
+    if (!match) {
         return null;
     }
 
-    const [addedField, deletedField, ...pathFields] = fields;
-    if (addedField === '-' || deletedField === '-') {
-        return null;
-    }
-
-    const addedLines = Number.parseInt(addedField, 10);
-    const deletedLines = Number.parseInt(deletedField, 10);
-    if (!Number.isFinite(addedLines) || !Number.isFinite(deletedLines)) {
-        return null;
-    }
-
-    const rawPath = pathFields.join('\t').trim();
-    const repoRelativePath = normalizeDiffPath(rawPath);
-    if (!repoRelativePath) {
+    const oldLineCount = match[1] === undefined ? 1 : Number.parseInt(match[1], 10);
+    const newStartLine = Number.parseInt(match[2], 10);
+    const newLineCount = match[3] === undefined ? 1 : Number.parseInt(match[3], 10);
+    if (!Number.isFinite(oldLineCount) || !Number.isFinite(newStartLine) || !Number.isFinite(newLineCount)) {
         return null;
     }
 
     return {
-        repoRelativePath,
-        changedLines: addedLines + deletedLines
+        oldLineCount,
+        newStartLine,
+        newLineCount
     };
+}
+
+function mergeGitDiffEntries(...entrySets: GitDiffStatEntry[][]): GitDiffStatEntry[] {
+    const mergedEntries = new Map<string, GitDiffStatEntry>();
+
+    for (const entrySet of entrySets) {
+        for (const entry of entrySet) {
+            const existingEntry = mergedEntries.get(entry.repoRelativePath) ?? {
+                repoRelativePath: entry.repoRelativePath,
+                changedLines: 0,
+                currentLineRanges: []
+            };
+
+            existingEntry.changedLines += entry.changedLines;
+            existingEntry.currentLineRanges.push(...entry.currentLineRanges);
+            mergedEntries.set(entry.repoRelativePath, existingEntry);
+        }
+    }
+
+    return Array.from(mergedEntries.values());
+}
+
+function countTextLines(text: string): number {
+    if (text.length === 0) {
+        return 0;
+    }
+
+    return text.split(/\r\n|\r|\n/).length;
 }
 
 function normalizeDiffPath(rawPath: string): string | null {

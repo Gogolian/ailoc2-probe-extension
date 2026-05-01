@@ -2,19 +2,22 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { diffArrays } from 'diff';
 
 import {
     normalizeFsLikePath,
     resolveRepoLocationForDocument,
+    resolveRepoRootForFsPath,
     resolveRepoLocationForUri
 } from './metrics/repoResolver';
 import {
-    getDailyEventsFilePath,
     getMetricsManifestPath,
     getMetricsRoot,
     getRollingStatePath
 } from './metrics/pathing';
 import {
+    getAttributionBucketForSignal,
+    LineDiffSegment,
     METRICS_SCHEMA_VERSION,
     SaveCorrelationSummary,
     SessionBoundaryEvent,
@@ -22,11 +25,10 @@ import {
     FileLifecycleEvent
 } from './metrics/schema';
 import {
-    computeRepoUncommittedAttributionSummary,
-    formatRepoUncommittedAttributionSummary,
-    writeRepoHookSummaryFile
+    refreshRepoHookSummary
 } from './metrics/summary';
 import { RepoMetricsStore } from './metrics/store';
+import { installRepoHooks, uninstallRepoHooks } from './hooks/management';
 import { getTrackingExclusionReasonForPath as getSharedTrackingExclusionReasonForPath } from './trackingExclusions';
 
 type DocumentSnapshot = {
@@ -140,18 +142,20 @@ type MetricPersistenceDecision = {
     logicalPath: string | null;
 };
 
+type RepoSelectionItem = vscode.QuickPickItem & {
+    repoRoot: string;
+    sortKey: string;
+};
+
 const OUTPUT_CHANNEL_NAME = 'AILoc2 Probe';
 const SUMMARY_OUTPUT_CHANNEL_NAME = 'AILoc2 Summary';
 const EXTENSION_CONFIGURATION_SECTION = 'ailoc2Probe';
-const PERSIST_EVENT_FILES_CONFIGURATION_KEY = 'metrics.persistEventsToFiles';
 const VERBOSE_OUTPUT_CHANNEL_CONFIGURATION_KEY = 'logging.verboseOutputChannel';
 const TEXT_PREVIEW_LIMIT = 240;
 const CHAT_CONTEXT_WINDOW_MS = 120_000;
 const RECENT_WILL_SAVE_WINDOW_MS = 5_000;
-const SUMMARY_UPDATE_DEBOUNCE_MS = 500;
 
 type ExtensionRuntimeConfiguration = {
-    persistEventsToFiles: boolean;
     verboseOutputChannel: boolean;
 };
 
@@ -160,9 +164,7 @@ let summaryOutputChannel: vscode.OutputChannel | undefined;
 let metricsStore: RepoMetricsStore | undefined;
 let extensionSessionId: string | undefined;
 const trackedRepoRoots = new Set<string>();
-const pendingSummaryUpdateTimers = new Map<string, NodeJS.Timeout>();
 let runtimeConfiguration: ExtensionRuntimeConfiguration = {
-    persistEventsToFiles: false,
     verboseOutputChannel: false
 };
 
@@ -185,11 +187,8 @@ export function activate(context: vscode.ExtensionContext): void {
     };
 
     extensionSessionId = crypto.randomUUID();
-    metricsStore = new RepoMetricsStore(extensionSessionId, logEvent, {
-        persistEventsToFiles: runtimeConfiguration.persistEventsToFiles
-    });
+    metricsStore = new RepoMetricsStore(extensionSessionId, logEvent);
     trackedRepoRoots.clear();
-    pendingSummaryUpdateTimers.clear();
 
     const logSummaryLine = (message: string): void => {
         if (!summaryOutputChannel) {
@@ -199,51 +198,23 @@ export function activate(context: vscode.ExtensionContext): void {
         summaryOutputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
     };
 
-    const emitRepoSummary = async (repoRoot: string, reason: string): Promise<void> => {
+    const refreshRepoSummaryForCommand = async (repoRoot: string, reason: string) => {
         if (!metricsStore) {
-            return;
+            throw new Error('Metrics store is not available.');
         }
 
         await metricsStore.flushRepo(repoRoot);
-        const summary = await computeRepoUncommittedAttributionSummary({ repoRoot });
-        const summaryLine = formatRepoUncommittedAttributionSummary(summary);
-
-        try {
-            const summaryFilePath = await writeRepoHookSummaryFile(summary);
-            logEvent('HOOK_SUMMARY_FILE_UPDATED', {
-                repoRoot,
-                summaryFilePath,
-                isGitSummaryAvailable: summary.isGitSummaryAvailable,
-                staged: summary.staged,
-                unstaged: summary.unstaged
-            });
-        }
-        catch (error) {
-            logEvent('HOOK_SUMMARY_FILE_UPDATE_FAILED', {
-                repoRoot,
-                error: error instanceof Error ? error.message : String(error)
-            });
-        }
-
-        logSummaryLine(`${summaryLine} [trigger: ${reason}]`);
-    };
-
-    const scheduleRepoSummaryUpdate = (repoRoot: string, reason: string): void => {
-        const existingTimer = pendingSummaryUpdateTimers.get(repoRoot);
-        if (existingTimer) {
-            clearTimeout(existingTimer);
-        }
-
-        const timer = setTimeout(() => {
-            pendingSummaryUpdateTimers.delete(repoRoot);
-            void emitRepoSummary(repoRoot, reason).catch((error) => {
-                logSummaryLine(
-                    `${path.basename(repoRoot)}: summary unavailable (${error instanceof Error ? error.message : String(error)}) [trigger: ${reason}]`
-                );
-            });
-        }, SUMMARY_UPDATE_DEBOUNCE_MS);
-
-        pendingSummaryUpdateTimers.set(repoRoot, timer);
+        const refreshedSummary = await refreshRepoHookSummary({ repoRoot });
+        logEvent('HOOK_SUMMARY_FILE_UPDATED', {
+            repoRoot,
+            reason,
+            summaryFilePath: refreshedSummary.summaryFilePath,
+            isGitSummaryAvailable: refreshedSummary.summary.isGitSummaryAvailable,
+            staged: refreshedSummary.summary.staged,
+            unstaged: refreshedSummary.summary.unstaged
+        });
+        logSummaryLine(`${refreshedSummary.summaryLine} [trigger: ${reason}]`);
+        return refreshedSummary;
     };
 
     const upsertSnapshot = (document: vscode.TextDocument): DocumentSnapshot | undefined => {
@@ -329,10 +300,6 @@ export function activate(context: vscode.ExtensionContext): void {
                     ? {
                         metricsRoot: getMetricsRoot(repoLocation.repoRoot),
                         manifestPath: getMetricsManifestPath(repoLocation.repoRoot),
-                        persistEventsToFiles: runtimeConfiguration.persistEventsToFiles,
-                        todayEventsPath: runtimeConfiguration.persistEventsToFiles
-                            ? getDailyEventsFilePath(repoLocation.repoRoot, new Date().toISOString())
-                            : null,
                         rollingStatePath: getRollingStatePath(repoLocation.repoRoot, repoLocation.repoRelativePath),
                         isCurrentlyTracked: trackedState
                     }
@@ -340,12 +307,165 @@ export function activate(context: vscode.ExtensionContext): void {
                 notes: trackingExclusionReason
                     ? `The active document is excluded from tracking: ${trackingExclusionReason}.`
                     : repoLocation
-                    ? runtimeConfiguration.persistEventsToFiles
-                        ? 'This is the repo-local .ailoc2-metrics target for the active file.'
-                        : 'This is the repo-local .ailoc2-metrics target for the active file. Event-file persistence is currently disabled by configuration.'
+                    ? 'This is the repo-local .ailoc2-metrics target for the active file.'
                     : 'The active document is not currently eligible for repo-local metrics persistence.'
             });
             outputChannel?.show(true);
+        }),
+        vscode.commands.registerCommand('ailoc2Probe.recomputeRepoSummary', async () => {
+            const repoRoot = await promptForRepoRootForCommand({
+                title: 'AILoc2 Probe: Recompute Repo Summary',
+                placeHolder: 'Select the repository to recompute the AILoc2 summary for.'
+            });
+            if (!repoRoot) {
+                return;
+            }
+
+            summaryOutputChannel?.show(true);
+
+            try {
+                const refreshedSummary = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: `AILoc2: Refreshing summary for ${path.basename(repoRoot)}`
+                }, async () => refreshRepoSummaryForCommand(repoRoot, 'command:recompute-summary'));
+
+                logEvent('COMMAND_RECOMPUTE_REPO_SUMMARY', {
+                    repoRoot,
+                    summaryFilePath: refreshedSummary.summaryFilePath,
+                    summaryLine: refreshedSummary.summaryLine,
+                    isGitSummaryAvailable: refreshedSummary.summary.isGitSummaryAvailable,
+                    staged: refreshedSummary.summary.staged,
+                    unstaged: refreshedSummary.summary.unstaged
+                });
+
+                const infoMessage = refreshedSummary.summary.isGitSummaryAvailable
+                    ? `AILoc2 summary refreshed for ${path.basename(repoRoot)}. Staged AI: ${refreshedSummary.summary.staged.aiPercentage.toFixed(2)}%.`
+                    : `AILoc2 summary refreshed for ${path.basename(repoRoot)}, but Git summary data is unavailable.`;
+                void vscode.window.showInformationMessage(infoMessage);
+            }
+            catch (error) {
+                logEvent('COMMAND_RECOMPUTE_REPO_SUMMARY_FAILED', {
+                    repoRoot,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+                void vscode.window.showErrorMessage(
+                    `AILoc2 failed to refresh the repo summary for ${path.basename(repoRoot)}: ${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+        }),
+        vscode.commands.registerCommand('ailoc2Probe.installHooks', async () => {
+            const repoRoot = await promptForRepoRootForCommand({
+                title: 'AILoc2 Probe: Install Repo Hooks',
+                placeHolder: 'Select the repository to install AILoc2 Git hooks for.'
+            });
+            if (!repoRoot) {
+                return;
+            }
+
+            try {
+                let installResult = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: `AILoc2: Installing hooks for ${path.basename(repoRoot)}`
+                }, async () => installRepoHooks({ repoRoot }));
+
+                if (installResult.status === 'conflict') {
+                    const resolutionChoice = await vscode.window.showWarningMessage(
+                        `${path.basename(repoRoot)} already uses a different local hooksPath (${installResult.currentLocalHooksPath}). Do you want AILoc2 to chain to that hooksPath or replace it?`,
+                        { modal: true },
+                        'Chain hooks',
+                        'Replace hooksPath'
+                    );
+                    if (!resolutionChoice) {
+                        logEvent('COMMAND_INSTALL_HOOKS_CANCELLED', {
+                            repoRoot,
+                            currentLocalHooksPath: installResult.currentLocalHooksPath
+                        });
+                        return;
+                    }
+
+                    installResult = await vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: resolutionChoice === 'Chain hooks'
+                            ? `AILoc2: Chaining hooks for ${path.basename(repoRoot)}`
+                            : `AILoc2: Replacing hooksPath for ${path.basename(repoRoot)}`
+                    }, async () => installRepoHooks({
+                        repoRoot,
+                        allowReplacingExistingLocalHooksPath: true,
+                        chainExistingLocalHooksPath: resolutionChoice === 'Chain hooks'
+                    }));
+                }
+
+                logEvent('COMMAND_INSTALL_HOOKS', installResult);
+
+                const infoMessage = installResult.status === 'already-installed'
+                    ? installResult.delegatedHooksPath
+                        ? `AILoc2 hooks are already active for ${path.basename(repoRoot)} and chained to ${installResult.delegatedHooksPath}.`
+                        : `AILoc2 hooks are already active for ${path.basename(repoRoot)}.`
+                    : installResult.delegatedHooksPath
+                    ? `AILoc2 hooks installed for ${path.basename(repoRoot)} and chained to ${installResult.delegatedHooksPath}.`
+                    : installResult.replacedPreviousLocalHooksPath
+                    ? `AILoc2 hooks installed for ${path.basename(repoRoot)}. Previous local hooksPath saved for restore on uninstall.`
+                    : `AILoc2 hooks installed for ${path.basename(repoRoot)}.`;
+                void vscode.window.showInformationMessage(infoMessage);
+            }
+            catch (error) {
+                logEvent('COMMAND_INSTALL_HOOKS_FAILED', {
+                    repoRoot,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+                void vscode.window.showErrorMessage(
+                    `AILoc2 failed to install hooks for ${path.basename(repoRoot)}: ${error instanceof Error ? error.message : String(error)}`
+                );
+            }
+        }),
+        vscode.commands.registerCommand('ailoc2Probe.uninstallHooks', async () => {
+            const repoRoot = await promptForRepoRootForCommand({
+                title: 'AILoc2 Probe: Uninstall Repo Hooks',
+                placeHolder: 'Select the repository to uninstall AILoc2 Git hooks from.'
+            });
+            if (!repoRoot) {
+                return;
+            }
+
+            try {
+                const uninstallResult = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: `AILoc2: Uninstalling hooks for ${path.basename(repoRoot)}`
+                }, async () => uninstallRepoHooks({ repoRoot }));
+
+                logEvent('COMMAND_UNINSTALL_HOOKS', uninstallResult);
+
+                let infoMessage: string;
+                if (uninstallResult.status === 'restored-previous') {
+                    infoMessage = `AILoc2 hooks removed for ${path.basename(repoRoot)}. Restored the previous local hooksPath.`;
+                }
+                else if (uninstallResult.status === 'uninstalled') {
+                    infoMessage = `AILoc2 hooks removed for ${path.basename(repoRoot)}.`;
+                }
+                else if (uninstallResult.removedManagedHookAssets && uninstallResult.currentLocalHooksPath) {
+                    infoMessage = `AILoc2 removed its managed hook files from ${path.basename(repoRoot)}, but left the current repo-local hooksPath (${uninstallResult.currentLocalHooksPath}) unchanged.`;
+                }
+                else if (uninstallResult.removedManagedHookAssets) {
+                    infoMessage = `AILoc2 removed its managed hook files from ${path.basename(repoRoot)}.`;
+                }
+                else if (uninstallResult.currentLocalHooksPath) {
+                    infoMessage = `${path.basename(repoRoot)} is using a different repo-local hooksPath (${uninstallResult.currentLocalHooksPath}). AILoc2 left it unchanged.`;
+                }
+                else {
+                    infoMessage = `No repo-local AILoc2 hooks are currently installed for ${path.basename(repoRoot)}.`;
+                }
+
+                void vscode.window.showInformationMessage(infoMessage);
+            }
+            catch (error) {
+                logEvent('COMMAND_UNINSTALL_HOOKS_FAILED', {
+                    repoRoot,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+                void vscode.window.showErrorMessage(
+                    `AILoc2 failed to uninstall hooks for ${path.basename(repoRoot)}: ${error instanceof Error ? error.message : String(error)}`
+                );
+            }
         }),
         vscode.workspace.onDidOpenTextDocument((document) => {
             if (shouldIgnoreDocument(document)) {
@@ -494,7 +614,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
             const repoLocation = resolveRepoLocationForDocument(document);
             if (repoLocation && snapshot && metricsStore) {
-                void metricsStore.flushRepo(repoLocation.repoRoot);
                 metricsStore.noteDocumentSaved({
                     repoRoot: repoLocation.repoRoot,
                     repoRelativePath: repoLocation.repoRelativePath,
@@ -505,7 +624,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     documentVersion: snapshot.version,
                     saveCorrelation: recentWillSave
                 });
-                scheduleRepoSummaryUpdate(repoLocation.repoRoot, 'save');
+                void metricsStore.flushRepo(repoLocation.repoRoot);
             }
 
             logEvent('TEXT_DOCUMENT_SAVED', {
@@ -599,7 +718,6 @@ export function activate(context: vscode.ExtensionContext): void {
                                 nextRepoRelativePath: nextRepoLocation.repoRelativePath
                             }));
                             await activeMetricsStore.flushRepo(nextRepoLocation.repoRoot);
-                            scheduleRepoSummaryUpdate(nextRepoLocation.repoRoot, 'rename:within-repo');
                         }
                         else {
                             activeMetricsStore.queueFileLifecycleEvent(createFileLifecycleEvent({
@@ -628,8 +746,6 @@ export function activate(context: vscode.ExtensionContext): void {
                             }));
                             await activeMetricsStore.flushRepo(previousRepoLocation.repoRoot);
                             await activeMetricsStore.flushRepo(nextRepoLocation.repoRoot);
-                            scheduleRepoSummaryUpdate(previousRepoLocation.repoRoot, 'rename:cross-repo-delete');
-                            scheduleRepoSummaryUpdate(nextRepoLocation.repoRoot, 'rename:cross-repo-create');
                         }
                     }
                     else if (previousRepoLocation) {
@@ -651,7 +767,6 @@ export function activate(context: vscode.ExtensionContext): void {
                             recordedAt
                         });
                         await activeMetricsStore.flushRepo(previousRepoLocation.repoRoot);
-                        scheduleRepoSummaryUpdate(previousRepoLocation.repoRoot, 'rename:delete-only');
                     }
 
                     renameSummaries.push({
@@ -742,7 +857,6 @@ export function activate(context: vscode.ExtensionContext): void {
                         recordedAt
                     });
                     await activeMetricsStore.flushRepo(repoLocation.repoRoot);
-                    scheduleRepoSummaryUpdate(repoLocation.repoRoot, 'delete');
 
                     deletions.push({
                         uri: uri.toString(),
@@ -792,12 +906,6 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
-    for (const timer of pendingSummaryUpdateTimers.values()) {
-        clearTimeout(timer);
-    }
-
-    pendingSummaryUpdateTimers.clear();
-
     if (metricsStore && extensionSessionId) {
         for (const repoRoot of trackedRepoRoots) {
             metricsStore.queueSessionBoundaryEvent(createSessionBoundaryEvent({
@@ -822,7 +930,6 @@ export async function deactivate(): Promise<void> {
 function readExtensionRuntimeConfiguration(): ExtensionRuntimeConfiguration {
     const configuration = vscode.workspace.getConfiguration(EXTENSION_CONFIGURATION_SECTION);
     return {
-        persistEventsToFiles: configuration.get<boolean>(PERSIST_EVENT_FILES_CONFIGURATION_KEY, false),
         verboseOutputChannel: configuration.get<boolean>(VERBOSE_OUTPUT_CHANNEL_CONFIGURATION_KEY, false)
     };
 }
@@ -1473,6 +1580,24 @@ function previewText(text: string | undefined): string | null {
     return `${escaped.slice(0, TEXT_PREVIEW_LIMIT)}…`;
 }
 
+function createLineDiffSegments(beforeText: string | undefined, afterText: string): LineDiffSegment[] {
+    const beforeLines = splitTextIntoLogicalLines(beforeText ?? '');
+    const afterLines = splitTextIntoLogicalLines(afterText);
+
+    return diffArrays(beforeLines, afterLines).map((part) => ({
+        type: part.added ? 'added' : part.removed ? 'removed' : 'equal',
+        lineCount: part.count ?? part.value.length
+    }));
+}
+
+function splitTextIntoLogicalLines(text: string): string[] {
+    if (text.length === 0) {
+        return [];
+    }
+
+    return text.split(/\r\n|\r|\n/);
+}
+
 function hashText(text: string): string {
     return crypto
         .createHash('sha256')
@@ -1609,6 +1734,10 @@ function createWorkspaceFileMetricEvent(input: {
         lineCount: input.document.lineCount,
         languageId: input.document.languageId,
         isDirty: input.document.isDirty,
+        lineDiffSegments: createLineDiffSegments(
+            input.beforeSnapshot?.text,
+            input.afterSnapshot?.text ?? input.document.getText()
+        ),
         chatCorrelation: input.recentChatEditCorrelation ? { ...input.recentChatEditCorrelation } : null,
         saveCorrelation: input.saveCorrelation
     };
@@ -1708,4 +1837,79 @@ function getTrackingExclusionReasonForUri(uri: vscode.Uri): string | null {
 
 function getTrackingExclusionReasonForPath(candidatePath: string | null | undefined): string | null {
     return getSharedTrackingExclusionReasonForPath(candidatePath);
+}
+
+async function promptForRepoRootForCommand(args: {
+    title: string;
+    placeHolder: string;
+}): Promise<string | null> {
+    const selectionItems = collectRepoSelectionItems();
+    if (selectionItems.length === 0) {
+        void vscode.window.showWarningMessage('AILoc2 could not find any Git repositories in the current workspace.');
+        return null;
+    }
+
+    const selectedRepo = await vscode.window.showQuickPick(selectionItems, {
+        title: args.title,
+        placeHolder: args.placeHolder,
+        ignoreFocusOut: true,
+        matchOnDescription: true,
+        matchOnDetail: true
+    });
+
+    return selectedRepo?.repoRoot ?? null;
+}
+
+function collectRepoSelectionItems(): RepoSelectionItem[] {
+    const candidates = new Map<string, {
+        repoRoot: string;
+        sources: Set<string>;
+    }>();
+
+    const activeEditorRepoRoot = vscode.window.activeTextEditor
+        ? resolveRepoLocationForDocument(vscode.window.activeTextEditor.document)?.repoRoot ?? null
+        : null;
+    addRepoSelectionCandidate(candidates, activeEditorRepoRoot, 'Active editor');
+
+    for (const repoRoot of trackedRepoRoots) {
+        addRepoSelectionCandidate(candidates, repoRoot, 'Tracked repo activity');
+    }
+
+    for (const workspaceFolder of vscode.workspace.workspaceFolders ?? []) {
+        addRepoSelectionCandidate(
+            candidates,
+            resolveRepoRootForFsPath(workspaceFolder.uri.fsPath),
+            `Workspace folder: ${workspaceFolder.name}`
+        );
+    }
+
+    return Array.from(candidates.values())
+        .map((candidate) => ({
+            label: path.basename(candidate.repoRoot) || candidate.repoRoot,
+            description: Array.from(candidate.sources).sort().join(' • '),
+            detail: candidate.repoRoot,
+            repoRoot: candidate.repoRoot,
+            sortKey: normalizeFsLikePath(candidate.repoRoot) ?? candidate.repoRoot.toLowerCase()
+        }))
+        .sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+}
+
+function addRepoSelectionCandidate(
+    candidates: Map<string, { repoRoot: string; sources: Set<string>; }>,
+    repoRoot: string | null | undefined,
+    source: string
+): void {
+    if (!repoRoot) {
+        return;
+    }
+
+    const normalizedRepoRoot = normalizeFsLikePath(repoRoot) ?? repoRoot.toLowerCase();
+    const existingCandidate = candidates.get(normalizedRepoRoot) ?? {
+        repoRoot,
+        sources: new Set<string>()
+    };
+
+    existingCandidate.repoRoot = repoRoot;
+    existingCandidate.sources.add(source);
+    candidates.set(normalizedRepoRoot, existingCandidate);
 }

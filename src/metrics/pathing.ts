@@ -10,10 +10,6 @@ export function getMetricsSummaryFilePath(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'summary.json');
 }
 
-export function getMetricsEventsDirectory(repoRoot: string): string {
-    return path.join(getMetricsRoot(repoRoot), 'events');
-}
-
 export function getMetricsStateDirectory(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'state');
 }
@@ -28,10 +24,6 @@ export function getMetricsFilesStateDirectory(repoRoot: string): string {
 
 export function getMetricsManifestPath(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'manifest.json');
-}
-
-export function getDailyEventsFilePath(repoRoot: string, isoTimestamp: string): string {
-    return path.join(getMetricsEventsDirectory(repoRoot), `${isoTimestamp.slice(0, 10)}.jsonl`);
 }
 
 export function getRollingStatePath(repoRoot: string, repoRelativePath: string): string {

@@ -31,36 +31,46 @@
       {
         "command": "ailoc2Probe.showSummaryOutput",
         "title": "AILoc2 Probe: Show Summary Output"
+      },
+      {
+        "command": "ailoc2Probe.recomputeRepoSummary",
+        "title": "AILoc2 Probe: Recompute Repo Summary"
+      },
+      {
+        "command": "ailoc2Probe.installHooks",
+        "title": "AILoc2 Probe: Install Repo Hooks"
+      },
+      {
+        "command": "ailoc2Probe.uninstallHooks",
+        "title": "AILoc2 Probe: Uninstall Repo Hooks"
       }
     ],
     "configuration": {
       "title": "AILoc2 Probe",
       "properties": {
-        "ailoc2Probe.metrics.persistEventsToFiles": {
-          "type": "boolean",
-          "default": false,
-          "scope": "resource",
-          "order": 1,
-          "markdownDescription": "Write full event records to `.ailoc2-metrics/events/*.jsonl` daily files. **Warning:** Enabling this creates a high amount of files and extra disk I/O. Use only for debugging or detailed analysis."
-        },
         "ailoc2Probe.logging.verboseOutputChannel": {
           "type": "boolean",
           "default": false,
           "scope": "window",
-          "order": 2,
+          "order": 1,
           "markdownDescription": "Log automatic probe events to the `AILoc2 Probe` output channel. Disable this to reduce output noise and memory usage."
         }
       }
     }
   },
   "scripts": {
-    "build": "tsc -p ./",
+    "build": "tsc -p ./ && npm run build:hook-runtime",
+    "build:hook-runtime": "esbuild ./src/cli/gitHookCli.ts --bundle --platform=node --format=cjs --target=node18 --outfile=./out/hook-runtime/ailoc2-hook-runtime.cjs",
     "watch": "tsc -w -p ./",
     "vscode:prepublish": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
     "@types/vscode": "^1.118.0",
+    "esbuild": "^0.25.4",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "diff": "^9.0.0"
   }
 }

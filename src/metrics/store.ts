@@ -5,6 +5,8 @@ import {
     FileLifecycleEvent,
     FileRollingState,
     getAttributionBucketForSignal,
+    LineAttribution,
+    LineAttributionSpan,
     METRICS_SCHEMA_VERSION,
     MetricsRecord,
     RepoManifest,
@@ -15,8 +17,6 @@ import {
 } from './schema';
 import { getGitBlobOidForWorkingTreeFile } from './git';
 import {
-    getDailyEventsFilePath,
-    getMetricsEventsDirectory,
     getMetricsFilesStateDirectory,
     getMetricsManifestPath,
     getMetricsRoot,
@@ -29,27 +29,57 @@ const MAX_SAVE_ATTRIBUTION_CHECKPOINTS = 64;
 type QueuedRecord = {
     record: MetricsRecord;
     rollingStatePath: string | null;
+    sequence: number;
 };
 
 type RepoQueue = {
     pendingRecords: QueuedRecord[];
+    pendingSaveUpdates: PendingSaveUpdate[];
     flushTimer: NodeJS.Timeout | null;
     flushPromise: Promise<void>;
 };
 
-export type MetricsStoreLogger = (eventName: string, payload: unknown) => void;
+type RollingStateRecord = WorkspaceFileMetricEvent | FileLifecycleEvent;
 
-export type RepoMetricsStoreOptions = {
-    persistEventsToFiles: boolean;
+type PendingSaveUpdate = {
+    repoRoot: string;
+    repoRelativePath: string;
+    savedAt: string;
+    hash: string;
+    lineCount: number;
+    charLength: number;
+    documentVersion: number;
+    saveCorrelation: SaveCorrelationSummary;
+    sequence: number;
 };
+
+type RollingStateOperation = {
+    kind: 'record';
+    record: RollingStateRecord;
+    sequence: number;
+} | {
+    kind: 'save-update';
+    update: PendingSaveUpdate;
+    sequence: number;
+};
+
+type RollingStateBatch = {
+    rollingStatePath: string;
+    repoRoot: string;
+    repoRelativePath: string;
+    operations: RollingStateOperation[];
+};
+
+export type MetricsStoreLogger = (eventName: string, payload: unknown) => void;
 
 export class RepoMetricsStore {
     private readonly repoQueues = new Map<string, RepoQueue>();
+    private readonly manifestCache = new Map<string, RepoManifest>();
+    private nextPendingOperationSequence = 0;
 
     public constructor(
         private readonly extensionSessionId: string,
-        private readonly logEvent: MetricsStoreLogger,
-        private readonly options: RepoMetricsStoreOptions
+        private readonly logEvent: MetricsStoreLogger
     ) {}
 
     public queueWorkspaceFileMetric(record: WorkspaceFileMetricEvent): void {
@@ -58,7 +88,8 @@ export class RepoMetricsStore {
             : null;
         this.enqueue(record.repoRoot, {
             record,
-            rollingStatePath
+            rollingStatePath,
+            sequence: this.getNextPendingOperationSequence()
         });
     }
 
@@ -68,21 +99,22 @@ export class RepoMetricsStore {
             : null;
         this.enqueue(record.repoRoot, {
             record,
-            rollingStatePath
+            rollingStatePath,
+            sequence: this.getNextPendingOperationSequence()
         });
     }
 
     public queueSessionBoundaryEvent(record: SessionBoundaryEvent): void {
         this.enqueue(record.repoRoot, {
             record,
-            rollingStatePath: null
+            rollingStatePath: null,
+            sequence: this.getNextPendingOperationSequence()
         });
     }
 
     public async hasTrackedFile(repoRoot: string, repoRelativePath: string): Promise<boolean> {
-        const hasPendingRecord = this.getOrCreateRepoQueue(repoRoot).pendingRecords.some(
-            (entry) => entry.record.repoRelativePath === repoRelativePath
-        );
+        const repoQueue = this.getOrCreateRepoQueue(repoRoot);
+        const hasPendingRecord = repoQueue.pendingRecords.some((entry) => entry.record.repoRelativePath === repoRelativePath);
         if (hasPendingRecord) {
             return true;
         }
@@ -101,73 +133,11 @@ export class RepoMetricsStore {
         saveCorrelation: SaveCorrelationSummary;
     }): void {
         const repoQueue = this.getOrCreateRepoQueue(args.repoRoot);
-        repoQueue.flushPromise = repoQueue.flushPromise
-            .then(async () => {
-                await this.ensureRepoLayout(args.repoRoot);
-                const rollingStatePath = getRollingStatePath(args.repoRoot, args.repoRelativePath);
-                if (!(await this.pathExists(rollingStatePath))) {
-                    return;
-                }
-
-                const gitBlobOid = await getGitBlobOidForWorkingTreeFile(args.repoRoot, args.repoRelativePath);
-                const rollingState = await this.readRollingState(rollingStatePath, args.repoRoot, args.repoRelativePath);
-                rollingState.lastRecordedAt = args.savedAt;
-                rollingState.lastSavedAt = args.savedAt;
-                rollingState.lastSavedHash = args.hash;
-                rollingState.lastSavedLineCount = args.lineCount;
-                rollingState.lastSavedCharLength = args.charLength;
-                rollingState.lastDocumentVersion = args.documentVersion;
-                rollingState.lastSavedWillSaveReason = args.saveCorrelation.reason ?? null;
-                const lastCheckpoint = rollingState.saveAttributionCheckpoints.at(-1);
-                const nextCheckpoint = {
-                    savedAt: args.savedAt,
-                    documentHash: args.hash,
-                    gitBlobOid,
-                    documentVersion: args.documentVersion,
-                    cumulativeAiChangeMagnitude: rollingState.cumulativeAiChangeMagnitude,
-                    cumulativeHumanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude
-                };
-
-                if (lastCheckpoint
-                    && lastCheckpoint.documentHash === nextCheckpoint.documentHash
-                    && lastCheckpoint.gitBlobOid === nextCheckpoint.gitBlobOid
-                    && lastCheckpoint.cumulativeAiChangeMagnitude === nextCheckpoint.cumulativeAiChangeMagnitude
-                    && lastCheckpoint.cumulativeHumanChangeMagnitude === nextCheckpoint.cumulativeHumanChangeMagnitude) {
-                    lastCheckpoint.savedAt = nextCheckpoint.savedAt;
-                    lastCheckpoint.documentVersion = nextCheckpoint.documentVersion;
-                }
-                else {
-                    rollingState.saveAttributionCheckpoints = [
-                        ...rollingState.saveAttributionCheckpoints,
-                        nextCheckpoint
-                    ].slice(-MAX_SAVE_ATTRIBUTION_CHECKPOINTS);
-                }
-
-                await this.writeJsonFileAtomic(rollingStatePath, rollingState);
-                await this.writeManifest(args.repoRoot, {
-                    lastWriteAt: args.savedAt,
-                    pendingQueueLength: this.getPendingQueueLength(args.repoRoot)
-                });
-                this.logEvent('METRICS_STORE_SAVED_STATE_UPDATED', {
-                    repoRoot: args.repoRoot,
-                    repoRelativePath: args.repoRelativePath,
-                    rollingStatePath,
-                    savedAt: args.savedAt,
-                    hash: args.hash,
-                    gitBlobOid,
-                    lineCount: args.lineCount,
-                    charLength: args.charLength,
-                    documentVersion: args.documentVersion,
-                    saveCorrelation: args.saveCorrelation
-                });
-            })
-            .catch((error) => {
-                this.logEvent('METRICS_STORE_SAVE_UPDATE_FAILED', {
-                    repoRoot: args.repoRoot,
-                    repoRelativePath: args.repoRelativePath,
-                    error: error instanceof Error ? error.message : String(error)
-                });
-            });
+        repoQueue.pendingSaveUpdates.push({
+            ...args,
+            sequence: this.getNextPendingOperationSequence()
+        });
+        this.scheduleFlush(args.repoRoot);
     }
 
     public moveRollingState(args: {
@@ -297,105 +267,199 @@ export class RepoMetricsStore {
 
     private async flushPendingRecords(repoRoot: string): Promise<void> {
         const repoQueue = this.getOrCreateRepoQueue(repoRoot);
-        if (repoQueue.pendingRecords.length === 0) {
+        if (repoQueue.pendingRecords.length === 0 && repoQueue.pendingSaveUpdates.length === 0) {
             return;
         }
 
         const recordsToFlush = repoQueue.pendingRecords.splice(0, repoQueue.pendingRecords.length);
+        const saveUpdatesToFlush = repoQueue.pendingSaveUpdates.splice(0, repoQueue.pendingSaveUpdates.length);
         const latestRecord = recordsToFlush[recordsToFlush.length - 1]?.record;
-        if (!latestRecord) {
-            return;
-        }
+        const latestSaveUpdate = saveUpdatesToFlush.at(-1) ?? null;
 
         await this.ensureRepoLayout(repoRoot);
 
-        const eventGroups = new Map<string, MetricsRecord[]>();
-        if (this.options.persistEventsToFiles) {
-            for (const entry of recordsToFlush) {
-                const eventsPath = getDailyEventsFilePath(repoRoot, entry.record.recordedAt);
-                const existingGroup = eventGroups.get(eventsPath) ?? [];
-                existingGroup.push(entry.record);
-                eventGroups.set(eventsPath, existingGroup);
+        const rollingStateBatches = this.collectRollingStateBatches(recordsToFlush, saveUpdatesToFlush);
+        const appliedSaveUpdateLogs: Array<Record<string, unknown>> = [];
+        let actualRollingStateWriteCount = 0;
+        let skippedSaveOnlyBatchCount = 0;
+        for (const batch of rollingStateBatches.values()) {
+            const hadExistingRollingState = await this.pathExists(batch.rollingStatePath);
+            if (!hadExistingRollingState && batch.operations.every((operation) => operation.kind === 'save-update')) {
+                skippedSaveOnlyBatchCount += 1;
+                continue;
             }
 
-            for (const [eventsPath, records] of eventGroups) {
-                const lines = records.map((record) => JSON.stringify(record)).join('\n') + '\n';
-                await fs.promises.appendFile(eventsPath, lines, 'utf8');
-            }
-        }
+            const rollingState = await this.readRollingState(
+                batch.rollingStatePath,
+                batch.repoRoot,
+                batch.repoRelativePath
+            );
 
-        for (const entry of recordsToFlush) {
-            await this.applyRecordToRollingState(entry);
+            for (const operation of batch.operations) {
+                if (operation.kind === 'record') {
+                    this.applyRecordToRollingState(rollingState, operation.record);
+                    continue;
+                }
+
+                const appliedSaveUpdate = await this.applySaveUpdateToRollingState(rollingState, operation.update, batch.rollingStatePath);
+                if (appliedSaveUpdate) {
+                    appliedSaveUpdateLogs.push(appliedSaveUpdate);
+                }
+            }
+
+            await this.writeJsonFileAtomic(batch.rollingStatePath, rollingState);
+            actualRollingStateWriteCount += 1;
         }
 
         await this.writeManifest(repoRoot, {
-            lastWriteAt: latestRecord.recordedAt,
-            lastEventAt: latestRecord.recordedAt,
-            lastEventId: latestRecord.eventId,
-            pendingQueueLength: repoQueue.pendingRecords.length
+            lastWriteAt: latestSaveUpdate?.savedAt ?? latestRecord?.recordedAt ?? null,
+            lastEventAt: latestRecord?.recordedAt,
+            lastEventId: latestRecord?.eventId,
+            pendingQueueLength: this.getPendingQueueLength(repoRoot)
         });
 
         this.logEvent('METRICS_STORE_FLUSHED', {
             repoRoot,
-            persistEventsToFiles: this.options.persistEventsToFiles,
             flushedRecordCount: recordsToFlush.length,
+            flushedSaveUpdateCount: saveUpdatesToFlush.length,
             flushedRecordTypes: Array.from(new Set(recordsToFlush.map((entry) => entry.record.recordType))),
-            eventsFiles: Array.from(eventGroups.keys()),
+            coalescedRollingStateWriteCount: actualRollingStateWriteCount,
+            skippedSaveOnlyBatchCount,
             affectedRepoRelativePaths: Array.from(new Set(
-                recordsToFlush
-                    .map((entry) => entry.record.repoRelativePath)
-                    .filter((repoRelativePath): repoRelativePath is string => repoRelativePath !== null)
+                [
+                    ...recordsToFlush
+                        .map((entry) => entry.record.repoRelativePath)
+                        .filter((repoRelativePath): repoRelativePath is string => repoRelativePath !== null),
+                    ...saveUpdatesToFlush.map((entry) => entry.repoRelativePath)
+                ]
             )),
-            lastEventId: latestRecord.eventId,
-            lastRecordedAt: latestRecord.recordedAt
+            appliedSaveUpdates: appliedSaveUpdateLogs,
+            lastEventId: latestRecord?.eventId ?? null,
+            lastRecordedAt: latestSaveUpdate?.savedAt ?? latestRecord?.recordedAt ?? null
         });
     }
 
-    private async applyRecordToRollingState(entry: QueuedRecord): Promise<void> {
-        if (!entry.rollingStatePath || !entry.record.repoRelativePath) {
+    private collectRollingStateBatches(
+        records: QueuedRecord[],
+        saveUpdates: PendingSaveUpdate[]
+    ): Map<string, RollingStateBatch> {
+        const batches = new Map<string, RollingStateBatch>();
+
+        for (const entry of records) {
+            if (!entry.rollingStatePath || !entry.record.repoRelativePath) {
+                continue;
+            }
+
+            if (entry.record.recordType !== 'workspace-file-metric' && entry.record.recordType !== 'file-lifecycle') {
+                continue;
+            }
+
+            const existingBatch = batches.get(entry.rollingStatePath) ?? {
+                rollingStatePath: entry.rollingStatePath,
+                repoRoot: entry.record.repoRoot,
+                repoRelativePath: entry.record.repoRelativePath,
+                operations: []
+            };
+
+            existingBatch.operations.push({
+                kind: 'record',
+                record: entry.record,
+                sequence: entry.sequence
+            });
+            batches.set(entry.rollingStatePath, existingBatch);
+        }
+
+        for (const update of saveUpdates) {
+            const rollingStatePath = getRollingStatePath(update.repoRoot, update.repoRelativePath);
+            const existingBatch = batches.get(rollingStatePath) ?? {
+                rollingStatePath,
+                repoRoot: update.repoRoot,
+                repoRelativePath: update.repoRelativePath,
+                operations: []
+            };
+
+            existingBatch.operations.push({
+                kind: 'save-update',
+                update,
+                sequence: update.sequence
+            });
+            batches.set(rollingStatePath, existingBatch);
+        }
+
+        for (const batch of batches.values()) {
+            batch.operations.sort((left, right) => left.sequence - right.sequence);
+        }
+
+        return batches;
+    }
+
+    private applyRecordToRollingState(rollingState: FileRollingState, record: RollingStateRecord): void {
+        if (record.recordType === 'workspace-file-metric') {
+            this.applyWorkspaceMetricToRollingState(rollingState, record);
             return;
         }
 
-        if (entry.record.recordType === 'workspace-file-metric') {
-            const rollingState = await this.readRollingState(
-                entry.rollingStatePath,
-                entry.record.repoRoot,
-                entry.record.repoRelativePath
-            );
-            this.applyWorkspaceMetricToRollingState(rollingState, entry.record);
-            await this.writeJsonFileAtomic(entry.rollingStatePath, rollingState);
-            return;
+        this.applyLifecycleEventToRollingState(rollingState, record);
+    }
+
+    private async applySaveUpdateToRollingState(
+        rollingState: FileRollingState,
+        update: PendingSaveUpdate,
+        rollingStatePath: string
+    ): Promise<Record<string, unknown> | null> {
+        const gitBlobOid = await getGitBlobOidForWorkingTreeFile(update.repoRoot, update.repoRelativePath);
+        rollingState.lastRecordedAt = update.savedAt;
+        const lastCheckpoint = rollingState.saveAttributionCheckpoints.at(-1);
+        const nextCheckpoint = {
+            gitBlobOid,
+            cumulativeAiChangeMagnitude: rollingState.cumulativeAiChangeMagnitude,
+            cumulativeHumanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude,
+            lineAttributionSpans: this.cloneLineAttributionSpans(rollingState.lineAttributionSpans)
+        };
+
+        const shouldSkipDuplicateCheckpoint = Boolean(
+            gitBlobOid
+            && lastCheckpoint
+            && lastCheckpoint.gitBlobOid === gitBlobOid
+            && lastCheckpoint.cumulativeAiChangeMagnitude === nextCheckpoint.cumulativeAiChangeMagnitude
+            && lastCheckpoint.cumulativeHumanChangeMagnitude === nextCheckpoint.cumulativeHumanChangeMagnitude
+            && this.areLineAttributionSpansEqual(lastCheckpoint.lineAttributionSpans, nextCheckpoint.lineAttributionSpans)
+        );
+
+        if (!shouldSkipDuplicateCheckpoint) {
+            rollingState.saveAttributionCheckpoints = [
+                ...rollingState.saveAttributionCheckpoints,
+                nextCheckpoint
+            ].slice(-MAX_SAVE_ATTRIBUTION_CHECKPOINTS);
         }
 
-        if (entry.record.recordType === 'file-lifecycle') {
-            const rollingState = await this.readRollingState(
-                entry.rollingStatePath,
-                entry.record.repoRoot,
-                entry.record.repoRelativePath
-            );
-            this.applyLifecycleEventToRollingState(rollingState, entry.record);
-            await this.writeJsonFileAtomic(entry.rollingStatePath, rollingState);
-        }
+        return {
+            repoRoot: update.repoRoot,
+            repoRelativePath: update.repoRelativePath,
+            rollingStatePath,
+            savedAt: update.savedAt,
+            hash: update.hash,
+            gitBlobOid,
+            lineCount: update.lineCount,
+            charLength: update.charLength,
+            documentVersion: update.documentVersion,
+            saveCorrelation: update.saveCorrelation,
+            skippedDuplicateCheckpoint: shouldSkipDuplicateCheckpoint
+        };
     }
 
     private applyWorkspaceMetricToRollingState(
         rollingState: FileRollingState,
         record: WorkspaceFileMetricEvent
     ): void {
-        if (rollingState.eventCount === 0) {
-            rollingState.firstRecordedAt = record.recordedAt;
-        }
-
         rollingState.lastRecordedAt = record.recordedAt;
-        rollingState.eventCount += 1;
-        rollingState.logicalPath = record.logicalPath;
         rollingState.latestSignal = record.signal;
-        rollingState.latestReplacementRatio = record.replacementRatio;
-        rollingState.latestRequestIds = record.requestIds;
-        rollingState.latestSnapshotRequestIds = record.snapshotRequestIds;
-        rollingState.lastChatScheme = record.lastChatScheme;
-        rollingState.lastDocumentVersion = record.documentVersion;
         rollingState.deletedAt = null;
+        this.applyLineDiffSegmentsToRollingState(
+            rollingState,
+            record.lineDiffSegments,
+            getAttributionBucketForSignal(record.signal) ?? 'Unknown'
+        );
 
         if (SIGNAL_COUNTER_KEYS.includes(record.signal as typeof SIGNAL_COUNTER_KEYS[number])) {
             rollingState.signalCounters[record.signal] = (rollingState.signalCounters[record.signal] ?? 0) + 1;
@@ -415,28 +479,16 @@ export class RepoMetricsStore {
         rollingState: FileRollingState,
         record: FileLifecycleEvent
     ): void {
-        if (rollingState.eventCount === 0) {
-            rollingState.firstRecordedAt = record.recordedAt;
-        }
-
         rollingState.lastRecordedAt = record.recordedAt;
-        rollingState.eventCount += 1;
-        rollingState.logicalPath = record.logicalPath;
 
         if (record.action === 'deleted') {
             rollingState.deletedAt = record.recordedAt;
+            rollingState.lineAttributionSpans = [];
             return;
         }
 
         if (record.action === 'renamed' || record.action === 'created-from-rename') {
             rollingState.deletedAt = null;
-            rollingState.renameHistory.push({
-                recordedAt: record.recordedAt,
-                fromRepoRoot: record.previousRepoRoot,
-                fromRepoRelativePath: record.previousRepoRelativePath,
-                toRepoRoot: record.nextRepoRoot,
-                toRepoRelativePath: record.nextRepoRelativePath
-            });
         }
     }
 
@@ -447,18 +499,25 @@ export class RepoMetricsStore {
     ): Promise<FileRollingState> {
         if (await this.pathExists(rollingStatePath)) {
             try {
-                const existing = JSON.parse(await fs.promises.readFile(rollingStatePath, 'utf8')) as FileRollingState;
+                const existing = JSON.parse(await fs.promises.readFile(rollingStatePath, 'utf8')) as Partial<FileRollingState>;
+                const emptyState = this.createEmptyRollingState(repoRoot, repoRelativePath);
                 return {
-                    ...this.createEmptyRollingState(repoRoot, repoRelativePath),
-                    ...existing,
+                    ...emptyState,
+                    repoRoot: existing.repoRoot ?? repoRoot,
+                    repoRelativePath: existing.repoRelativePath ?? repoRelativePath,
+                    lastRecordedAt: existing.lastRecordedAt ?? emptyState.lastRecordedAt,
+                    latestSignal: existing.latestSignal ?? emptyState.latestSignal,
                     signalCounters: {
-                        ...this.createSignalCounters(),
-                        ...existing.signalCounters
+                        ...emptyState.signalCounters,
+                        ...(existing.signalCounters ?? {})
                     },
-                    renameHistory: existing.renameHistory ?? [],
-                    latestRequestIds: existing.latestRequestIds ?? [],
-                    latestSnapshotRequestIds: existing.latestSnapshotRequestIds ?? [],
-                    saveAttributionCheckpoints: existing.saveAttributionCheckpoints ?? []
+                    cumulativeAiChangeMagnitude: existing.cumulativeAiChangeMagnitude ?? emptyState.cumulativeAiChangeMagnitude,
+                    cumulativeHumanChangeMagnitude: existing.cumulativeHumanChangeMagnitude ?? emptyState.cumulativeHumanChangeMagnitude,
+                    saveAttributionCheckpoints: (existing.saveAttributionCheckpoints ?? []).map((checkpoint) =>
+                        this.normalizeSaveAttributionCheckpoint(checkpoint)
+                    ),
+                    lineAttributionSpans: this.normalizeLineAttributionSpans(existing.lineAttributionSpans ?? []),
+                    deletedAt: existing.deletedAt ?? emptyState.deletedAt
                 };
             }
             catch {
@@ -478,27 +537,14 @@ export class RepoMetricsStore {
             recordType: 'file-rolling-state',
             repoRoot,
             repoRelativePath,
-            logicalPath: null,
-            firstRecordedAt: nowIso,
             lastRecordedAt: nowIso,
-            eventCount: 0,
             latestSignal: null,
-            latestReplacementRatio: null,
-            latestRequestIds: [],
-            latestSnapshotRequestIds: [],
-            lastChatScheme: null,
             signalCounters: this.createSignalCounters(),
             cumulativeAiChangeMagnitude: 0,
             cumulativeHumanChangeMagnitude: 0,
-            lastDocumentVersion: null,
-            lastSavedAt: null,
-            lastSavedHash: null,
-            lastSavedLineCount: null,
-            lastSavedCharLength: null,
-            lastSavedWillSaveReason: null,
             saveAttributionCheckpoints: [],
-            deletedAt: null,
-            renameHistory: []
+            lineAttributionSpans: [],
+            deletedAt: null
         };
     }
 
@@ -506,11 +552,160 @@ export class RepoMetricsStore {
         return Object.fromEntries(SIGNAL_COUNTER_KEYS.map((signal) => [signal, 0]));
     }
 
+    private normalizeSaveAttributionCheckpoint(checkpoint: Partial<{
+        gitBlobOid: string | null;
+        cumulativeAiChangeMagnitude: number;
+        cumulativeHumanChangeMagnitude: number;
+        lineAttributionSpans: LineAttributionSpan[];
+    }>): FileRollingState['saveAttributionCheckpoints'][number] {
+        return {
+            gitBlobOid: typeof checkpoint.gitBlobOid === 'string' ? checkpoint.gitBlobOid : null,
+            cumulativeAiChangeMagnitude: typeof checkpoint.cumulativeAiChangeMagnitude === 'number'
+                ? checkpoint.cumulativeAiChangeMagnitude
+                : 0,
+            cumulativeHumanChangeMagnitude: typeof checkpoint.cumulativeHumanChangeMagnitude === 'number'
+                ? checkpoint.cumulativeHumanChangeMagnitude
+                : 0,
+            lineAttributionSpans: this.normalizeLineAttributionSpans(checkpoint.lineAttributionSpans ?? [])
+        };
+    }
+
+    private normalizeLineAttributionSpans(spans: Partial<LineAttributionSpan>[]): LineAttributionSpan[] {
+        const normalized: LineAttributionSpan[] = [];
+
+        for (const span of spans) {
+            const lineCount = typeof span.lineCount === 'number' && span.lineCount > 0
+                ? Math.floor(span.lineCount)
+                : 0;
+            if (lineCount <= 0) {
+                continue;
+            }
+
+            const attribution = span.attribution === 'AI' || span.attribution === 'Human' || span.attribution === 'Unknown'
+                ? span.attribution
+                : 'Unknown';
+
+            const previous = normalized.at(-1);
+            if (previous?.attribution === attribution) {
+                previous.lineCount += lineCount;
+                continue;
+            }
+
+            normalized.push({
+                attribution,
+                lineCount
+            });
+        }
+
+        return normalized;
+    }
+
+    private applyLineDiffSegmentsToRollingState(
+        rollingState: FileRollingState,
+        diffSegments: WorkspaceFileMetricEvent['lineDiffSegments'],
+        attribution: LineAttribution
+    ): void {
+        const sourceLineCount = diffSegments.reduce((sum, segment) => (
+            segment.type === 'added' ? sum : sum + segment.lineCount
+        ), 0);
+        const currentLineAttribution = this.materializeLineAttribution(
+            rollingState.lineAttributionSpans,
+            sourceLineCount
+        );
+        const nextLineAttribution: LineAttribution[] = [];
+        let sourceIndex = 0;
+
+        for (const segment of diffSegments) {
+            if (segment.type === 'equal') {
+                nextLineAttribution.push(...currentLineAttribution.slice(sourceIndex, sourceIndex + segment.lineCount));
+                sourceIndex += segment.lineCount;
+                continue;
+            }
+
+            if (segment.type === 'removed') {
+                sourceIndex += segment.lineCount;
+                continue;
+            }
+
+            for (let index = 0; index < segment.lineCount; index += 1) {
+                nextLineAttribution.push(attribution);
+            }
+        }
+
+        if (sourceIndex < currentLineAttribution.length) {
+            nextLineAttribution.push(...currentLineAttribution.slice(sourceIndex));
+        }
+
+        rollingState.lineAttributionSpans = this.compressLineAttribution(nextLineAttribution);
+    }
+
+    private materializeLineAttribution(spans: LineAttributionSpan[], expectedLineCount: number): LineAttribution[] {
+        const lineAttribution: LineAttribution[] = [];
+
+        for (const span of spans) {
+            for (let index = 0; index < span.lineCount; index += 1) {
+                lineAttribution.push(span.attribution);
+            }
+        }
+
+        if (expectedLineCount <= 0) {
+            return lineAttribution;
+        }
+
+        if (lineAttribution.length < expectedLineCount) {
+            lineAttribution.push(...Array.from({ length: expectedLineCount - lineAttribution.length }, () => 'Unknown' as const));
+        }
+
+        if (lineAttribution.length > expectedLineCount) {
+            return lineAttribution.slice(0, expectedLineCount);
+        }
+
+        return lineAttribution;
+    }
+
+    private compressLineAttribution(lineAttribution: LineAttribution[]): LineAttributionSpan[] {
+        const spans: LineAttributionSpan[] = [];
+
+        for (const attribution of lineAttribution) {
+            const previous = spans.at(-1);
+            if (previous?.attribution === attribution) {
+                previous.lineCount += 1;
+                continue;
+            }
+
+            spans.push({
+                attribution,
+                lineCount: 1
+            });
+        }
+
+        return spans;
+    }
+
+    private cloneLineAttributionSpans(spans: LineAttributionSpan[]): LineAttributionSpan[] {
+        return spans.map((span) => ({ ...span }));
+    }
+
+    private areLineAttributionSpansEqual(
+        left: LineAttributionSpan[] | undefined,
+        right: LineAttributionSpan[] | undefined
+    ): boolean {
+        if (!left && !right) {
+            return true;
+        }
+
+        if (!left || !right || left.length !== right.length) {
+            return false;
+        }
+
+        return left.every((span, index) => (
+            span.attribution === right[index].attribution
+            && span.lineCount === right[index].lineCount
+        ));
+    }
+
     private async ensureRepoLayout(repoRoot: string): Promise<void> {
         await fs.promises.mkdir(getMetricsRoot(repoRoot), { recursive: true });
-        if (this.options.persistEventsToFiles) {
-            await fs.promises.mkdir(getMetricsEventsDirectory(repoRoot), { recursive: true });
-        }
         await fs.promises.mkdir(getMetricsFilesStateDirectory(repoRoot), { recursive: true });
 
         const manifestPath = getMetricsManifestPath(repoRoot);
@@ -526,11 +721,10 @@ export class RepoMetricsStore {
                 pendingQueueLength: this.getPendingQueueLength(repoRoot)
             };
             await this.writeJsonFileAtomic(manifestPath, manifest);
+            this.manifestCache.set(repoRoot, manifest);
             this.logEvent('METRICS_STORE_LAYOUT_INITIALIZED', {
                 repoRoot,
-                persistEventsToFiles: this.options.persistEventsToFiles,
                 metricsRoot: getMetricsRoot(repoRoot),
-                eventsDirectory: this.options.persistEventsToFiles ? getMetricsEventsDirectory(repoRoot) : null,
                 filesStateDirectory: getMetricsFilesStateDirectory(repoRoot),
                 manifestPath
             });
@@ -551,14 +745,27 @@ export class RepoMetricsStore {
             pendingQueueLength: patch.pendingQueueLength ?? manifest.pendingQueueLength,
             extensionSessionId: this.extensionSessionId
         };
+
+        if (this.areManifestsEqual(manifest, nextManifest)) {
+            return;
+        }
+
         await this.writeJsonFileAtomic(manifestPath, nextManifest);
+        this.manifestCache.set(repoRoot, nextManifest);
     }
 
     private async readManifest(repoRoot: string): Promise<RepoManifest> {
+        const cachedManifest = this.manifestCache.get(repoRoot);
+        if (cachedManifest) {
+            return cachedManifest;
+        }
+
         const manifestPath = getMetricsManifestPath(repoRoot);
         if (await this.pathExists(manifestPath)) {
             try {
-                return JSON.parse(await fs.promises.readFile(manifestPath, 'utf8')) as RepoManifest;
+                const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8')) as RepoManifest;
+                this.manifestCache.set(repoRoot, manifest);
+                return manifest;
             }
             catch {
                 this.logEvent('METRICS_STORE_MANIFEST_PARSE_FAILED', {
@@ -568,7 +775,7 @@ export class RepoMetricsStore {
             }
         }
 
-        return {
+        const fallbackManifest: RepoManifest = {
             schemaVersion: METRICS_SCHEMA_VERSION,
             extensionSessionId: this.extensionSessionId,
             repoRoot,
@@ -578,12 +785,25 @@ export class RepoMetricsStore {
             lastEventId: null,
             pendingQueueLength: this.getPendingQueueLength(repoRoot)
         };
+        this.manifestCache.set(repoRoot, fallbackManifest);
+        return fallbackManifest;
+    }
+
+    private areManifestsEqual(left: RepoManifest, right: RepoManifest): boolean {
+        return left.schemaVersion === right.schemaVersion
+            && left.extensionSessionId === right.extensionSessionId
+            && left.repoRoot === right.repoRoot
+            && left.createdAt === right.createdAt
+            && left.lastWriteAt === right.lastWriteAt
+            && left.lastEventAt === right.lastEventAt
+            && left.lastEventId === right.lastEventId
+            && left.pendingQueueLength === right.pendingQueueLength;
     }
 
     private async writeJsonFileAtomic(filePath: string, data: unknown): Promise<void> {
         await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
         const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-        await fs.promises.writeFile(tempPath, JSON.stringify(data, null, 2), 'utf8');
+        await fs.promises.writeFile(tempPath, JSON.stringify(data), 'utf8');
         await fs.promises.rm(filePath, { force: true });
         await fs.promises.rename(tempPath, filePath);
     }
@@ -625,6 +845,7 @@ export class RepoMetricsStore {
 
         const created: RepoQueue = {
             pendingRecords: [],
+            pendingSaveUpdates: [],
             flushTimer: null,
             flushPromise: Promise.resolve()
         };
@@ -632,7 +853,13 @@ export class RepoMetricsStore {
         return created;
     }
 
+    private getNextPendingOperationSequence(): number {
+        this.nextPendingOperationSequence += 1;
+        return this.nextPendingOperationSequence;
+    }
+
     private getPendingQueueLength(repoRoot: string): number {
-        return this.repoQueues.get(repoRoot)?.pendingRecords.length ?? 0;
+        const queue = this.repoQueues.get(repoRoot);
+        return (queue?.pendingRecords.length ?? 0) + (queue?.pendingSaveUpdates.length ?? 0);
     }
 }

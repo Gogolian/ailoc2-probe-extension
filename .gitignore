@@ -2,3 +2,4 @@ node_modules/
 out/
 *.vsix
 .ailoc2-metrics/
+.githooks/ailoc2-hook-runtime.cjs

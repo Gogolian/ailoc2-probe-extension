@@ -19,6 +19,17 @@ export const SIGNAL_COUNTER_KEYS = [
 
 export type SignalCounterKey = typeof SIGNAL_COUNTER_KEYS[number];
 export type AttributionBucket = 'AI' | 'Human';
+export type LineAttribution = AttributionBucket | 'Unknown';
+
+export type LineDiffSegment = {
+    type: 'equal' | 'added' | 'removed';
+    lineCount: number;
+};
+
+export type LineAttributionSpan = {
+    attribution: LineAttribution;
+    lineCount: number;
+};
 
 export function getAttributionBucketForSignal(signal: string): AttributionBucket | null {
     if ((AI_SIGNAL_KEYS as readonly string[]).includes(signal)) {
@@ -83,6 +94,7 @@ export type WorkspaceFileMetricEvent = MetricsRecordBase & {
     lineCount: number;
     languageId: string;
     isDirty: boolean;
+    lineDiffSegments: LineDiffSegment[];
     chatCorrelation: Record<string, unknown> | null;
     saveCorrelation: SaveCorrelationSummary | null;
 };
@@ -106,21 +118,11 @@ export type SessionBoundaryEvent = MetricsRecordBase & {
 
 export type MetricsRecord = WorkspaceFileMetricEvent | FileLifecycleEvent | SessionBoundaryEvent;
 
-export type FileRenameHistoryEntry = {
-    recordedAt: string;
-    fromRepoRoot: string | null;
-    fromRepoRelativePath: string | null;
-    toRepoRoot: string | null;
-    toRepoRelativePath: string | null;
-};
-
 export type SaveAttributionCheckpoint = {
-    savedAt: string;
-    documentHash: string;
     gitBlobOid: string | null;
-    documentVersion: number;
     cumulativeAiChangeMagnitude: number;
     cumulativeHumanChangeMagnitude: number;
+    lineAttributionSpans: LineAttributionSpan[];
 };
 
 export type FileRollingState = {
@@ -128,27 +130,14 @@ export type FileRollingState = {
     recordType: 'file-rolling-state';
     repoRoot: string;
     repoRelativePath: string;
-    logicalPath: string | null;
-    firstRecordedAt: string;
     lastRecordedAt: string;
-    eventCount: number;
     latestSignal: string | null;
-    latestReplacementRatio: number | null;
-    latestRequestIds: string[];
-    latestSnapshotRequestIds: string[];
-    lastChatScheme: string | null;
     signalCounters: Record<string, number>;
     cumulativeAiChangeMagnitude: number;
     cumulativeHumanChangeMagnitude: number;
-    lastDocumentVersion: number | null;
-    lastSavedAt: string | null;
-    lastSavedHash: string | null;
-    lastSavedLineCount: number | null;
-    lastSavedCharLength: number | null;
-    lastSavedWillSaveReason: string | null;
     saveAttributionCheckpoints: SaveAttributionCheckpoint[];
+    lineAttributionSpans: LineAttributionSpan[];
     deletedAt: string | null;
-    renameHistory: FileRenameHistoryEntry[];
 };
 
 export type RepoCleanBaselineEntry = {
