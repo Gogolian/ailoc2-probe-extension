@@ -6,12 +6,20 @@ export function getMetricsRoot(repoRoot: string): string {
     return path.join(repoRoot, '.ailoc2-metrics');
 }
 
+export function getMetricsSummaryFilePath(repoRoot: string): string {
+    return path.join(getMetricsRoot(repoRoot), 'summary.json');
+}
+
 export function getMetricsEventsDirectory(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'events');
 }
 
 export function getMetricsStateDirectory(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'state');
+}
+
+export function getRepoSummaryStatePath(repoRoot: string): string {
+    return path.join(getMetricsStateDirectory(repoRoot), 'repo-summary.json');
 }
 
 export function getMetricsFilesStateDirectory(repoRoot: string): string {

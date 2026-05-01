@@ -27,6 +27,10 @@
       {
         "command": "ailoc2Probe.logActiveDocumentMetricsTarget",
         "title": "AILoc2 Probe: Log Active Document Metrics Target"
+      },
+      {
+        "command": "ailoc2Probe.showSummaryOutput",
+        "title": "AILoc2 Probe: Show Summary Output"
       }
     ]
   },

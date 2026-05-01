@@ -4,6 +4,7 @@ import * as path from 'path';
 import {
     FileLifecycleEvent,
     FileRollingState,
+    getAttributionBucketForSignal,
     METRICS_SCHEMA_VERSION,
     MetricsRecord,
     RepoManifest,
@@ -12,6 +13,7 @@ import {
     SIGNAL_COUNTER_KEYS,
     WorkspaceFileMetricEvent
 } from './schema';
+import { getGitBlobOidForWorkingTreeFile } from './git';
 import {
     getDailyEventsFilePath,
     getMetricsEventsDirectory,
@@ -22,6 +24,7 @@ import {
 } from './pathing';
 
 const WRITE_DEBOUNCE_MS = 350;
+const MAX_SAVE_ATTRIBUTION_CHECKPOINTS = 64;
 
 type QueuedRecord = {
     record: MetricsRecord;
@@ -101,6 +104,7 @@ export class RepoMetricsStore {
                     return;
                 }
 
+                const gitBlobOid = await getGitBlobOidForWorkingTreeFile(args.repoRoot, args.repoRelativePath);
                 const rollingState = await this.readRollingState(rollingStatePath, args.repoRoot, args.repoRelativePath);
                 rollingState.lastRecordedAt = args.savedAt;
                 rollingState.lastSavedAt = args.savedAt;
@@ -109,6 +113,31 @@ export class RepoMetricsStore {
                 rollingState.lastSavedCharLength = args.charLength;
                 rollingState.lastDocumentVersion = args.documentVersion;
                 rollingState.lastSavedWillSaveReason = args.saveCorrelation.reason ?? null;
+                const lastCheckpoint = rollingState.saveAttributionCheckpoints.at(-1);
+                const nextCheckpoint = {
+                    savedAt: args.savedAt,
+                    documentHash: args.hash,
+                    gitBlobOid,
+                    documentVersion: args.documentVersion,
+                    cumulativeAiChangeMagnitude: rollingState.cumulativeAiChangeMagnitude,
+                    cumulativeHumanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude
+                };
+
+                if (lastCheckpoint
+                    && lastCheckpoint.documentHash === nextCheckpoint.documentHash
+                    && lastCheckpoint.gitBlobOid === nextCheckpoint.gitBlobOid
+                    && lastCheckpoint.cumulativeAiChangeMagnitude === nextCheckpoint.cumulativeAiChangeMagnitude
+                    && lastCheckpoint.cumulativeHumanChangeMagnitude === nextCheckpoint.cumulativeHumanChangeMagnitude) {
+                    lastCheckpoint.savedAt = nextCheckpoint.savedAt;
+                    lastCheckpoint.documentVersion = nextCheckpoint.documentVersion;
+                }
+                else {
+                    rollingState.saveAttributionCheckpoints = [
+                        ...rollingState.saveAttributionCheckpoints,
+                        nextCheckpoint
+                    ].slice(-MAX_SAVE_ATTRIBUTION_CHECKPOINTS);
+                }
+
                 await this.writeJsonFileAtomic(rollingStatePath, rollingState);
                 await this.writeManifest(args.repoRoot, {
                     lastWriteAt: args.savedAt,
@@ -120,6 +149,7 @@ export class RepoMetricsStore {
                     rollingStatePath,
                     savedAt: args.savedAt,
                     hash: args.hash,
+                    gitBlobOid,
                     lineCount: args.lineCount,
                     charLength: args.charLength,
                     documentVersion: args.documentVersion,
@@ -362,6 +392,15 @@ export class RepoMetricsStore {
         if (SIGNAL_COUNTER_KEYS.includes(record.signal as typeof SIGNAL_COUNTER_KEYS[number])) {
             rollingState.signalCounters[record.signal] = (rollingState.signalCounters[record.signal] ?? 0) + 1;
         }
+
+        const attributionBucket = getAttributionBucketForSignal(record.signal);
+        const changeMagnitude = record.totalInsertedTextLength + record.totalRemovedTextLength;
+        if (attributionBucket === 'AI') {
+            rollingState.cumulativeAiChangeMagnitude += changeMagnitude;
+        }
+        else if (attributionBucket === 'Human') {
+            rollingState.cumulativeHumanChangeMagnitude += changeMagnitude;
+        }
     }
 
     private applyLifecycleEventToRollingState(
@@ -410,7 +449,8 @@ export class RepoMetricsStore {
                     },
                     renameHistory: existing.renameHistory ?? [],
                     latestRequestIds: existing.latestRequestIds ?? [],
-                    latestSnapshotRequestIds: existing.latestSnapshotRequestIds ?? []
+                    latestSnapshotRequestIds: existing.latestSnapshotRequestIds ?? [],
+                    saveAttributionCheckpoints: existing.saveAttributionCheckpoints ?? []
                 };
             }
             catch {
@@ -440,12 +480,15 @@ export class RepoMetricsStore {
             latestSnapshotRequestIds: [],
             lastChatScheme: null,
             signalCounters: this.createSignalCounters(),
+            cumulativeAiChangeMagnitude: 0,
+            cumulativeHumanChangeMagnitude: 0,
             lastDocumentVersion: null,
             lastSavedAt: null,
             lastSavedHash: null,
             lastSavedLineCount: null,
             lastSavedCharLength: null,
             lastSavedWillSaveReason: null,
+            saveAttributionCheckpoints: [],
             deletedAt: null,
             renameHistory: []
         };

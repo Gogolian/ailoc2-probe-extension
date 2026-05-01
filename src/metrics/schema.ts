@@ -2,14 +2,35 @@ export const METRICS_SCHEMA_VERSION = '1';
 
 export const FILE_STATE_SUFFIX = '.metrics.json';
 
-export const SIGNAL_COUNTER_KEYS = [
+export const AI_SIGNAL_KEYS = [
     'ProbableAIApplyToWorkspaceFile',
-    'PossibleAIApplyToWorkspaceFile',
+    'PossibleAIApplyToWorkspaceFile'
+] as const;
+
+export const HUMAN_SIGNAL_KEYS = [
     'LikelyHumanEditWhileChatSessionOpen',
     'LikelyHumanOrRegularEditorEdit'
 ] as const;
 
+export const SIGNAL_COUNTER_KEYS = [
+    ...AI_SIGNAL_KEYS,
+    ...HUMAN_SIGNAL_KEYS
+] as const;
+
 export type SignalCounterKey = typeof SIGNAL_COUNTER_KEYS[number];
+export type AttributionBucket = 'AI' | 'Human';
+
+export function getAttributionBucketForSignal(signal: string): AttributionBucket | null {
+    if ((AI_SIGNAL_KEYS as readonly string[]).includes(signal)) {
+        return 'AI';
+    }
+
+    if ((HUMAN_SIGNAL_KEYS as readonly string[]).includes(signal)) {
+        return 'Human';
+    }
+
+    return null;
+}
 
 export type RecordType = 'workspace-file-metric' | 'file-lifecycle' | 'session-boundary';
 
@@ -93,6 +114,15 @@ export type FileRenameHistoryEntry = {
     toRepoRelativePath: string | null;
 };
 
+export type SaveAttributionCheckpoint = {
+    savedAt: string;
+    documentHash: string;
+    gitBlobOid: string | null;
+    documentVersion: number;
+    cumulativeAiChangeMagnitude: number;
+    cumulativeHumanChangeMagnitude: number;
+};
+
 export type FileRollingState = {
     schemaVersion: typeof METRICS_SCHEMA_VERSION;
     recordType: 'file-rolling-state';
@@ -108,14 +138,31 @@ export type FileRollingState = {
     latestSnapshotRequestIds: string[];
     lastChatScheme: string | null;
     signalCounters: Record<string, number>;
+    cumulativeAiChangeMagnitude: number;
+    cumulativeHumanChangeMagnitude: number;
     lastDocumentVersion: number | null;
     lastSavedAt: string | null;
     lastSavedHash: string | null;
     lastSavedLineCount: number | null;
     lastSavedCharLength: number | null;
     lastSavedWillSaveReason: string | null;
+    saveAttributionCheckpoints: SaveAttributionCheckpoint[];
     deletedAt: string | null;
     renameHistory: FileRenameHistoryEntry[];
+};
+
+export type RepoCleanBaselineEntry = {
+    aiChangeMagnitude: number;
+    humanChangeMagnitude: number;
+};
+
+export type RepoSummaryState = {
+    schemaVersion: typeof METRICS_SCHEMA_VERSION;
+    recordType: 'repo-summary-state';
+    repoRoot: string;
+    lastComputedAt: string;
+    lastCleanAt: string | null;
+    cleanBaselineByRepoRelativePath: Record<string, RepoCleanBaselineEntry>;
 };
 
 export type RepoManifest = {

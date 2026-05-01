@@ -14,8 +14,20 @@ import {
     getMetricsRoot,
     getRollingStatePath
 } from './metrics/pathing';
-import { METRICS_SCHEMA_VERSION, SaveCorrelationSummary, SessionBoundaryEvent, WorkspaceFileMetricEvent, FileLifecycleEvent } from './metrics/schema';
+import {
+    METRICS_SCHEMA_VERSION,
+    SaveCorrelationSummary,
+    SessionBoundaryEvent,
+    WorkspaceFileMetricEvent,
+    FileLifecycleEvent
+} from './metrics/schema';
+import {
+    computeRepoUncommittedAttributionSummary,
+    formatRepoUncommittedAttributionSummary,
+    writeRepoHookSummaryFile
+} from './metrics/summary';
 import { RepoMetricsStore } from './metrics/store';
+import { getTrackingExclusionReasonForPath as getSharedTrackingExclusionReasonForPath } from './trackingExclusions';
 
 type DocumentSnapshot = {
     text: string;
@@ -129,24 +141,22 @@ type MetricPersistenceDecision = {
 };
 
 const OUTPUT_CHANNEL_NAME = 'AILoc2 Probe';
+const SUMMARY_OUTPUT_CHANNEL_NAME = 'AILoc2 Summary';
 const TEXT_PREVIEW_LIMIT = 240;
 const CHAT_CONTEXT_WINDOW_MS = 120_000;
 const RECENT_WILL_SAVE_WINDOW_MS = 5_000;
-const TRACKING_EXCLUDED_DIRECTORY_NAMES = new Set([
-    '.ailoc2-metrics',
-    '.ailoc-metrics'
-]);
-const TRACKING_EXCLUDED_FILE_NAMES = new Set([
-    '.gitignore'
-]);
+const SUMMARY_UPDATE_DEBOUNCE_MS = 500;
 
 let outputChannel: vscode.OutputChannel | undefined;
+let summaryOutputChannel: vscode.OutputChannel | undefined;
 let metricsStore: RepoMetricsStore | undefined;
 let extensionSessionId: string | undefined;
 const trackedRepoRoots = new Set<string>();
+const pendingSummaryUpdateTimers = new Map<string, NodeJS.Timeout>();
 
 export function activate(context: vscode.ExtensionContext): void {
     outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
+    summaryOutputChannel = vscode.window.createOutputChannel(SUMMARY_OUTPUT_CHANNEL_NAME);
     const snapshots = new Map<string, DocumentSnapshot>();
     const recentChatEdits = new Map<string, ChatEditContext>();
     const recentWillSaves = new Map<string, WillSaveContext>();
@@ -164,6 +174,62 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionSessionId = crypto.randomUUID();
     metricsStore = new RepoMetricsStore(extensionSessionId, logEvent);
     trackedRepoRoots.clear();
+    pendingSummaryUpdateTimers.clear();
+
+    const logSummaryLine = (message: string): void => {
+        if (!summaryOutputChannel) {
+            return;
+        }
+
+        summaryOutputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+    };
+
+    const emitRepoSummary = async (repoRoot: string, reason: string): Promise<void> => {
+        if (!metricsStore) {
+            return;
+        }
+
+        await metricsStore.flushRepo(repoRoot);
+        const summary = await computeRepoUncommittedAttributionSummary({ repoRoot });
+        const summaryLine = formatRepoUncommittedAttributionSummary(summary);
+
+        try {
+            const summaryFilePath = await writeRepoHookSummaryFile(summary);
+            logEvent('HOOK_SUMMARY_FILE_UPDATED', {
+                repoRoot,
+                summaryFilePath,
+                isGitSummaryAvailable: summary.isGitSummaryAvailable,
+                staged: summary.staged,
+                unstaged: summary.unstaged
+            });
+        }
+        catch (error) {
+            logEvent('HOOK_SUMMARY_FILE_UPDATE_FAILED', {
+                repoRoot,
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+
+        logSummaryLine(`${summaryLine} [trigger: ${reason}]`);
+    };
+
+    const scheduleRepoSummaryUpdate = (repoRoot: string, reason: string): void => {
+        const existingTimer = pendingSummaryUpdateTimers.get(repoRoot);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+
+        const timer = setTimeout(() => {
+            pendingSummaryUpdateTimers.delete(repoRoot);
+            void emitRepoSummary(repoRoot, reason).catch((error) => {
+                logSummaryLine(
+                    `${path.basename(repoRoot)}: summary unavailable (${error instanceof Error ? error.message : String(error)}) [trigger: ${reason}]`
+                );
+            });
+        }, SUMMARY_UPDATE_DEBOUNCE_MS);
+
+        pendingSummaryUpdateTimers.set(repoRoot, timer);
+    };
 
     const upsertSnapshot = (document: vscode.TextDocument): DocumentSnapshot | undefined => {
         if (shouldIgnoreDocument(document)) {
@@ -201,8 +267,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
     context.subscriptions.push(
         outputChannel,
+        summaryOutputChannel,
         vscode.commands.registerCommand('ailoc2Probe.showOutput', () => {
             outputChannel?.show(true);
+        }),
+        vscode.commands.registerCommand('ailoc2Probe.showSummaryOutput', () => {
+            summaryOutputChannel?.show(true);
         }),
         vscode.commands.registerCommand('ailoc2Probe.logActiveDocumentSnapshot', () => {
             const activeEditor = vscode.window.activeTextEditor;
@@ -415,6 +485,7 @@ export function activate(context: vscode.ExtensionContext): void {
                     documentVersion: snapshot.version,
                     saveCorrelation: recentWillSave
                 });
+                scheduleRepoSummaryUpdate(repoLocation.repoRoot, 'save');
             }
 
             logEvent('TEXT_DOCUMENT_SAVED', {
@@ -508,6 +579,7 @@ export function activate(context: vscode.ExtensionContext): void {
                                 nextRepoRelativePath: nextRepoLocation.repoRelativePath
                             }));
                             await activeMetricsStore.flushRepo(nextRepoLocation.repoRoot);
+                            scheduleRepoSummaryUpdate(nextRepoLocation.repoRoot, 'rename:within-repo');
                         }
                         else {
                             activeMetricsStore.queueFileLifecycleEvent(createFileLifecycleEvent({
@@ -536,6 +608,8 @@ export function activate(context: vscode.ExtensionContext): void {
                             }));
                             await activeMetricsStore.flushRepo(previousRepoLocation.repoRoot);
                             await activeMetricsStore.flushRepo(nextRepoLocation.repoRoot);
+                            scheduleRepoSummaryUpdate(previousRepoLocation.repoRoot, 'rename:cross-repo-delete');
+                            scheduleRepoSummaryUpdate(nextRepoLocation.repoRoot, 'rename:cross-repo-create');
                         }
                     }
                     else if (previousRepoLocation) {
@@ -557,6 +631,7 @@ export function activate(context: vscode.ExtensionContext): void {
                             recordedAt
                         });
                         await activeMetricsStore.flushRepo(previousRepoLocation.repoRoot);
+                        scheduleRepoSummaryUpdate(previousRepoLocation.repoRoot, 'rename:delete-only');
                     }
 
                     renameSummaries.push({
@@ -647,6 +722,7 @@ export function activate(context: vscode.ExtensionContext): void {
                         recordedAt
                     });
                     await activeMetricsStore.flushRepo(repoLocation.repoRoot);
+                    scheduleRepoSummaryUpdate(repoLocation.repoRoot, 'delete');
 
                     deletions.push({
                         uri: uri.toString(),
@@ -693,6 +769,12 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export async function deactivate(): Promise<void> {
+    for (const timer of pendingSummaryUpdateTimers.values()) {
+        clearTimeout(timer);
+    }
+
+    pendingSummaryUpdateTimers.clear();
+
     if (metricsStore && extensionSessionId) {
         for (const repoRoot of trackedRepoRoots) {
             metricsStore.queueSessionBoundaryEvent(createSessionBoundaryEvent({
@@ -1586,24 +1668,5 @@ function getTrackingExclusionReasonForUri(uri: vscode.Uri): string | null {
 }
 
 function getTrackingExclusionReasonForPath(candidatePath: string | null | undefined): string | null {
-    if (!candidatePath) {
-        return null;
-    }
-
-    const normalizedPath = path.normalize(candidatePath);
-    const lowerCaseSegments = normalizedPath
-        .split(path.sep)
-        .filter((segment) => segment.length > 0)
-        .map((segment) => segment.toLowerCase());
-
-    if (lowerCaseSegments.some((segment) => TRACKING_EXCLUDED_DIRECTORY_NAMES.has(segment))) {
-        return 'MetricsArtifactsPath';
-    }
-
-    const fileName = path.basename(normalizedPath).toLowerCase();
-    if (TRACKING_EXCLUDED_FILE_NAMES.has(fileName)) {
-        return 'GitIgnoreFile';
-    }
-
-    return null;
+    return getSharedTrackingExclusionReasonForPath(candidatePath);
 }
