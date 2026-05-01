@@ -10,7 +10,8 @@ export const REPO_HOOKS_PATH_VALUE = '.githooks';
 export const MANAGED_HOOK_RUNTIME_FILE_NAME = 'ailoc2-hook-runtime.cjs';
 export const REQUIRED_REPO_HOOK_FILES = [
     'pre-commit',
-    'commit-msg'
+    'commit-msg',
+    'post-commit'
 ] as const;
 
 type RepoHookFileName = typeof REQUIRED_REPO_HOOK_FILES[number];
@@ -309,6 +310,8 @@ function createManagedHookFileContents(hookFileName: RepoHookFileName, delegated
             return createManagedPreCommitHookScript(delegatedHooksPath);
         case 'commit-msg':
             return createManagedCommitMsgHookScript(delegatedHooksPath);
+        case 'post-commit':
+            return createManagedPostCommitHookScript(delegatedHooksPath);
         default:
             throw new Error(`Unsupported managed hook file: ${hookFileName}`);
     }
@@ -331,9 +334,37 @@ run_delegate_hook() {
 }
 
 if command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
+    node "$CLI_PATH" prepare-commit-baseline >/dev/null 2>&1 || printf '%s\n' 'AILoc2 pre-commit warning: commit baseline snapshot failed; later commits may retain older attribution until the next successful baseline refresh.' >&2
     node "$CLI_PATH" refresh-summary >/dev/null 2>&1 || printf '%s\n' 'AILoc2 pre-commit warning: summary refresh failed; continuing without blocking the commit.' >&2
 else
     printf '%s\n' 'AILoc2 pre-commit warning: Node CLI is unavailable; skipping summary refresh.' >&2
+fi
+
+run_delegate_hook "$@"
+exit $?
+`;
+}
+
+function createManagedPostCommitHookScript(delegatedHooksPath: string | null): string {
+    const delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, 'post-commit');
+    return `#!/bin/sh
+# AILoc2 managed hook: post-commit
+
+CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
+DELEGATE_HOOK_PATH="${escapeForDoubleQuotedShell(delegatedHookPath)}"
+
+run_delegate_hook() {
+    if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
+        return 0
+    fi
+
+    "$DELEGATE_HOOK_PATH" "$@"
+}
+
+if command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
+    node "$CLI_PATH" finalize-commit >/dev/null 2>&1 || printf '%s\n' 'AILoc2 post-commit warning: baseline advance failed; later commits may still include already committed attribution until the next successful refresh.' >&2
+else
+    printf '%s\n' 'AILoc2 post-commit warning: Node CLI is unavailable; skipping baseline advance.' >&2
 fi
 
 run_delegate_hook "$@"
@@ -462,7 +493,9 @@ function isManagedHookFileText(hookFileName: RepoHookFileName, text: string): bo
 
     const legacyVariants = hookFileName === 'pre-commit'
         ? [createLegacyManagedPreCommitHookScript()]
-        : [createLegacyManagedCommitMsgHookScript()];
+        : hookFileName === 'commit-msg'
+        ? [createLegacyManagedCommitMsgHookScript()]
+        : [];
 
     return [
         createManagedHookFileContents(hookFileName, null),

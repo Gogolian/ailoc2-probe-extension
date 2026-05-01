@@ -113,6 +113,7 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 - `AILoc2 Summary` output channel for summary refreshes
 - `.ailoc2-metrics/summary.json` inside the tracked repo
 - commit subjects automatically annotated during `git commit`
+- post-commit baseline advancement so the next summary starts from the new committed state instead of the older clean snapshot
 
 ## Example output
 
@@ -139,6 +140,7 @@ your-repo/
 └─ .githooks/
    ├─ pre-commit
    ├─ commit-msg
+  ├─ post-commit
    └─ ailoc2-hook-runtime.cjs
 ```
 
@@ -146,8 +148,9 @@ your-repo/
 
 - `summary.json` — generated output consumed by hooks and other local tooling.
 - `manifest.json` — lightweight bookkeeping and diagnostics for the extension runtime.
-- `state/repo-summary.json` — clean-baseline state used when recomputing repo attribution.
+- `state/repo-summary.json` — repo baseline state used when recomputing attribution against the current committed content.
 - `state/files/**/*.metrics.json` — rolling attribution state per tracked repo file.
+- `.githooks/post-commit` — promotes the just-committed index state into the repo baseline so later commits score only what remains uncommitted.
 - `.githooks/ailoc2-hook-runtime.cjs` — bundled CommonJS runtime used by installed Git hooks.
 
 ## VS Code commands

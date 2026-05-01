@@ -6,26 +6,48 @@ import {
     createAiCommitSuffix,
     DEFAULT_AI_PLACEHOLDER_LABEL
 } from '../hooks/commitMessage';
-import { refreshRepoHookSummary } from '../metrics/summary';
+import {
+    finalizeRepoCommit,
+    prepareRepoCommitBaseline,
+    refreshRepoHookSummary
+} from '../metrics/summary';
 
 async function main(): Promise<number> {
     const command = process.argv[2];
 
     switch (command) {
+        case 'prepare-commit-baseline':
+            return runPrepareCommitBaseline(process.argv[3]);
         case 'refresh-summary':
             return runRefreshSummary(process.argv[3]);
         case 'annotate-commit-message':
             return runAnnotateCommitMessage(process.argv[3], process.argv[4]);
+        case 'finalize-commit':
+            return runFinalizeCommit(process.argv[3]);
         default:
             printUsage();
             return 1;
     }
 }
 
+async function runPrepareCommitBaseline(repoRootArgument: string | undefined): Promise<number> {
+    const repoRoot = resolveRepoRoot(repoRootArgument);
+    const preparedBaseline = await prepareRepoCommitBaseline({ repoRoot });
+    console.log(preparedBaseline.preparedBaselinePath);
+    return 0;
+}
+
 async function runRefreshSummary(repoRootArgument: string | undefined): Promise<number> {
     const repoRoot = resolveRepoRoot(repoRootArgument);
     const refreshedSummary = await refreshRepoHookSummary({ repoRoot });
     console.log(refreshedSummary.summaryLine);
+    return 0;
+}
+
+async function runFinalizeCommit(repoRootArgument: string | undefined): Promise<number> {
+    const repoRoot = resolveRepoRoot(repoRootArgument);
+    const refreshResult = await finalizeRepoCommit({ repoRoot });
+    console.log(refreshResult.summaryLine);
     return 0;
 }
 
@@ -79,7 +101,7 @@ function resolveRepoRoot(repoRootArgument: string | undefined): string {
 }
 
 function printUsage(): void {
-    console.error('Usage: node <ailoc2-hook-runtime.cjs|out/cli/gitHookCli.js> <refresh-summary [repoRoot]|annotate-commit-message <messageFilePath> [repoRoot]>');
+    console.error('Usage: node <ailoc2-hook-runtime.cjs|out/cli/gitHookCli.js> <prepare-commit-baseline [repoRoot]|refresh-summary [repoRoot]|annotate-commit-message <messageFilePath> [repoRoot]|finalize-commit [repoRoot]>');
 }
 
 void main()

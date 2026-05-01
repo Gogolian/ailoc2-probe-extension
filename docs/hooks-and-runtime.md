@@ -14,13 +14,14 @@ Bundling the hook runtime as one `.cjs` file keeps the hook side predictable.
 
 ## Managed hook assets
 
-A fresh managed install provisions exactly three repo-local files:
+A fresh managed install provisions exactly four repo-local files:
 
 | File | Purpose |
 | --- | --- |
-| `.githooks/pre-commit` | Refreshes the summary file before commit finalization. |
+| `.githooks/pre-commit` | Prepares the next-HEAD baseline snapshot and refreshes the summary file before commit finalization. |
 | `.githooks/commit-msg` | Appends the AI suffix to the commit subject. |
-| `.githooks/ailoc2-hook-runtime.cjs` | Bundled runtime CLI invoked by both managed hooks. |
+| `.githooks/post-commit` | Promotes the committed baseline and refreshes the summary after a successful commit. |
+| `.githooks/ailoc2-hook-runtime.cjs` | Bundled runtime CLI invoked by the managed hooks. |
 
 ## Install flow
 
@@ -65,10 +66,14 @@ The managed `pre-commit` hook:
 1. checks whether `node` is available and `./.githooks/ailoc2-hook-runtime.cjs` exists
 2. if so, runs:
 
+   `node ./.githooks/ailoc2-hook-runtime.cjs prepare-commit-baseline`
+
+3. then runs:
+
    `node ./.githooks/ailoc2-hook-runtime.cjs refresh-summary`
 
-3. if that command fails, prints a warning to stderr and continues
-4. if a delegated repo-local hook path exists, runs the delegated `pre-commit` hook afterward
+4. if either command fails, prints a warning to stderr and continues
+5. if a delegated repo-local hook path exists, runs the delegated `pre-commit` hook afterward
 
 The key point is that summary refresh is **best effort**. AILoc2 does not try to block every commit because auxiliary metadata could not be refreshed.
 
@@ -90,6 +95,20 @@ The placeholder suffix is currently:
 `(AI unavailable)`
 
 That string means annotation could not produce a summary-backed percentage at commit time. It does **not** necessarily mean no AI was used.
+
+### `post-commit`
+
+The managed `post-commit` hook:
+
+1. checks for `node` and the managed runtime file
+2. if available, runs:
+
+   `node ./.githooks/ailoc2-hook-runtime.cjs finalize-commit`
+
+3. if that command fails, prints a warning to stderr and continues
+4. if a delegated repo-local hook exists, runs that delegated `post-commit` hook afterward
+
+This step is what advances the repo baseline from “last fully clean state” to “the state that was just committed,” which is how later commits stop inheriting already-committed attribution from earlier ones.
 
 ## Commit message mutation rules
 
@@ -117,8 +136,10 @@ The managed hooks call the bundled CLI defined in `src/cli/gitHookCli.ts`.
 
 | Command | Behavior |
 | --- | --- |
+| `prepare-commit-baseline [repoRoot]` | Snapshots the current Git index into a pending baseline file for promotion after a successful commit. |
 | `refresh-summary [repoRoot]` | Recomputes `.ailoc2-metrics/summary.json` and prints the formatted summary line. |
 | `annotate-commit-message <messageFilePath> [repoRoot]` | Rewrites the commit subject with the AI suffix and prints the suffix used. |
+| `finalize-commit [repoRoot]` | Promotes the pending baseline (or derives one from the current index) and refreshes `.ailoc2-metrics/summary.json`. |
 
 If `repoRoot` is omitted, the CLI resolves it relative to the current working directory.
 

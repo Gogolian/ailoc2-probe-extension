@@ -18,6 +18,10 @@ export function getRepoSummaryStatePath(repoRoot: string): string {
     return path.join(getMetricsStateDirectory(repoRoot), 'repo-summary.json');
 }
 
+export function getPreparedCommitBaselinePath(repoRoot: string): string {
+    return path.join(getMetricsStateDirectory(repoRoot), 'pending-commit-baseline.json');
+}
+
 export function getMetricsFilesStateDirectory(repoRoot: string): string {
     return path.join(getMetricsStateDirectory(repoRoot), 'files');
 }

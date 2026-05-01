@@ -15,11 +15,12 @@ import {
 import {
     getMetricsFilesStateDirectory,
     getMetricsRoot,
+    getPreparedCommitBaselinePath,
     getMetricsSummaryFilePath,
     getRepoSummaryStatePath,
     getRollingStatePath
 } from './pathing';
-import { getIndexGitBlobOid } from './git';
+import { getGitBlobOidForWorkingTreeFile, getIndexGitBlobOid } from './git';
 import { getTrackingExclusionReasonForPath } from '../trackingExclusions';
 import * as childProcess from 'child_process';
 import * as util from 'util';
@@ -42,6 +43,21 @@ type ChangedLineAttributionSummary = {
     aiWeight: number;
     humanWeight: number;
     unknownWeight: number;
+};
+
+type CommitBaselineBuildResult = {
+    summaryState: RepoSummaryState;
+    resolvedFileCount: number;
+    deletedFileCount: number;
+    preservedFileCount: number;
+    unresolvedRepoRelativePaths: string[];
+};
+
+type CommitBaselineResolution = {
+    kind: 'resolved' | 'deleted';
+    entry: RepoCleanBaselineEntry;
+} | {
+    kind: 'preserve-existing' | 'unresolved';
 };
 
 export type DiffSliceAttributionSummary = {
@@ -78,6 +94,22 @@ export type RepoHookSummaryRefreshResult = {
     summary: RepoUncommittedAttributionSummary;
     summaryLine: string;
     summaryFilePath: string;
+};
+
+export type RepoCommitBaselinePreparationResult = {
+    repoRoot: string;
+    preparedBaselinePath: string;
+    repoSummaryStatePath: string;
+    resolvedFileCount: number;
+    deletedFileCount: number;
+    preservedFileCount: number;
+    unresolvedRepoRelativePaths: string[];
+};
+
+export type RepoCommitFinalizationResult = RepoHookSummaryRefreshResult & {
+    baselineSource: 'prepared' | 'current-index';
+    preparedBaselinePath: string;
+    repoSummaryStatePath: string;
 };
 
 export async function computeRepoUncommittedAttributionSummary(args: {
@@ -155,6 +187,51 @@ export async function refreshRepoHookSummary(args: {
         summary,
         summaryLine,
         summaryFilePath
+    };
+}
+
+export async function prepareRepoCommitBaseline(args: {
+    repoRoot: string;
+}): Promise<RepoCommitBaselinePreparationResult> {
+    const preparedBaselinePath = getPreparedCommitBaselinePath(args.repoRoot);
+    const repoSummaryStatePath = getRepoSummaryStatePath(args.repoRoot);
+    const buildResult = await buildRepoCommitBaselineState(args.repoRoot);
+
+    await writeJsonFileAtomic(preparedBaselinePath, buildResult.summaryState);
+
+    return {
+        repoRoot: args.repoRoot,
+        preparedBaselinePath,
+        repoSummaryStatePath,
+        resolvedFileCount: buildResult.resolvedFileCount,
+        deletedFileCount: buildResult.deletedFileCount,
+        preservedFileCount: buildResult.preservedFileCount,
+        unresolvedRepoRelativePaths: buildResult.unresolvedRepoRelativePaths
+    };
+}
+
+export async function finalizeRepoCommit(args: {
+    repoRoot: string;
+}): Promise<RepoCommitFinalizationResult> {
+    const preparedBaselinePath = getPreparedCommitBaselinePath(args.repoRoot);
+    const repoSummaryStatePath = getRepoSummaryStatePath(args.repoRoot);
+    let baselineSource: 'prepared' | 'current-index' = 'prepared';
+    let summaryStateToPromote = await readRepoSummaryStateFile(preparedBaselinePath, args.repoRoot);
+
+    if (!summaryStateToPromote) {
+        baselineSource = 'current-index';
+        summaryStateToPromote = (await buildRepoCommitBaselineState(args.repoRoot)).summaryState;
+    }
+
+    await writeJsonFileAtomic(repoSummaryStatePath, summaryStateToPromote);
+    await removeFileIfExists(preparedBaselinePath);
+
+    const refreshedSummary = await refreshRepoHookSummary(args);
+    return {
+        ...refreshedSummary,
+        baselineSource,
+        preparedBaselinePath,
+        repoSummaryStatePath
     };
 }
 
@@ -842,28 +919,212 @@ async function readRollingState(repoRoot: string, repoRelativePath: string): Pro
 }
 
 async function readRepoSummaryState(repoRoot: string): Promise<RepoSummaryState> {
-    const summaryStatePath = getRepoSummaryStatePath(repoRoot);
-    try {
-        const fileContents = await fs.promises.readFile(summaryStatePath, 'utf8');
-        const parsed = JSON.parse(fileContents) as RepoSummaryState;
-        return {
-            schemaVersion: METRICS_SCHEMA_VERSION,
-            recordType: 'repo-summary-state',
-            repoRoot,
-            lastComputedAt: parsed.lastComputedAt,
-            lastCleanAt: parsed.lastCleanAt ?? null,
-            cleanBaselineByRepoRelativePath: parsed.cleanBaselineByRepoRelativePath ?? {}
-        };
+    const parsedState = await readRepoSummaryStateFile(getRepoSummaryStatePath(repoRoot), repoRoot);
+    if (parsedState) {
+        return parsedState;
     }
-    catch {
-        return {
+
+    return {
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'repo-summary-state',
+        repoRoot,
+        lastComputedAt: new Date().toISOString(),
+        lastCleanAt: null,
+        cleanBaselineByRepoRelativePath: {}
+    };
+}
+
+async function buildRepoCommitBaselineState(repoRoot: string): Promise<CommitBaselineBuildResult> {
+    const existingSummaryState = await readRepoSummaryState(repoRoot);
+    const cleanBaselineByRepoRelativePath = {
+        ...existingSummaryState.cleanBaselineByRepoRelativePath
+    };
+    const rollingStatePaths = await collectRollingStatePaths(getMetricsFilesStateDirectory(repoRoot));
+    let resolvedFileCount = 0;
+    let deletedFileCount = 0;
+    let preservedFileCount = 0;
+    const unresolvedRepoRelativePaths: string[] = [];
+
+    for (const rollingStatePath of rollingStatePaths) {
+        const rollingState = await readRollingStateFile(rollingStatePath, repoRoot);
+        if (!rollingState) {
+            continue;
+        }
+
+        const resolution = await resolveCommitBaselineForRollingState(repoRoot, rollingState);
+        if (resolution.kind === 'resolved') {
+            cleanBaselineByRepoRelativePath[rollingState.repoRelativePath] = resolution.entry;
+            resolvedFileCount += 1;
+            continue;
+        }
+
+        if (resolution.kind === 'deleted') {
+            cleanBaselineByRepoRelativePath[rollingState.repoRelativePath] = resolution.entry;
+            resolvedFileCount += 1;
+            deletedFileCount += 1;
+            continue;
+        }
+
+        if (resolution.kind === 'preserve-existing') {
+            preservedFileCount += 1;
+            continue;
+        }
+
+        unresolvedRepoRelativePaths.push(rollingState.repoRelativePath);
+    }
+
+    return {
+        summaryState: {
             schemaVersion: METRICS_SCHEMA_VERSION,
             recordType: 'repo-summary-state',
             repoRoot,
             lastComputedAt: new Date().toISOString(),
-            lastCleanAt: null,
-            cleanBaselineByRepoRelativePath: {}
+            lastCleanAt: existingSummaryState.lastCleanAt,
+            cleanBaselineByRepoRelativePath
+        },
+        resolvedFileCount,
+        deletedFileCount,
+        preservedFileCount,
+        unresolvedRepoRelativePaths
+    };
+}
+
+async function resolveCommitBaselineForRollingState(
+    repoRoot: string,
+    rollingState: FileRollingState
+): Promise<CommitBaselineResolution> {
+    const indexGitBlobOid = await getIndexGitBlobOid(repoRoot, rollingState.repoRelativePath);
+    if (indexGitBlobOid) {
+        const matchingCheckpoint = findMatchingCheckpointByGitBlobOid(
+            rollingState.saveAttributionCheckpoints,
+            indexGitBlobOid
+        );
+        if (matchingCheckpoint) {
+            return {
+                kind: 'resolved',
+                entry: createBaselineEntryFromCheckpoint(matchingCheckpoint)
+            };
+        }
+
+        const workingTreeGitBlobOid = await getGitBlobOidForWorkingTreeFile(repoRoot, rollingState.repoRelativePath);
+        if (workingTreeGitBlobOid && workingTreeGitBlobOid === indexGitBlobOid) {
+            return {
+                kind: 'resolved',
+                entry: createBaselineEntryFromRollingState(rollingState)
+            };
+        }
+
+        return {
+            kind: 'unresolved'
         };
+    }
+
+    const repoAbsolutePath = path.join(repoRoot, rollingState.repoRelativePath);
+    if (!(await pathExists(repoAbsolutePath))) {
+        return {
+            kind: 'deleted',
+            entry: createBaselineEntryFromRollingState(rollingState)
+        };
+    }
+
+    return {
+        kind: 'preserve-existing'
+    };
+}
+
+function createBaselineEntryFromCheckpoint(checkpoint: SaveAttributionCheckpoint): RepoCleanBaselineEntry {
+    return {
+        aiChangeMagnitude: checkpoint.cumulativeAiChangeMagnitude,
+        humanChangeMagnitude: checkpoint.cumulativeHumanChangeMagnitude
+    };
+}
+
+function createBaselineEntryFromRollingState(rollingState: FileRollingState): RepoCleanBaselineEntry {
+    return {
+        aiChangeMagnitude: rollingState.cumulativeAiChangeMagnitude,
+        humanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude
+    };
+}
+
+async function readRollingStateFile(rollingStatePath: string, repoRoot: string): Promise<FileRollingState | null> {
+    try {
+        const fileContents = await fs.promises.readFile(rollingStatePath, 'utf8');
+        const parsed = JSON.parse(fileContents) as Partial<FileRollingState>;
+        if (typeof parsed.repoRelativePath !== 'string' || parsed.repoRelativePath.length === 0) {
+            return null;
+        }
+
+        return {
+            schemaVersion: METRICS_SCHEMA_VERSION,
+            recordType: 'file-rolling-state',
+            repoRoot,
+            repoRelativePath: parsed.repoRelativePath,
+            lastRecordedAt: typeof parsed.lastRecordedAt === 'string'
+                ? parsed.lastRecordedAt
+                : new Date().toISOString(),
+            latestSignal: typeof parsed.latestSignal === 'string' ? parsed.latestSignal : null,
+            signalCounters: typeof parsed.signalCounters === 'object' && parsed.signalCounters !== null
+                ? parsed.signalCounters as Record<string, number>
+                : {},
+            cumulativeAiChangeMagnitude: typeof parsed.cumulativeAiChangeMagnitude === 'number'
+                ? parsed.cumulativeAiChangeMagnitude
+                : 0,
+            cumulativeHumanChangeMagnitude: typeof parsed.cumulativeHumanChangeMagnitude === 'number'
+                ? parsed.cumulativeHumanChangeMagnitude
+                : 0,
+            saveAttributionCheckpoints: Array.isArray(parsed.saveAttributionCheckpoints)
+                ? parsed.saveAttributionCheckpoints.map((checkpoint: any) => ({
+                    gitBlobOid: typeof checkpoint?.gitBlobOid === 'string' ? checkpoint.gitBlobOid : null,
+                    cumulativeAiChangeMagnitude: typeof checkpoint?.cumulativeAiChangeMagnitude === 'number'
+                        ? checkpoint.cumulativeAiChangeMagnitude
+                        : 0,
+                    cumulativeHumanChangeMagnitude: typeof checkpoint?.cumulativeHumanChangeMagnitude === 'number'
+                        ? checkpoint.cumulativeHumanChangeMagnitude
+                        : 0,
+                    lineAttributionSpans: Array.isArray(checkpoint?.lineAttributionSpans)
+                        ? checkpoint.lineAttributionSpans.filter((span: any): span is LineAttributionSpan => (
+                            typeof span?.lineCount === 'number'
+                            && span.lineCount > 0
+                            && (span.attribution === 'AI' || span.attribution === 'Human' || span.attribution === 'Unknown')
+                        ))
+                        : []
+                }))
+                : [],
+            lineAttributionSpans: Array.isArray(parsed.lineAttributionSpans)
+                ? parsed.lineAttributionSpans.filter((span: any): span is LineAttributionSpan => (
+                    typeof span?.lineCount === 'number'
+                    && span.lineCount > 0
+                    && (span.attribution === 'AI' || span.attribution === 'Human' || span.attribution === 'Unknown')
+                ))
+                : [],
+            deletedAt: typeof parsed.deletedAt === 'string' ? parsed.deletedAt : null
+        };
+    }
+    catch {
+        return null;
+    }
+}
+
+async function readRepoSummaryStateFile(filePath: string, repoRoot: string): Promise<RepoSummaryState | null> {
+    try {
+        const fileContents = await fs.promises.readFile(filePath, 'utf8');
+        const parsed = JSON.parse(fileContents) as Partial<RepoSummaryState>;
+        return {
+            schemaVersion: METRICS_SCHEMA_VERSION,
+            recordType: 'repo-summary-state',
+            repoRoot,
+            lastComputedAt: typeof parsed.lastComputedAt === 'string'
+                ? parsed.lastComputedAt
+                : new Date().toISOString(),
+            lastCleanAt: typeof parsed.lastCleanAt === 'string' ? parsed.lastCleanAt : null,
+            cleanBaselineByRepoRelativePath: typeof parsed.cleanBaselineByRepoRelativePath === 'object'
+                && parsed.cleanBaselineByRepoRelativePath !== null
+                ? parsed.cleanBaselineByRepoRelativePath
+                : {}
+        };
+    }
+    catch {
+        return null;
     }
 }
 
@@ -918,6 +1179,25 @@ async function collectRollingStatePaths(directoryPath: string): Promise<string[]
     }
     catch {
         return [];
+    }
+}
+
+async function removeFileIfExists(filePath: string): Promise<void> {
+    try {
+        await fs.promises.rm(filePath, { force: true });
+    }
+    catch {
+        // Best effort cleanup only.
+    }
+}
+
+async function pathExists(candidatePath: string): Promise<boolean> {
+    try {
+        await fs.promises.access(candidatePath);
+        return true;
+    }
+    catch {
+        return false;
     }
 }
 

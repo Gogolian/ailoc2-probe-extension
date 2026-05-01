@@ -40,8 +40,9 @@ flowchart TD
     F --> G[Compute change stats and classify signal]
     G --> H[Queue rolling-state update in RepoMetricsStore]
     H --> I[Write .ailoc2-metrics/state/files/*.metrics.json]
-    I --> J[pre-commit refreshes summary.json]
+    I --> J[pre-commit snapshots index baseline and refreshes summary.json]
     J --> K[commit-msg appends AI suffix]
+    K --> L[post-commit promotes baseline and refreshes summary.json]
 ```
 
 ## Activation lifecycle

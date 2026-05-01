@@ -396,6 +396,20 @@ export function activate(context: vscode.ExtensionContext): void {
 
                 logEvent('COMMAND_INSTALL_HOOKS', installResult);
 
+                let initialSummaryRefreshError: string | null = null;
+                try {
+                    await refreshRepoSummaryForCommand(repoRoot, 'command:install-hooks');
+                }
+                catch (summaryRefreshError) {
+                    initialSummaryRefreshError = summaryRefreshError instanceof Error
+                        ? summaryRefreshError.message
+                        : String(summaryRefreshError);
+                    logEvent('COMMAND_INSTALL_HOOKS_INITIAL_SUMMARY_FAILED', {
+                        repoRoot,
+                        error: initialSummaryRefreshError
+                    });
+                }
+
                 const infoMessage = installResult.status === 'already-installed'
                     ? installResult.delegatedHooksPath
                         ? `AILoc2 hooks are already active for ${path.basename(repoRoot)} and chained to ${installResult.delegatedHooksPath}.`
@@ -406,6 +420,12 @@ export function activate(context: vscode.ExtensionContext): void {
                     ? `AILoc2 hooks installed for ${path.basename(repoRoot)}. Previous local hooksPath saved for restore on uninstall.`
                     : `AILoc2 hooks installed for ${path.basename(repoRoot)}.`;
                 void vscode.window.showInformationMessage(infoMessage);
+
+                if (initialSummaryRefreshError) {
+                    void vscode.window.showWarningMessage(
+                        `AILoc2 installed hooks for ${path.basename(repoRoot)}, but could not precompute the initial summary. The first commit may use stale attribution until the next successful refresh: ${initialSummaryRefreshError}`
+                    );
+                }
             }
             catch (error) {
                 logEvent('COMMAND_INSTALL_HOOKS_FAILED', {

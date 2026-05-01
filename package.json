@@ -62,6 +62,7 @@
   "scripts": {
     "build": "tsc -p ./ && npm run build:hook-runtime",
     "build:hook-runtime": "esbuild ./src/cli/gitHookCli.ts --bundle --platform=node --format=cjs --target=node18 --outfile=./out/hook-runtime/ailoc2-hook-runtime.cjs",
+    "test": "npm run build && node --test out/test/commitBaseline.test.js",
     "watch": "tsc -w -p ./",
     "vscode:prepublish": "npm run build"
   },

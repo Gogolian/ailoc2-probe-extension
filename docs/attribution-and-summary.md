@@ -208,7 +208,7 @@ That gives the summary logic something much better than a whole-file guess: it c
 2. unstaged tracked-file diff slices via `git diff --unified=0 --find-renames --no-color`
 3. unstaged untracked files via `git ls-files --others --exclude-standard`
 4. rolling state from `.ailoc2-metrics/state/files/**/*.metrics.json`
-5. clean-baseline state from `.ailoc2-metrics/state/repo-summary.json`
+5. repo baseline state from `.ailoc2-metrics/state/repo-summary.json`
 
 ## Summary algorithm
 
@@ -228,11 +228,21 @@ Changed lines are weighted by current line length with a minimum weight of `1`.
 
 That means a blank line still contributes weight `1`, while longer lines count more than extremely short lines. This is still a heuristic, but it is generally more representative than a flat “one line equals one line” policy for the current implementation.
 
+## Prepared commit baseline
+
+The repo-summary baseline is no longer advanced only when the repo happens to become fully clean.
+
+During `pre-commit`, AILoc2 snapshots the **current Git index** into `state/pending-commit-baseline.json`. After a successful commit, `post-commit` promotes that prepared state into `state/repo-summary.json` and then refreshes `summary.json` again.
+
+That matters for the exact “second commit” problem: if a file still has leftover unstaged work after the first commit, the later summary now subtracts the just-committed index baseline instead of falling all the way back to the last fully clean repo state.
+
+In other words, later commit summaries are anchored to the most recently committed content, not only to the last time the entire repo happened to be spotless.
+
 ## Clean baseline refresh
 
-If both staged and unstaged diff sets are empty, AILoc2 treats the repo as clean and refreshes `state/repo-summary.json`.
+If both staged and unstaged diff sets are empty, AILoc2 still treats the repo as clean and refreshes `state/repo-summary.json` directly.
 
-That file stores the current cumulative AI and human magnitudes per tracked file as a baseline. Future summaries subtract that baseline so the commit-level score reflects **new uncommitted work**, not the entire historical accumulation of the file.
+That clean-repo refresh remains useful as a maintenance path, but it is no longer the only mechanism that advances the baseline between commits.
 
 ## Summary output
 
