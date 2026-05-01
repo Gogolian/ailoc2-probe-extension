@@ -2,8 +2,9 @@
   "name": "ailoc2-probe-extension",
   "displayName": "AILoc2 Probe",
   "description": "POC VS Code extension that logs rich edit and save telemetry to an output channel.",
-  "version": "0.0.1",
-  "publisher": "local",
+  "version": "0.1.0",
+  "publisher": "Gogolian",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.118.0"
   },

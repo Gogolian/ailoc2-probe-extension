@@ -16,7 +16,6 @@ import {
     getRollingStatePath
 } from './metrics/pathing';
 import {
-    getAttributionBucketForSignal,
     LineDiffSegment,
     METRICS_SCHEMA_VERSION,
     SaveCorrelationSummary,

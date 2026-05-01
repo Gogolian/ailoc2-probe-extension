@@ -1,0 +1,231 @@
+# AILoc2
+
+<p align="center">
+  <strong>Local-first AI attribution for real Git commits.</strong><br />
+  A VS Code extension + Git hook runtime that estimates how much of your pending change was AI-assisted and writes the answer where teams actually see it: the commit itself.
+</p>
+
+<p align="center">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-6.x-3178C6?logo=typescript&logoColor=white" />
+  <img alt="VS Code Extension" src="https://img.shields.io/badge/VS%20Code-Extension-007ACC?logo=visualstudiocode&logoColor=white" />
+  <img alt="Git Hooks" src="https://img.shields.io/badge/Git-Hooks-F05032?logo=git&logoColor=white" />
+  <img alt="Local First" src="https://img.shields.io/badge/Local-First-2ea44f" />
+  <img alt="Status" src="https://img.shields.io/badge/status-experimental-orange" />
+</p>
+
+> **Status:** experimental, working prototype. The current VS Code extension appears as `AILoc2 Probe`. It tracks editor activity, persists repo-local attribution state in `.ailoc2-metrics`, refreshes staged and unstaged summaries, and annotates commit messages like `feat: harden hook install flow (AI 23.47%)`.
+
+AILoc2 is built around a practical question most teams cannot answer yet:
+
+**How much of the change I am about to commit looks AI-assisted?**
+
+Not “which entire file once touched an LLM.” Not “what happened in a dashboard three tabs away.” The actual commit. The actual diff. The actual repo.
+
+## Why this project exists
+
+LLM tooling is increasingly woven into normal editing workflows, but Git history still has no native way to express how a change was produced. Whole-file heuristics are noisy, cloud-only tracking is awkward, and wrapper workflows tend to fall apart the moment they meet a real team’s habits.
+
+AILoc2 takes a simpler route:
+
+- observe edits where they actually happen — inside VS Code
+- keep attribution artifacts inside the repo
+- summarize attribution against staged and unstaged Git diffs
+- annotate the commit subject automatically via local Git hooks
+
+No hosted backend is required by this repo. No special commit command to remember. No provenance cosplay.
+
+## What AILoc2 does today
+
+- Watches VS Code document edits, saves, renames, and deletes.
+- Correlates workspace-file changes with VS Code chat-editing virtual documents.
+- Classifies file changes into AI-leaning and human-leaning signals.
+- Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
+- Builds staged and unstaged summaries from actual Git diff slices.
+- Installs repo-local Git hooks into `.githooks`.
+- Annotates commit messages with a suffix like `(AI 23.47%)`.
+- Falls back safely to `(AI unavailable)` when summary data cannot be produced.
+
+## Why it feels different
+
+- **Commit-native** — the headline result lands in the commit message, not a side dashboard.
+- **Repo-local** — attribution artifacts are plain JSON written next to the codebase.
+- **Change-focused** — percentages are derived from changed lines, not whole-file ownership guesses.
+- **Auditable** — summaries, rolling state, and manifests are inspectable.
+- **Low-friction** — once hooks are installed, the flow feels like normal Git.
+- **Hook-friendly** — managed hooks can chain an existing repo-local `core.hooksPath` instead of bulldozing it.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Edit code in VS Code] --> B[AILoc2 observes document changes and save signals]
+    B --> C[Rolling attribution state in .ailoc2-metrics/state/files]
+    C --> D[pre-commit refreshes summary.json]
+    D --> E[commit-msg appends AI percentage to the commit subject]
+```
+
+At a high level, AILoc2 does four things:
+
+1. **Observe** editor activity in VS Code.
+2. **Classify** each file change using human-leaning vs AI-leaning signals.
+3. **Persist** rolling attribution state per tracked file.
+4. **Summarize** staged and unstaged Git diffs, then annotate the commit message.
+
+## Technical docs
+
+If you want the implementation details rather than the quick-start view, start here:
+
+- [`docs/README.md`](docs/README.md) — technical docs index and source map
+- [`docs/architecture.md`](docs/architecture.md) — extension lifecycle, runtime components, and event flow
+- [`docs/attribution-and-summary.md`](docs/attribution-and-summary.md) — heuristics, rolling state, save checkpoints, and summary computation
+- [`docs/hooks-and-runtime.md`](docs/hooks-and-runtime.md) — hook installation, runtime behavior, CLI usage, and fallback semantics
+
+## Quick start
+
+### Prerequisites
+
+- Node.js 18+
+- Git
+- VS Code `^1.118.0`
+- A Git repository you can open in VS Code
+
+### Run the extension locally
+
+```bash
+npm install
+npm run build
+```
+
+Then open the workspace in VS Code and press `F5` (or use **Run → Start Debugging**) to launch the extension in an Extension Development Host window.
+
+### Install hooks in a target repo
+
+1. Open the Extension Development Host launched by VS Code.
+2. Open the Git repository you want to track.
+3. Run `AILoc2 Probe: Install Repo Hooks` from the Command Palette.
+4. Edit code, save, stage, and commit as usual.
+
+If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain to that setup instead of replacing it outright.
+
+### What you should see
+
+- `AILoc2 Probe` output channel for detailed diagnostics
+- `AILoc2 Summary` output channel for summary refreshes
+- `.ailoc2-metrics/summary.json` inside the tracked repo
+- commit subjects automatically annotated during `git commit`
+
+## Example output
+
+**Commit subject**
+
+> `feat: tighten diff attribution fallback (AI 23.47%)`
+
+**Summary line**
+
+> `my-repo: STAGED -> AI 23.47% | Human 76.53% ; UNSTAGED -> AI 0.00% | Human 100.00%`
+
+## Files AILoc2 creates
+
+```text
+your-repo/
+├─ .ailoc2-metrics/
+│  ├─ manifest.json
+│  ├─ summary.json
+│  └─ state/
+│     ├─ repo-summary.json
+│     └─ files/
+│        └─ src/
+│           └─ example.ts.metrics.json
+└─ .githooks/
+   ├─ pre-commit
+   ├─ commit-msg
+   └─ ailoc2-hook-runtime.cjs
+```
+
+### What those files mean
+
+- `summary.json` — generated output consumed by hooks and other local tooling.
+- `manifest.json` — lightweight bookkeeping and diagnostics for the extension runtime.
+- `state/repo-summary.json` — clean-baseline state used when recomputing repo attribution.
+- `state/files/**/*.metrics.json` — rolling attribution state per tracked repo file.
+- `.githooks/ailoc2-hook-runtime.cjs` — bundled CommonJS runtime used by installed Git hooks.
+
+## VS Code commands
+
+| Command | What it does |
+| --- | --- |
+| `AILoc2 Probe: Show Output` | Opens the detailed probe output channel. |
+| `AILoc2 Probe: Log Active Document Snapshot` | Logs a diagnostic snapshot for the active document. |
+| `AILoc2 Probe: Log Active Document Metrics Target` | Shows the repo-local metrics target for the active document. |
+| `AILoc2 Probe: Show Summary Output` | Opens the summary output channel. |
+| `AILoc2 Probe: Recompute Repo Summary` | Rebuilds `.ailoc2-metrics/summary.json` for a selected repo. |
+| `AILoc2 Probe: Install Repo Hooks` | Installs managed AILoc2 hooks into `.githooks`. |
+| `AILoc2 Probe: Uninstall Repo Hooks` | Removes managed AILoc2 hooks and restores prior repo-local hook settings when possible. |
+
+## Configuration
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `ailoc2Probe.logging.verboseOutputChannel` | `false` | When enabled, logs automatic probe events to the `AILoc2 Probe` output channel. |
+
+## Attribution model
+
+The current heuristic is intentionally conservative.
+
+- The **strongest AI signal** is recent `chat-editing-snapshot-text-model` activity followed almost immediately by a workspace-file change — especially a whole-document replacement.
+- A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
+- Zero-content change events are filtered out as lifecycle noise.
+- Unknown or unattributed slices are kept out of the headline percentage when possible instead of being quietly counted as AI.
+
+### Signals used today
+
+| Signal | Interpretation | Bucket |
+| --- | --- | --- |
+| `ProbableAIApplyToWorkspaceFile` | Strong evidence of AI apply to a real file after recent snapshot activity. | AI |
+| `PossibleAIApplyToWorkspaceFile` | Some AI-like context exists, but the change is less decisive. | AI |
+| `LikelyHumanEditWhileChatSessionOpen` | Small manual edit while a chat session is active. | Human |
+| `LikelyHumanOrRegularEditorEdit` | Ordinary workspace-file edit without matching chat-editing context. | Human |
+
+### How the summary is computed
+
+AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. It weights changed lines using current line lengths with a minimum weight of `1`, which makes the result more representative than a naive whole-file percentage while staying cheap enough to run inside normal commit workflows.
+
+## Current limitations
+
+This project is already useful, but it is not pretending to be magic.
+
+- Today’s AI detection is heuristic, not universal ground truth.
+- The strongest support is for VS Code chat-editing apply flows.
+- Edits made outside VS Code — or while the extension is inactive — are not observed directly at creation time.
+- Some AI-assisted changes may still look human or unknown if the editor does not expose a distinct enough signal.
+- `(AI unavailable)` means summary generation or hook runtime fallback kicked in; it does **not** always mean “no AI was used.”
+- The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
+
+## Development
+
+```bash
+npm install
+npm run build
+```
+
+Useful scripts:
+
+- `npm run build` — compiles the extension and bundles the hook runtime.
+- `npm run build:hook-runtime` — bundles `out/hook-runtime/ailoc2-hook-runtime.cjs`.
+- `npm run watch` — TypeScript watch mode for extension development.
+
+## Roadmap
+
+- Strengthen provenance by owning more of the AI apply path directly.
+- Improve attribution quality for non-chat AI tools and edge-case editing flows.
+- Harden diff parsing, save checkpointing, rename handling, and summary validation with tests.
+- Improve packaging and distribution so trying AILoc2 feels delightfully boring.
+- Add better visualization for teams who want more than a commit suffix.
+
+## Contributing
+
+Issues and pull requests are welcome — especially around attribution accuracy, odd editor behaviors, hook interoperability, and repo-state edge cases. If you can make the heuristics smarter without making the workflow weirder, you are very much in the right place.
+
+---
+
+If Git is the source of truth for code history, AILoc2 is an attempt to make AI provenance part of that truth — locally, visibly, and without asking developers to stop working like developers.
