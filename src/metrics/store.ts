@@ -39,12 +39,17 @@ type RepoQueue = {
 
 export type MetricsStoreLogger = (eventName: string, payload: unknown) => void;
 
+export type RepoMetricsStoreOptions = {
+    persistEventsToFiles: boolean;
+};
+
 export class RepoMetricsStore {
     private readonly repoQueues = new Map<string, RepoQueue>();
 
     public constructor(
         private readonly extensionSessionId: string,
-        private readonly logEvent: MetricsStoreLogger
+        private readonly logEvent: MetricsStoreLogger,
+        private readonly options: RepoMetricsStoreOptions
     ) {}
 
     public queueWorkspaceFileMetric(record: WorkspaceFileMetricEvent): void {
@@ -305,16 +310,18 @@ export class RepoMetricsStore {
         await this.ensureRepoLayout(repoRoot);
 
         const eventGroups = new Map<string, MetricsRecord[]>();
-        for (const entry of recordsToFlush) {
-            const eventsPath = getDailyEventsFilePath(repoRoot, entry.record.recordedAt);
-            const existingGroup = eventGroups.get(eventsPath) ?? [];
-            existingGroup.push(entry.record);
-            eventGroups.set(eventsPath, existingGroup);
-        }
+        if (this.options.persistEventsToFiles) {
+            for (const entry of recordsToFlush) {
+                const eventsPath = getDailyEventsFilePath(repoRoot, entry.record.recordedAt);
+                const existingGroup = eventGroups.get(eventsPath) ?? [];
+                existingGroup.push(entry.record);
+                eventGroups.set(eventsPath, existingGroup);
+            }
 
-        for (const [eventsPath, records] of eventGroups) {
-            const lines = records.map((record) => JSON.stringify(record)).join('\n') + '\n';
-            await fs.promises.appendFile(eventsPath, lines, 'utf8');
+            for (const [eventsPath, records] of eventGroups) {
+                const lines = records.map((record) => JSON.stringify(record)).join('\n') + '\n';
+                await fs.promises.appendFile(eventsPath, lines, 'utf8');
+            }
         }
 
         for (const entry of recordsToFlush) {
@@ -330,6 +337,7 @@ export class RepoMetricsStore {
 
         this.logEvent('METRICS_STORE_FLUSHED', {
             repoRoot,
+            persistEventsToFiles: this.options.persistEventsToFiles,
             flushedRecordCount: recordsToFlush.length,
             flushedRecordTypes: Array.from(new Set(recordsToFlush.map((entry) => entry.record.recordType))),
             eventsFiles: Array.from(eventGroups.keys()),
@@ -500,7 +508,9 @@ export class RepoMetricsStore {
 
     private async ensureRepoLayout(repoRoot: string): Promise<void> {
         await fs.promises.mkdir(getMetricsRoot(repoRoot), { recursive: true });
-        await fs.promises.mkdir(getMetricsEventsDirectory(repoRoot), { recursive: true });
+        if (this.options.persistEventsToFiles) {
+            await fs.promises.mkdir(getMetricsEventsDirectory(repoRoot), { recursive: true });
+        }
         await fs.promises.mkdir(getMetricsFilesStateDirectory(repoRoot), { recursive: true });
 
         const manifestPath = getMetricsManifestPath(repoRoot);
@@ -518,8 +528,9 @@ export class RepoMetricsStore {
             await this.writeJsonFileAtomic(manifestPath, manifest);
             this.logEvent('METRICS_STORE_LAYOUT_INITIALIZED', {
                 repoRoot,
+                persistEventsToFiles: this.options.persistEventsToFiles,
                 metricsRoot: getMetricsRoot(repoRoot),
-                eventsDirectory: getMetricsEventsDirectory(repoRoot),
+                eventsDirectory: this.options.persistEventsToFiles ? getMetricsEventsDirectory(repoRoot) : null,
                 filesStateDirectory: getMetricsFilesStateDirectory(repoRoot),
                 manifestPath
             });

@@ -32,7 +32,26 @@
         "command": "ailoc2Probe.showSummaryOutput",
         "title": "AILoc2 Probe: Show Summary Output"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "AILoc2 Probe",
+      "properties": {
+        "ailoc2Probe.metrics.persistEventsToFiles": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "order": 1,
+          "markdownDescription": "Write full event records to `.ailoc2-metrics/events/*.jsonl` daily files. **Warning:** Enabling this creates a high amount of files and extra disk I/O. Use only for debugging or detailed analysis."
+        },
+        "ailoc2Probe.logging.verboseOutputChannel": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "order": 2,
+          "markdownDescription": "Log automatic probe events to the `AILoc2 Probe` output channel. Disable this to reduce output noise and memory usage."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "tsc -p ./",

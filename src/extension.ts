@@ -142,10 +142,18 @@ type MetricPersistenceDecision = {
 
 const OUTPUT_CHANNEL_NAME = 'AILoc2 Probe';
 const SUMMARY_OUTPUT_CHANNEL_NAME = 'AILoc2 Summary';
+const EXTENSION_CONFIGURATION_SECTION = 'ailoc2Probe';
+const PERSIST_EVENT_FILES_CONFIGURATION_KEY = 'metrics.persistEventsToFiles';
+const VERBOSE_OUTPUT_CHANNEL_CONFIGURATION_KEY = 'logging.verboseOutputChannel';
 const TEXT_PREVIEW_LIMIT = 240;
 const CHAT_CONTEXT_WINDOW_MS = 120_000;
 const RECENT_WILL_SAVE_WINDOW_MS = 5_000;
 const SUMMARY_UPDATE_DEBOUNCE_MS = 500;
+
+type ExtensionRuntimeConfiguration = {
+    persistEventsToFiles: boolean;
+    verboseOutputChannel: boolean;
+};
 
 let outputChannel: vscode.OutputChannel | undefined;
 let summaryOutputChannel: vscode.OutputChannel | undefined;
@@ -153,16 +161,21 @@ let metricsStore: RepoMetricsStore | undefined;
 let extensionSessionId: string | undefined;
 const trackedRepoRoots = new Set<string>();
 const pendingSummaryUpdateTimers = new Map<string, NodeJS.Timeout>();
+let runtimeConfiguration: ExtensionRuntimeConfiguration = {
+    persistEventsToFiles: false,
+    verboseOutputChannel: false
+};
 
 export function activate(context: vscode.ExtensionContext): void {
     outputChannel = vscode.window.createOutputChannel(OUTPUT_CHANNEL_NAME);
     summaryOutputChannel = vscode.window.createOutputChannel(SUMMARY_OUTPUT_CHANNEL_NAME);
+    runtimeConfiguration = readExtensionRuntimeConfiguration();
     const snapshots = new Map<string, DocumentSnapshot>();
     const recentChatEdits = new Map<string, ChatEditContext>();
     const recentWillSaves = new Map<string, WillSaveContext>();
 
     const logEvent = (eventName: string, payload: unknown): void => {
-        if (!outputChannel) {
+        if (!outputChannel || !shouldLogEvent(eventName)) {
             return;
         }
 
@@ -172,7 +185,9 @@ export function activate(context: vscode.ExtensionContext): void {
     };
 
     extensionSessionId = crypto.randomUUID();
-    metricsStore = new RepoMetricsStore(extensionSessionId, logEvent);
+    metricsStore = new RepoMetricsStore(extensionSessionId, logEvent, {
+        persistEventsToFiles: runtimeConfiguration.persistEventsToFiles
+    });
     trackedRepoRoots.clear();
     pendingSummaryUpdateTimers.clear();
 
@@ -314,7 +329,10 @@ export function activate(context: vscode.ExtensionContext): void {
                     ? {
                         metricsRoot: getMetricsRoot(repoLocation.repoRoot),
                         manifestPath: getMetricsManifestPath(repoLocation.repoRoot),
-                        todayEventsPath: getDailyEventsFilePath(repoLocation.repoRoot, new Date().toISOString()),
+                        persistEventsToFiles: runtimeConfiguration.persistEventsToFiles,
+                        todayEventsPath: runtimeConfiguration.persistEventsToFiles
+                            ? getDailyEventsFilePath(repoLocation.repoRoot, new Date().toISOString())
+                            : null,
                         rollingStatePath: getRollingStatePath(repoLocation.repoRoot, repoLocation.repoRelativePath),
                         isCurrentlyTracked: trackedState
                     }
@@ -322,7 +340,9 @@ export function activate(context: vscode.ExtensionContext): void {
                 notes: trackingExclusionReason
                     ? `The active document is excluded from tracking: ${trackingExclusionReason}.`
                     : repoLocation
-                    ? 'This is the repo-local .ailoc2-metrics target for the active file.'
+                    ? runtimeConfiguration.persistEventsToFiles
+                        ? 'This is the repo-local .ailoc2-metrics target for the active file.'
+                        : 'This is the repo-local .ailoc2-metrics target for the active file. Event-file persistence is currently disabled by configuration.'
                     : 'The active document is not currently eligible for repo-local metrics persistence.'
             });
             outputChannel?.show(true);
@@ -753,6 +773,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     logEvent('EXTENSION_ACTIVATED', {
         extensionSessionId,
+        runtimeConfiguration,
         extensionMode: describeExtensionMode(context.extensionMode),
         vscodeVersion: vscode.version,
         workspaceFolders: vscode.workspace.workspaceFolders?.map((folder) => ({
@@ -765,7 +786,9 @@ export function activate(context: vscode.ExtensionContext): void {
             .map((document) => describeDocument(document))
     });
 
-    outputChannel.show(true);
+    if (runtimeConfiguration.verboseOutputChannel) {
+        outputChannel.show(true);
+    }
 }
 
 export async function deactivate(): Promise<void> {
@@ -788,12 +811,28 @@ export async function deactivate(): Promise<void> {
         await metricsStore.flushAll();
     }
 
-    if (!outputChannel) {
+    if (!outputChannel || !runtimeConfiguration.verboseOutputChannel) {
         return;
     }
 
     outputChannel.appendLine(`[${new Date().toISOString()}] EXTENSION_DEACTIVATE_CALLED`);
     outputChannel.appendLine('');
+}
+
+function readExtensionRuntimeConfiguration(): ExtensionRuntimeConfiguration {
+    const configuration = vscode.workspace.getConfiguration(EXTENSION_CONFIGURATION_SECTION);
+    return {
+        persistEventsToFiles: configuration.get<boolean>(PERSIST_EVENT_FILES_CONFIGURATION_KEY, false),
+        verboseOutputChannel: configuration.get<boolean>(VERBOSE_OUTPUT_CHANNEL_CONFIGURATION_KEY, false)
+    };
+}
+
+function shouldLogEvent(eventName: string): boolean {
+    return runtimeConfiguration.verboseOutputChannel || isAlwaysLoggedEvent(eventName);
+}
+
+function isAlwaysLoggedEvent(eventName: string): boolean {
+    return eventName.startsWith('COMMAND_') || eventName.endsWith('_FAILED');
 }
 
 function shouldIgnoreDocument(document: vscode.TextDocument): boolean {
