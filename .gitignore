@@ -1,0 +1,4 @@
+node_modules/
+out/
+*.vsix
+.ailoc2-metrics/

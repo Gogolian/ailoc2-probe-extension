@@ -1,0 +1,43 @@
+{
+  "name": "ailoc2-probe-extension",
+  "displayName": "AILoc2 Probe",
+  "description": "POC VS Code extension that logs rich edit and save telemetry to an output channel.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.118.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ailoc2Probe.showOutput",
+        "title": "AILoc2 Probe: Show Output"
+      },
+      {
+        "command": "ailoc2Probe.logActiveDocumentSnapshot",
+        "title": "AILoc2 Probe: Log Active Document Snapshot"
+      },
+      {
+        "command": "ailoc2Probe.logActiveDocumentMetricsTarget",
+        "title": "AILoc2 Probe: Log Active Document Metrics Target"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/vscode": "^1.118.0",
+    "typescript": "^6.0.3"
+  }
+}
