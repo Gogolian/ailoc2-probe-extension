@@ -1,17 +1,10 @@
 plugins {
     id("java")
-    id("org.jetbrains.intellij.platform") version "2.2.1"
+    id("org.jetbrains.intellij.platform")
 }
 
 group = "com.ailoc2"
 version = "0.1.0"
-
-repositories {
-    mavenCentral()
-    intellijPlatform {
-        defaultRepositories()
-    }
-}
 
 dependencies {
     intellijPlatform {
