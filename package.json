@@ -2,7 +2,7 @@
   "name": "ailoc2-probe-extension",
   "displayName": "AILoc2 Probe",
   "description": "Local-first AI attribution for real Git commits. Estimates how much of your staged change was AI-assisted and annotates the commit message automatically via Git hooks.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "Gogolian",
   "license": "MIT",
   "repository": {
@@ -29,7 +29,7 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.118.0"
+    "vscode": "^1.104.3"
   },
   "categories": [
     "Other"
@@ -91,7 +91,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/vscode": "^1.118.0",
+    "@types/vscode": "1.104.0",
     "esbuild": "^0.25.4",
     "typescript": "^6.0.3"
   },
