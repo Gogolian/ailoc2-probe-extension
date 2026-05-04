@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - 2026-05-04
+## [0.1.1] - 2026-05-04
 - Add compatibility to vscode 1.104.3
 
 ## [0.1.0] - 2026-05-02
