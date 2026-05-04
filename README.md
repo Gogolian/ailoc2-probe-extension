@@ -86,7 +86,7 @@ If you want the implementation details rather than the quick-start view, start h
 
 - Node.js 18+
 - Git
-- VS Code `^1.118.0`
+- VS Code `^1.104.3`
 - A Git repository you can open in VS Code
 
 ### Run the extension locally
