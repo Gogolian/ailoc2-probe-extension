@@ -3,7 +3,6 @@ package com.ailoc2.intellij;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.command.CommandEvent;
 import com.intellij.openapi.command.CommandListener;
-import com.intellij.openapi.command.CommandProcessor;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.EditorFactory;
@@ -53,7 +52,7 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     public void start() {
-        CommandProcessor.getInstance().addCommandListener(new CommandListener() {
+        project.getMessageBus().connect(this).subscribe(CommandListener.TOPIC, new CommandListener() {
             @Override
             public void commandStarted(@NotNull CommandEvent event) {
                 activeCommandName = event.getCommandName() == null ? "" : event.getCommandName();
@@ -63,7 +62,7 @@ public final class Ailoc2ProjectService implements Disposable {
             public void commandFinished(@NotNull CommandEvent event) {
                 activeCommandName = "";
             }
-        }, this);
+        });
 
         EditorFactory.getInstance().getEventMulticaster().addDocumentListener(new DocumentListener() {
             @Override
