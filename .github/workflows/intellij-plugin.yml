@@ -47,7 +47,7 @@ jobs:
           mkdir -p build/marketplace-artifact
           distribution_dir="$PWD/build/distributions"
           mapfile -t plugin_zips < <(find "$distribution_dir" -maxdepth 1 -type f -name '*.zip')
-          test "${#plugin_zips[@]}" -eq 1 || { echo "Error: expected exactly one plugin ZIP in $distribution_dir, found ${#plugin_zips[@]}"; exit 1; }
+          test "${#plugin_zips[@]}" -eq 1 || { echo "Error: expected exactly one plugin ZIP in ${distribution_dir}, found ${#plugin_zips[@]}"; exit 1; }
           unzip -q "${plugin_zips[0]}" -d build/marketplace-artifact
 
       - name: Upload IntelliJ plugin artifact
