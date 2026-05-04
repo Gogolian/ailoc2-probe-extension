@@ -30,6 +30,8 @@ import java.util.regex.Pattern;
 @Service(Service.Level.PROJECT)
 public final class Ailoc2ProjectService implements Disposable {
     private static final Pattern HUNK_PATTERN = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,(\\d+))? @@.*$");
+    private static final int AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD = 4;
+    private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -215,7 +217,9 @@ public final class Ailoc2ProjectService implements Disposable {
                 return Ailoc2AttributionBucket.AI;
             }
         }
-        if (event.getOldLength() > 0 && event.getNewLength() > event.getOldLength() * 4L && event.getNewLength() > 400) {
+        if (event.getOldLength() > 0
+            && event.getNewLength() > event.getOldLength() * (long) AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD
+            && event.getNewLength() > AI_BULK_REPLACEMENT_MINIMUM_LENGTH) {
             return Ailoc2AttributionBucket.AI;
         }
         return Ailoc2AttributionBucket.HUMAN;

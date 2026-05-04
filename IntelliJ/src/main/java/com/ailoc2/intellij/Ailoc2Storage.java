@@ -10,10 +10,10 @@ import java.util.concurrent.ConcurrentHashMap;
 
 final class Ailoc2Storage {
     private static final String METRICS_DIRECTORY = ".ailoc2-metrics";
-    private final Map<String, Ailoc2FileState> cachedStates = new ConcurrentHashMap<>();
+    private final Map<StateKey, Ailoc2FileState> cachedStates = new ConcurrentHashMap<>();
 
     Ailoc2FileState stateFor(Path repoRoot, String repoRelativePath) {
-        String cacheKey = repoRoot.toAbsolutePath().normalize() + "\n" + repoRelativePath;
+        StateKey cacheKey = new StateKey(repoRoot.toAbsolutePath().normalize(), repoRelativePath);
         return cachedStates.computeIfAbsent(cacheKey, ignored -> readState(repoRoot, repoRelativePath));
     }
 
@@ -108,6 +108,29 @@ final class Ailoc2Storage {
     }
 
     private String escapeJson(String value) {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+        StringBuilder escaped = new StringBuilder(value.length() + 16);
+        for (int i = 0; i < value.length(); i++) {
+            char character = value.charAt(i);
+            switch (character) {
+                case '\\' -> escaped.append("\\\\");
+                case '"' -> escaped.append("\\\"");
+                case '\b' -> escaped.append("\\b");
+                case '\f' -> escaped.append("\\f");
+                case '\n' -> escaped.append("\\n");
+                case '\r' -> escaped.append("\\r");
+                case '\t' -> escaped.append("\\t");
+                default -> {
+                    if (character < 0x20) {
+                        escaped.append(String.format(java.util.Locale.ROOT, "\\u%04x", (int) character));
+                    }
+                    else {
+                        escaped.append(character);
+                    }
+                }
+            }
+        }
+        return escaped.toString();
     }
+
+    private record StateKey(Path repoRoot, String repoRelativePath) {}
 }
