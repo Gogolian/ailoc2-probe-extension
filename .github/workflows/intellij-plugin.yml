@@ -41,9 +41,15 @@ jobs:
       - name: Build IntelliJ plugin
         run: ./gradlew buildPlugin --no-daemon --stacktrace
 
+      - name: Prepare Marketplace artifact
+        run: |
+          rm -rf build/marketplace-artifact
+          mkdir -p build/marketplace-artifact
+          unzip -q build/distributions/*.zip -d build/marketplace-artifact
+
       - name: Upload IntelliJ plugin artifact
         uses: actions/upload-artifact@v4
         with:
           name: ailoc2-intellij-plugin
-          path: IntelliJ/build/distributions/*.zip
+          path: IntelliJ/build/marketplace-artifact/*
           if-no-files-found: error
