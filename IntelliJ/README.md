@@ -26,7 +26,7 @@ For local development, run:
 gradle runIde
 ```
 
-The Gradle project targets IntelliJ IDEA Community 2024.3.5 and Java 17.
+The Gradle project builds against IntelliJ IDEA Community 2024.1.7 and declares compatibility from platform build 241 onward, with no upper `until-build` cap.
 
 ## Attribution approach
 
