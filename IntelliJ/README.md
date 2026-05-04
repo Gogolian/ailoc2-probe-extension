@@ -18,7 +18,7 @@ From this folder:
 gradle buildPlugin
 ```
 
-GitHub Actions also builds the plugin ZIP from this folder. Run the `Build IntelliJ Plugin` workflow manually, then download the `ailoc2-intellij-plugin` artifact from the completed run. The artifact contains the ZIP from `build/distributions/`, which can be uploaded to the IntelliJ Marketplace.
+GitHub Actions also builds the plugin ZIP from this folder. Run the `Build IntelliJ Plugin` workflow manually, then download the `ailoc2-intellij-plugin` artifact from the completed run. The downloaded artifact ZIP is prepared with the plugin root directory at the top level and can be uploaded directly to the IntelliJ Marketplace.
 
 For local development, run:
 

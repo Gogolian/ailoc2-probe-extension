@@ -1,5 +1,5 @@
 <idea-plugin>
-  <id>com.ailoc2.intellij.probe</id>
+  <id>com.ailoc2.probe</id>
   <name>AILoc2 Probe</name>
   <vendor email="issues@gogolian.invalid" url="https://github.com/Gogolian/ailoc2-probe-extension">Gogolian</vendor>
   <description><![CDATA[
