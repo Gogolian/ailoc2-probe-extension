@@ -1,0 +1,49 @@
+name: Build IntelliJ Plugin
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "IntelliJ/**"
+      - ".github/workflows/intellij-plugin.yml"
+  pull_request:
+    paths:
+      - "IntelliJ/**"
+      - ".github/workflows/intellij-plugin.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build plugin ZIP
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: IntelliJ
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build IntelliJ plugin
+        run: ./gradlew buildPlugin --no-daemon --stacktrace
+
+      - name: Upload IntelliJ plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ailoc2-intellij-plugin
+          path: IntelliJ/build/distributions/*.zip
+          if-no-files-found: error
