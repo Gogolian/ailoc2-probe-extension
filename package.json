@@ -1,10 +1,33 @@
 {
   "name": "ailoc2-probe-extension",
   "displayName": "AILoc2 Probe",
-  "description": "POC VS Code extension that logs rich edit and save telemetry to an output channel.",
+  "description": "Local-first AI attribution for real Git commits. Estimates how much of your staged change was AI-assisted and annotates the commit message automatically via Git hooks.",
   "version": "0.1.0",
   "publisher": "Gogolian",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Gogolian/ailoc2-probe-extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Gogolian/ailoc2-probe-extension/issues"
+  },
+  "homepage": "https://github.com/Gogolian/ailoc2-probe-extension#readme",
+  "keywords": [
+    "ai",
+    "attribution",
+    "git",
+    "hooks",
+    "telemetry",
+    "provenance",
+    "commit",
+    "copilot",
+    "llm"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.118.0"
   },
