@@ -8,7 +8,7 @@ version = "0.1.0"
 
 dependencies {
     intellijPlatform {
-        intellijIdeaCommunity("2024.3.5")
+        intellijIdeaCommunity("2024.1.7")
         bundledPlugin("Git4Idea")
     }
 }
@@ -23,7 +23,7 @@ intellijPlatform {
     pluginConfiguration {
         name = "AILoc2 Probe"
         ideaVersion {
-            sinceBuild = "243"
+            sinceBuild = "241"
         }
     }
 }

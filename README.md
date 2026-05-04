@@ -87,7 +87,7 @@ If you want the implementation details rather than the quick-start view, start h
 - Node.js 18+
 - Git
 - VS Code `^1.104.3`
-- IntelliJ IDEA 2024.3+ and Java 17 for the IntelliJ plugin in [`IntelliJ/`](IntelliJ/)
+- IntelliJ IDEA 2024.1+ and Java 17 for the IntelliJ plugin in [`IntelliJ/`](IntelliJ/)
 - A Git repository you can open in VS Code or IntelliJ IDEA
 
 ### Run the extension locally
