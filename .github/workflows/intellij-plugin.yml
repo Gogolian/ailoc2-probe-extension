@@ -42,6 +42,7 @@ jobs:
         run: ./gradlew buildPlugin --no-daemon --stacktrace
 
       - name: Prepare Marketplace artifact
+        shell: bash
         run: |
           rm -rf build/marketplace-artifact
           mkdir -p build/marketplace-artifact
