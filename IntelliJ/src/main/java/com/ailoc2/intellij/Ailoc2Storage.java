@@ -1,0 +1,113 @@
+package com.ailoc2.intellij;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+final class Ailoc2Storage {
+    private static final String METRICS_DIRECTORY = ".ailoc2-metrics";
+    private final Map<String, Ailoc2FileState> cachedStates = new ConcurrentHashMap<>();
+
+    Ailoc2FileState stateFor(Path repoRoot, String repoRelativePath) {
+        String cacheKey = repoRoot.toAbsolutePath().normalize() + "\n" + repoRelativePath;
+        return cachedStates.computeIfAbsent(cacheKey, ignored -> readState(repoRoot, repoRelativePath));
+    }
+
+    void persistState(Path repoRoot, String repoRelativePath, Ailoc2FileState state) {
+        Path statePath = statePath(repoRoot, repoRelativePath);
+        StringBuilder builder = new StringBuilder();
+        builder.append("# AILoc2 IntelliJ rolling state v1\n");
+        builder.append("aiMagnitude\t").append(state.getAiMagnitude()).append('\n');
+        builder.append("humanMagnitude\t").append(state.getHumanMagnitude()).append('\n');
+        for (Map.Entry<Integer, Ailoc2AttributionBucket> entry : state.getLineBuckets().entrySet()) {
+            builder.append("line\t").append(entry.getKey()).append('\t').append(entry.getValue().name()).append('\n');
+        }
+
+        try {
+            Files.createDirectories(statePath.getParent());
+            Files.writeString(statePath, builder.toString(), StandardCharsets.UTF_8);
+        }
+        catch (IOException ignored) {
+            // Metrics must never block normal editing.
+        }
+    }
+
+    void writeSummary(Path repoRoot, Ailoc2GitSummary stagedSummary) {
+        Path summaryPath = repoRoot.resolve(METRICS_DIRECTORY).resolve("summary.json");
+        String repoName = repoRoot.getFileName() == null ? repoRoot.toString() : repoRoot.getFileName().toString();
+        String summaryLine = stagedSummary.available
+            ? String.format("%s: STAGED -> AI %.2f%% | Human %.2f%%", repoName, stagedSummary.aiPercentage, stagedSummary.humanPercentage)
+            : repoName + ": summary unavailable";
+        String json = "{\n"
+            + "  \"schemaVersion\": 1,\n"
+            + "  \"recordType\": \"intellij-hook-summary\",\n"
+            + "  \"generatedAt\": \"" + escapeJson(Instant.now().toString()) + "\",\n"
+            + "  \"repoRoot\": \"" + escapeJson(repoRoot.toString()) + "\",\n"
+            + "  \"repoName\": \"" + escapeJson(repoName) + "\",\n"
+            + "  \"isGitSummaryAvailable\": " + stagedSummary.available + ",\n"
+            + "  \"summaryLine\": \"" + escapeJson(summaryLine) + "\",\n"
+            + "  \"staged\": {\n"
+            + "    \"changedFileCount\": " + stagedSummary.changedFileCount + ",\n"
+            + "    \"attributedChangedFileCount\": " + stagedSummary.attributedChangedFileCount + ",\n"
+            + "    \"aiWeightedChangedLines\": " + stagedSummary.aiWeightedChangedLines + ",\n"
+            + "    \"humanWeightedChangedLines\": " + stagedSummary.humanWeightedChangedLines + ",\n"
+            + "    \"aiPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", stagedSummary.aiPercentage) + ",\n"
+            + "    \"humanPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", stagedSummary.humanPercentage) + "\n"
+            + "  }\n"
+            + "}\n";
+
+        try {
+            Files.createDirectories(summaryPath.getParent());
+            Files.writeString(summaryPath, json, StandardCharsets.UTF_8);
+        }
+        catch (IOException ignored) {
+            // Summary writing is best effort.
+        }
+    }
+
+    private Ailoc2FileState readState(Path repoRoot, String repoRelativePath) {
+        Ailoc2FileState state = new Ailoc2FileState();
+        Path statePath = statePath(repoRoot, repoRelativePath);
+        if (!Files.isRegularFile(statePath)) {
+            return state;
+        }
+
+        try {
+            for (String line : Files.readAllLines(statePath, StandardCharsets.UTF_8)) {
+                String[] parts = line.split("\\t");
+                if (parts.length == 2 && "aiMagnitude".equals(parts[0])) {
+                    state.setAiMagnitude(Long.parseLong(parts[1]));
+                }
+                else if (parts.length == 2 && "humanMagnitude".equals(parts[0])) {
+                    state.setHumanMagnitude(Long.parseLong(parts[1]));
+                }
+                else if (parts.length == 3 && "line".equals(parts[0])) {
+                    state.setLineBucket(Integer.parseInt(parts[1]), Ailoc2AttributionBucket.valueOf(parts[2]));
+                }
+            }
+        }
+        catch (RuntimeException | IOException ignored) {
+            return new Ailoc2FileState();
+        }
+        return state;
+    }
+
+    private Path statePath(Path repoRoot, String repoRelativePath) {
+        return repoRoot
+            .resolve(METRICS_DIRECTORY)
+            .resolve("intellij-state")
+            .resolve(safeStateFileName(repoRelativePath) + ".tsv");
+    }
+
+    private String safeStateFileName(String repoRelativePath) {
+        return repoRelativePath.replace('\\', '/').replaceAll("[^A-Za-z0-9._-]", "_");
+    }
+
+    private String escapeJson(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+    }
+}
