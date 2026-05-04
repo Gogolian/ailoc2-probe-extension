@@ -45,10 +45,9 @@ jobs:
         run: |
           rm -rf build/marketplace-artifact
           mkdir -p build/marketplace-artifact
-          plugin_zip="$(find build/distributions -maxdepth 1 -type f -name '*.zip' -print -quit)"
-          test -n "$plugin_zip" || { echo "Error: no plugin ZIP found in IntelliJ/build/distributions"; exit 1; }
-          test "$(find build/distributions -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 1 || { echo "Error: expected exactly one plugin ZIP in IntelliJ/build/distributions"; exit 1; }
-          unzip -q "$plugin_zip" -d build/marketplace-artifact
+          mapfile -t plugin_zips < <(find build/distributions -maxdepth 1 -type f -name '*.zip')
+          test "${#plugin_zips[@]}" -eq 1 || { echo "Error: expected exactly one plugin ZIP in IntelliJ/build/distributions"; exit 1; }
+          unzip -q "${plugin_zips[0]}" -d build/marketplace-artifact
 
       - name: Upload IntelliJ plugin artifact
         uses: actions/upload-artifact@v4
