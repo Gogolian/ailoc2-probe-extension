@@ -46,8 +46,8 @@ jobs:
           rm -rf build/marketplace-artifact
           mkdir -p build/marketplace-artifact
           plugin_zip="$(find build/distributions -maxdepth 1 -type f -name '*.zip' -print -quit)"
-          test -n "$plugin_zip"
-          test "$(find build/distributions -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 1
+          test -n "$plugin_zip" || { echo "Error: no plugin ZIP found in build/distributions"; exit 1; }
+          test "$(find build/distributions -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 1 || { echo "Error: expected exactly one plugin ZIP in build/distributions"; exit 1; }
           unzip -q "$plugin_zip" -d build/marketplace-artifact
 
       - name: Upload IntelliJ plugin artifact
