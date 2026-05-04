@@ -6,13 +6,6 @@ plugins {
 group = "com.ailoc2"
 version = "0.1.0"
 
-repositories {
-    mavenCentral()
-    intellijPlatform {
-        defaultRepositories()
-    }
-}
-
 dependencies {
     intellijPlatform {
         intellijIdeaCommunity("2024.3.5")
