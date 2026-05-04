@@ -29,7 +29,7 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.118.0"
+    "vscode": "^1.104.3"
   },
   "categories": [
     "Other"
@@ -91,7 +91,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/vscode": "^1.118.0",
+    "@types/vscode": "1.104.0",
     "esbuild": "^0.25.4",
     "typescript": "^6.0.3"
   },
