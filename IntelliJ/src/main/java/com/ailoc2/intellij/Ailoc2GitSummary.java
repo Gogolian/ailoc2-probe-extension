@@ -28,7 +28,7 @@ final class Ailoc2GitSummary {
         }
         else {
             this.aiPercentage = 0.0d;
-            this.humanPercentage = changedFileCount > 0 ? 0.0d : 100.0d;
+            this.humanPercentage = 0.0d;
         }
     }
 

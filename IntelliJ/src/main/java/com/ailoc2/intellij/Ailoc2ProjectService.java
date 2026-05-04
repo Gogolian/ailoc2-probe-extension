@@ -30,6 +30,18 @@ import java.util.regex.Pattern;
 @Service(Service.Level.PROJECT)
 public final class Ailoc2ProjectService implements Disposable {
     private static final Pattern HUNK_PATTERN = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,(\\d+))? @@.*$");
+    private static final List<String> AI_COMMAND_HINTS = List.of(
+        "copilot",
+        "codeium",
+        "tabnine",
+        "assistant",
+        "junie",
+        "llm",
+        "ai assistant",
+        "ai completion",
+        "generate code"
+    );
+
     private final Project project;
     private final Ailoc2Storage storage = new Ailoc2Storage();
     private volatile String activeCommandName = "";
@@ -42,7 +54,7 @@ public final class Ailoc2ProjectService implements Disposable {
         CommandProcessor.getInstance().addCommandListener(new CommandListener() {
             @Override
             public void commandStarted(@NotNull CommandEvent event) {
-                activeCommandName = event.getCommandName() == null ? "" : event.getCommandName().toString();
+                activeCommandName = event.getCommandName() == null ? "" : event.getCommandName();
             }
 
             @Override
@@ -96,7 +108,8 @@ public final class Ailoc2ProjectService implements Disposable {
         String repoRelativePath = repoRoot.relativize(filePath).toString().replace('\\', '/');
         Ailoc2AttributionBucket bucket = classifyChange(activeCommandName, event);
         Ailoc2FileState state = storage.stateFor(repoRoot, repoRelativePath);
-        int startLine = Math.max(1, document.getLineNumber(Math.max(0, Math.min(event.getOffset(), document.getTextLength()))) + 1);
+        int safeOffset = Math.max(0, Math.min(event.getOffset(), document.getTextLength()));
+        int startLine = Math.max(1, document.getLineNumber(safeOffset) + 1);
         int changedLineCount = Math.max(1, countTouchedLines(event.getNewFragment()));
         for (int line = startLine; line < startLine + changedLineCount; line++) {
             state.setLineBucket(line, bucket);
@@ -197,8 +210,7 @@ public final class Ailoc2ProjectService implements Disposable {
 
     private Ailoc2AttributionBucket classifyChange(String commandName, DocumentEvent event) {
         String normalized = commandName == null ? "" : commandName.toLowerCase(Locale.ROOT);
-        List<String> aiHints = List.of("copilot", "codeium", "tabnine", "assistant", "junie", "llm", "ai assistant", "ai completion", "generate code");
-        for (String hint : aiHints) {
+        for (String hint : AI_COMMAND_HINTS) {
             if (normalized.contains(hint)) {
                 return Ailoc2AttributionBucket.AI;
             }
