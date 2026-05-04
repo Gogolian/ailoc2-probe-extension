@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Local-first AI attribution for real Git commits.</strong><br />
-  A VS Code extension + Git hook runtime that estimates how much of your pending change was AI-assisted and writes the answer where teams actually see it: the commit itself.
+  A VS Code extension + Git hook runtime, now with an IntelliJ IDEA plugin prototype, that estimates how much of your pending change was AI-assisted and writes the answer where teams actually see it: the commit itself.
 </p>
 
 <p align="center">
@@ -86,8 +86,9 @@ If you want the implementation details rather than the quick-start view, start h
 
 - Node.js 18+
 - Git
-- VS Code `^1.118.0`
-- A Git repository you can open in VS Code
+- VS Code `^1.118.0` for the VS Code extension
+- IntelliJ IDEA 2024.3+ and Java 17 for the IntelliJ plugin in [`IntelliJ/`](IntelliJ/)
+- A Git repository you can open in VS Code or IntelliJ IDEA
 
 ### Run the extension locally
 
@@ -114,6 +115,11 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 - `.ailoc2-metrics/summary.json` inside the tracked repo
 - commit subjects automatically annotated during `git commit`
 - post-commit baseline advancement so the next summary starts from the new committed state instead of the older clean snapshot
+
+
+### IntelliJ IDEA plugin prototype
+
+The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ editor changes locally, records repo-local metrics under `.ailoc2-metrics/intellij-state`, computes staged AI percentage from `git diff --cached` during IntelliJ commit handling, and appends `(AI xx.xx%)` to the commit subject without requiring prompt, instruction, or source-code tag changes.
 
 ## Example output
 
