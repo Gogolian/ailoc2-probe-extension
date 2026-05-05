@@ -18,7 +18,18 @@ From this folder:
 gradle buildPlugin
 ```
 
-GitHub Actions also builds the plugin ZIP from this folder. Run the `Build IntelliJ Plugin` workflow manually, then download the `ailoc2-intellij-plugin` artifact from the completed run. The downloaded artifact ZIP is prepared with the plugin root directory at the top level and can be uploaded directly to the IntelliJ Marketplace.
+This Gradle project supports two explicit targets with no upper `until-build` cap:
+
+- IntelliJ IDEA Community 2025.2.3 (`sinceBuild = 252`)
+- IntelliJ IDEA Ultimate 2026.1 (`sinceBuild = 261`)
+
+Community 2025.2.3 is the default local target. To build the Ultimate 2026.1 variant, pass the target properties explicitly:
+
+```bash
+./gradlew buildPlugin -PideaEdition=ultimate -PideaVersion=2026.1 -PideaSinceBuild=261
+```
+
+GitHub Actions builds both plugin ZIP variants from this folder. Run the `Build IntelliJ Plugin` workflow manually, then download the completed `ailoc2-intellij-plugin-community-2025.2.3` and `ailoc2-intellij-plugin-ultimate-2026.1` artifacts. Each downloaded artifact ZIP is prepared with the plugin root directory at the top level and can be uploaded directly to the IntelliJ Marketplace.
 
 For local development, run:
 
@@ -26,7 +37,7 @@ For local development, run:
 gradle runIde
 ```
 
-The Gradle project builds against IntelliJ IDEA Community 2024.1.7 and declares compatibility from platform build 241 onward, with no upper `until-build` cap.
+To launch the Ultimate 2026.1 target locally instead, pass the same Gradle properties to `runIde`.
 
 ## Attribution approach
 
