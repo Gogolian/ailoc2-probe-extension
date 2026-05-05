@@ -18,8 +18,20 @@ permissions:
 
 jobs:
   build:
-    name: Build plugin ZIP
+    name: Build plugin ZIP (${{ matrix.idea_edition }} ${{ matrix.idea_version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - idea_edition: community
+            idea_version: 2025.2.3
+            idea_since_build: "252"
+            artifact_name: ailoc2-intellij-plugin-community-2025.2.3
+          - idea_edition: ultimate
+            idea_version: 2026.1
+            idea_since_build: "261"
+            artifact_name: ailoc2-intellij-plugin-ultimate-2026.1
 
     defaults:
       run:
@@ -33,27 +45,32 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build IntelliJ plugin
-        run: ./gradlew buildPlugin --no-daemon --stacktrace
+        run: >
+          ./gradlew buildPlugin --no-daemon --stacktrace
+          -PideaEdition=${{ matrix.idea_edition }}
+          -PideaVersion=${{ matrix.idea_version }}
+          -PideaSinceBuild=${{ matrix.idea_since_build }}
 
       - name: Prepare Marketplace artifact
         shell: bash
         run: |
-          rm -rf build/marketplace-artifact
-          mkdir -p build/marketplace-artifact
+          artifact_dir="build/marketplace-artifact/${{ matrix.idea_edition }}-${{ matrix.idea_version }}"
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
           distribution_dir="$PWD/build/distributions"
           mapfile -t plugin_zips < <(find "$distribution_dir" -maxdepth 1 -type f -name '*.zip')
           test "${#plugin_zips[@]}" -eq 1 || { echo "Error: expected exactly one plugin ZIP in ${distribution_dir}, found ${#plugin_zips[@]}"; exit 1; }
-          unzip -q "${plugin_zips[0]}" -d build/marketplace-artifact
+          unzip -q "${plugin_zips[0]}" -d "$artifact_dir"
 
       - name: Upload IntelliJ plugin artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ailoc2-intellij-plugin
-          path: IntelliJ/build/marketplace-artifact/*
+          name: ${{ matrix.artifact_name }}
+          path: IntelliJ/build/marketplace-artifact/${{ matrix.idea_edition }}-${{ matrix.idea_version }}/*
           if-no-files-found: error
