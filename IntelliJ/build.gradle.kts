@@ -49,3 +49,7 @@ intellijPlatform {
         }
     }
 }
+
+tasks.named("buildSearchableOptions") {
+    enabled = false
+}
