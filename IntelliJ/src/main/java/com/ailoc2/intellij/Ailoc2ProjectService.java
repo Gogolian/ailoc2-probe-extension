@@ -4,6 +4,7 @@ import com.intellij.openapi.Disposable;
 import com.intellij.openapi.command.CommandEvent;
 import com.intellij.openapi.command.CommandListener;
 import com.intellij.openapi.components.Service;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.EditorFactory;
 import com.intellij.openapi.editor.event.DocumentEvent;
@@ -28,6 +29,7 @@ import java.util.regex.Pattern;
 
 @Service(Service.Level.PROJECT)
 public final class Ailoc2ProjectService implements Disposable {
+    private static final Logger LOG = Logger.getInstance(Ailoc2ProjectService.class);
     private static final Pattern HUNK_PATTERN = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,(\\d+))? @@.*$");
     private static final int AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD = 4;
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
@@ -45,7 +47,7 @@ public final class Ailoc2ProjectService implements Disposable {
 
     private final Project project;
     private final Ailoc2Storage storage = new Ailoc2Storage();
-    private volatile String activeCommandName = "";
+    private volatile CommandContext activeCommandContext = CommandContext.empty();
 
     public Ailoc2ProjectService(Project project) {
         this.project = project;
@@ -55,12 +57,14 @@ public final class Ailoc2ProjectService implements Disposable {
         project.getMessageBus().connect(this).subscribe(CommandListener.TOPIC, new CommandListener() {
             @Override
             public void commandStarted(@NotNull CommandEvent event) {
-                activeCommandName = event.getCommandName() == null ? "" : event.getCommandName();
+                activeCommandContext = CommandContext.from(event);
+                LOG.info("AILoc2 command started: " + activeCommandContext.describe());
             }
 
             @Override
             public void commandFinished(@NotNull CommandEvent event) {
-                activeCommandName = "";
+                LOG.info("AILoc2 command finished: " + CommandContext.from(event).describe());
+                activeCommandContext = CommandContext.empty();
             }
         });
 
@@ -107,7 +111,9 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         String repoRelativePath = repoRoot.relativize(filePath).toString().replace('\\', '/');
-        Ailoc2AttributionBucket bucket = classifyChange(activeCommandName, event);
+        CommandContext commandContext = activeCommandContext;
+        ClassificationResult classification = classifyChange(commandContext, event);
+        Ailoc2AttributionBucket bucket = classification.bucket();
         Ailoc2FileState state = storage.stateFor(repoRoot, repoRelativePath);
         int safeOffset = Math.max(0, Math.min(event.getOffset(), document.getTextLength()));
         int startLine = Math.max(1, document.getLineNumber(safeOffset) + 1);
@@ -117,6 +123,19 @@ public final class Ailoc2ProjectService implements Disposable {
         }
         state.addMagnitude(bucket, Math.max(event.getOldLength(), event.getNewLength()));
         storage.persistState(repoRoot, repoRelativePath, state);
+        LOG.info(
+            "AILoc2 parsed document event: repo=" + repoRoot
+                + ", file=" + repoRelativePath
+                + ", bucket=" + bucket
+                + ", reason=" + classification.reason()
+                + ", command=" + commandContext.describe()
+                + ", offset=" + event.getOffset()
+                + ", oldLength=" + event.getOldLength()
+                + ", newLength=" + event.getNewLength()
+                + ", oldLines=" + countFragmentLines(event.getOldFragment())
+                + ", newLines=" + countFragmentLines(event.getNewFragment())
+                + ", touchedLines=" + changedLineCount
+        );
     }
 
     private Ailoc2GitSummary computeStagedSummary(Path repoRoot) {
@@ -133,14 +152,25 @@ public final class Ailoc2ProjectService implements Disposable {
             }
             int exitCode = process.waitFor();
             if (exitCode != 0) {
+                LOG.warn("AILoc2 staged summary failed: git diff exited with code " + exitCode + " for repo " + repoRoot);
                 return Ailoc2GitSummary.unavailable();
             }
-            return summarizeDiff(repoRoot, diff.toString());
+            Ailoc2GitSummary summary = summarizeDiff(repoRoot, diff.toString());
+            LOG.info(
+                "AILoc2 staged summary refreshed: repo=" + repoRoot
+                    + ", changedFiles=" + summary.changedFileCount
+                    + ", attributedFiles=" + summary.attributedChangedFileCount
+                    + ", aiWeight=" + summary.aiWeightedChangedLines
+                    + ", humanWeight=" + summary.humanWeightedChangedLines
+                    + ", aiPercentage=" + String.format(Locale.ROOT, "%.2f", summary.aiPercentage)
+            );
+            return summary;
         }
         catch (IOException | InterruptedException error) {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            LOG.warn("AILoc2 staged summary failed for repo " + repoRoot, error);
             return Ailoc2GitSummary.unavailable();
         }
     }
@@ -209,19 +239,19 @@ public final class Ailoc2ProjectService implements Disposable {
         return pathText;
     }
 
-    private Ailoc2AttributionBucket classifyChange(String commandName, DocumentEvent event) {
-        String normalized = commandName == null ? "" : commandName.toLowerCase(Locale.ROOT);
+    private ClassificationResult classifyChange(CommandContext commandContext, DocumentEvent event) {
+        String normalized = commandContext.normalizedSearchText();
         for (String hint : AI_COMMAND_HINTS) {
             if (normalized.contains(hint)) {
-                return Ailoc2AttributionBucket.AI;
+                return new ClassificationResult(Ailoc2AttributionBucket.AI, "command-context:" + hint);
             }
         }
         if (event.getOldLength() > 0
             && event.getNewLength() > event.getOldLength() * (long) AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD
             && event.getNewLength() > AI_BULK_REPLACEMENT_MINIMUM_LENGTH) {
-            return Ailoc2AttributionBucket.AI;
+            return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-replacement");
         }
-        return Ailoc2AttributionBucket.HUMAN;
+        return new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "default-human");
     }
 
     private int countTouchedLines(CharSequence fragment) {
@@ -232,6 +262,10 @@ public final class Ailoc2ProjectService implements Disposable {
             }
         }
         return lines;
+    }
+
+    private int countFragmentLines(CharSequence fragment) {
+        return fragment.isEmpty() ? 0 : countTouchedLines(fragment);
     }
 
     private Path findRepoRoot(Path startPath) {
@@ -257,4 +291,45 @@ public final class Ailoc2ProjectService implements Disposable {
             || repoRelativePath.equals(".ailoc2-metrics")
             || repoRelativePath.equals(".idea");
     }
+
+    private record CommandContext(
+        String commandName,
+        String commandGroupId,
+        String commandGroupClassName,
+        String normalizedSearchText
+    ) {
+        static CommandContext empty() {
+            return new CommandContext("", "", "", "");
+        }
+
+        static CommandContext from(CommandEvent event) {
+            String commandName = sanitize(event.getCommandName());
+            Object commandGroupId = event.getCommandGroupId();
+            String commandGroupIdText = sanitize(commandGroupId == null ? null : commandGroupId.toString());
+            String commandGroupClassName = sanitize(commandGroupId == null ? null : commandGroupId.getClass().getName());
+            String normalizedSearchText = (commandName + " " + commandGroupIdText + " " + commandGroupClassName)
+                .trim()
+                .toLowerCase(Locale.ROOT);
+            return new CommandContext(commandName, commandGroupIdText, commandGroupClassName, normalizedSearchText);
+        }
+
+        String describe() {
+            return "name=" + display(commandName)
+                + ", groupId=" + display(commandGroupId)
+                + ", groupClass=" + display(commandGroupClassName);
+        }
+
+        private static String sanitize(String value) {
+            if (value == null) {
+                return "";
+            }
+            return value.replaceAll("\\s+", " ").trim();
+        }
+
+        private static String display(String value) {
+            return value.isEmpty() ? "<none>" : value;
+        }
+    }
+
+    private record ClassificationResult(Ailoc2AttributionBucket bucket, String reason) {}
 }
