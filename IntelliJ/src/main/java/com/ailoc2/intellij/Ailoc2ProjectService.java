@@ -36,7 +36,7 @@ public final class Ailoc2ProjectService implements Disposable {
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LINES = 2;
-    private static final String UNDEFINED_COMMAND_NAME = "undefined";
+    private static final String AI_UNDEFINED_COMMAND_SENTINEL = "Undefined";
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -258,7 +258,7 @@ public final class Ailoc2ProjectService implements Disposable {
             return new ClassificationResult(Ailoc2AttributionBucket.AI, "undefined-command");
         }
         if (event.getOldLength() == 0
-            && isBulkMultilineInsertion(event, AI_BULK_INSERT_MINIMUM_LENGTH, AI_BULK_INSERT_MINIMUM_LINES)) {
+            && isBulkMultilineInsertion(event)) {
             return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-insert");
         }
         if (event.getOldLength() > 0
@@ -269,9 +269,9 @@ public final class Ailoc2ProjectService implements Disposable {
         return new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "default-human");
     }
 
-    private boolean isBulkMultilineInsertion(DocumentEvent event, int minimumLength, int minimumLines) {
-        return event.getNewLength() > minimumLength
-            && countFragmentLines(event.getNewFragment()) >= minimumLines;
+    private boolean isBulkMultilineInsertion(DocumentEvent event) {
+        return event.getNewLength() > AI_BULK_INSERT_MINIMUM_LENGTH
+            && countFragmentLines(event.getNewFragment()) >= AI_BULK_INSERT_MINIMUM_LINES;
     }
 
     private CommandContext currentCommandContext() {
@@ -359,7 +359,7 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         boolean hasUndefinedCommandName() {
-            return UNDEFINED_COMMAND_NAME.equalsIgnoreCase(commandName);
+            return AI_UNDEFINED_COMMAND_SENTINEL.equals(commandName);
         }
 
         boolean hasEmptyCommandGroup() {
