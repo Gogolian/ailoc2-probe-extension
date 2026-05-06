@@ -36,6 +36,7 @@ public final class Ailoc2ProjectService implements Disposable {
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LINES = 2;
+    private static final String UNDEFINED_COMMAND_NAME = "undefined";
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -358,7 +359,7 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         boolean hasUndefinedCommandName() {
-            return "undefined".equalsIgnoreCase(commandName);
+            return UNDEFINED_COMMAND_NAME.equalsIgnoreCase(commandName);
         }
 
         boolean hasEmptyCommandGroup() {
