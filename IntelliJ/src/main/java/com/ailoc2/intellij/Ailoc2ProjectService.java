@@ -24,6 +24,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -31,8 +32,10 @@ import java.util.regex.Pattern;
 public final class Ailoc2ProjectService implements Disposable {
     private static final Logger LOG = Logger.getInstance(Ailoc2ProjectService.class);
     private static final Pattern HUNK_PATTERN = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,(\\d+))? @@.*$");
+    private static final long RECENT_COMMAND_CONTEXT_NANOS = TimeUnit.SECONDS.toNanos(2);
     private static final int AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD = 4;
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
+    private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -48,6 +51,7 @@ public final class Ailoc2ProjectService implements Disposable {
     private final Project project;
     private final Ailoc2Storage storage = new Ailoc2Storage();
     private volatile CommandContext activeCommandContext = CommandContext.empty();
+    private volatile CommandContext recentCommandContext = CommandContext.empty();
 
     public Ailoc2ProjectService(Project project) {
         this.project = project;
@@ -58,12 +62,14 @@ public final class Ailoc2ProjectService implements Disposable {
             @Override
             public void commandStarted(@NotNull CommandEvent event) {
                 activeCommandContext = CommandContext.from(event);
+                recentCommandContext = activeCommandContext;
                 LOG.info("AILoc2 command started: " + activeCommandContext.describe());
             }
 
             @Override
             public void commandFinished(@NotNull CommandEvent event) {
-                LOG.info("AILoc2 command finished: " + CommandContext.from(event).describe());
+                recentCommandContext = CommandContext.from(event);
+                LOG.info("AILoc2 command finished: " + recentCommandContext.describe());
                 activeCommandContext = CommandContext.empty();
             }
         });
@@ -111,7 +117,7 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         String repoRelativePath = repoRoot.relativize(filePath).toString().replace('\\', '/');
-        CommandContext commandContext = activeCommandContext;
+        CommandContext commandContext = currentCommandContext();
         ClassificationResult classification = classifyChange(commandContext, event);
         Ailoc2AttributionBucket bucket = classification.bucket();
         Ailoc2FileState state = storage.stateFor(repoRoot, repoRelativePath);
@@ -246,12 +252,29 @@ public final class Ailoc2ProjectService implements Disposable {
                 return new ClassificationResult(Ailoc2AttributionBucket.AI, "command-context:" + hint);
             }
         }
+        if (event.getOldLength() == 0 && event.getNewLength() > AI_BULK_INSERT_MINIMUM_LENGTH) {
+            return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-insert");
+        }
         if (event.getOldLength() > 0
             && event.getNewLength() > event.getOldLength() * (long) AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD
             && event.getNewLength() > AI_BULK_REPLACEMENT_MINIMUM_LENGTH) {
             return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-replacement");
         }
         return new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "default-human");
+    }
+
+    private CommandContext currentCommandContext() {
+        CommandContext commandContext = activeCommandContext;
+        if (!commandContext.isEmpty()) {
+            return commandContext;
+        }
+
+        CommandContext recentContext = recentCommandContext;
+        if (recentContext.isRecent()) {
+            return recentContext;
+        }
+
+        return CommandContext.empty();
     }
 
     private int countTouchedLines(CharSequence fragment) {
@@ -296,10 +319,11 @@ public final class Ailoc2ProjectService implements Disposable {
         String commandName,
         String commandGroupId,
         String commandGroupClassName,
-        String normalizedSearchText
+        String normalizedSearchText,
+        long observedAtNanos
     ) {
         static CommandContext empty() {
-            return new CommandContext("", "", "", "");
+            return new CommandContext("", "", "", "", 0L);
         }
 
         static CommandContext from(CommandEvent event) {
@@ -310,13 +334,21 @@ public final class Ailoc2ProjectService implements Disposable {
             String normalizedSearchText = String.join(" ", commandName, commandGroupIdText, commandGroupClassName)
                 .trim()
                 .toLowerCase(Locale.ROOT);
-            return new CommandContext(commandName, commandGroupIdText, commandGroupClassName, normalizedSearchText);
+            return new CommandContext(commandName, commandGroupIdText, commandGroupClassName, normalizedSearchText, System.nanoTime());
         }
 
         String describe() {
             return "name=" + display(commandName)
                 + ", groupId=" + display(commandGroupId)
                 + ", groupClass=" + display(commandGroupClassName);
+        }
+
+        boolean isEmpty() {
+            return normalizedSearchText.isEmpty();
+        }
+
+        boolean isRecent() {
+            return observedAtNanos > 0L && System.nanoTime() - observedAtNanos <= RECENT_COMMAND_CONTEXT_NANOS;
         }
 
         private static String sanitize(String value) {
