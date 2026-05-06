@@ -58,12 +58,16 @@ public final class Ailoc2ProjectService implements Disposable {
             @Override
             public void commandStarted(@NotNull CommandEvent event) {
                 activeCommandContext = CommandContext.from(event);
-                LOG.info("AILoc2 command started: " + activeCommandContext.describe());
+                if (LOG.isInfoEnabled()) {
+                    LOG.info("AILoc2 command started: " + activeCommandContext.describe());
+                }
             }
 
             @Override
             public void commandFinished(@NotNull CommandEvent event) {
-                LOG.info("AILoc2 command finished: " + CommandContext.from(event).describe());
+                if (LOG.isInfoEnabled()) {
+                    LOG.info("AILoc2 command finished: " + CommandContext.from(event).describe());
+                }
                 activeCommandContext = CommandContext.empty();
             }
         });
@@ -123,19 +127,21 @@ public final class Ailoc2ProjectService implements Disposable {
         }
         state.addMagnitude(bucket, Math.max(event.getOldLength(), event.getNewLength()));
         storage.persistState(repoRoot, repoRelativePath, state);
-        LOG.info(
-            "AILoc2 parsed document event: repo=" + repoRoot
-                + ", file=" + repoRelativePath
-                + ", bucket=" + bucket
-                + ", reason=" + classification.reason()
-                + ", command=" + commandContext.describe()
-                + ", offset=" + event.getOffset()
-                + ", oldLength=" + event.getOldLength()
-                + ", newLength=" + event.getNewLength()
-                + ", oldLines=" + countFragmentLines(event.getOldFragment())
-                + ", newLines=" + countFragmentLines(event.getNewFragment())
-                + ", touchedLines=" + changedLineCount
-        );
+        if (LOG.isInfoEnabled()) {
+            LOG.info(
+                "AILoc2 parsed document event: repo=" + repoRoot
+                    + ", file=" + repoRelativePath
+                    + ", bucket=" + bucket
+                    + ", reason=" + classification.reason()
+                    + ", command=" + commandContext.describe()
+                    + ", offset=" + event.getOffset()
+                    + ", oldLength=" + event.getOldLength()
+                    + ", newLength=" + event.getNewLength()
+                    + ", oldLines=" + countFragmentLines(event.getOldFragment())
+                    + ", newLines=" + countFragmentLines(event.getNewFragment())
+                    + ", touchedLines=" + changedLineCount
+            );
+        }
     }
 
     private Ailoc2GitSummary computeStagedSummary(Path repoRoot) {
@@ -156,14 +162,16 @@ public final class Ailoc2ProjectService implements Disposable {
                 return Ailoc2GitSummary.unavailable();
             }
             Ailoc2GitSummary summary = summarizeDiff(repoRoot, diff.toString());
-            LOG.info(
-                "AILoc2 staged summary refreshed: repo=" + repoRoot
-                    + ", changedFiles=" + summary.changedFileCount
-                    + ", attributedFiles=" + summary.attributedChangedFileCount
-                    + ", aiWeight=" + summary.aiWeightedChangedLines
-                    + ", humanWeight=" + summary.humanWeightedChangedLines
-                    + ", aiPercentage=" + String.format(Locale.ROOT, "%.2f", summary.aiPercentage)
-            );
+            if (LOG.isInfoEnabled()) {
+                LOG.info(
+                    "AILoc2 staged summary refreshed: repo=" + repoRoot
+                        + ", changedFiles=" + summary.changedFileCount
+                        + ", attributedFiles=" + summary.attributedChangedFileCount
+                        + ", aiWeight=" + summary.aiWeightedChangedLines
+                        + ", humanWeight=" + summary.humanWeightedChangedLines
+                        + ", aiPercentage=" + String.format(Locale.ROOT, "%.2f", summary.aiPercentage)
+                );
+            }
             return summary;
         }
         catch (IOException | InterruptedException error) {
@@ -307,7 +315,8 @@ public final class Ailoc2ProjectService implements Disposable {
             Object commandGroupId = event.getCommandGroupId();
             String commandGroupIdText = sanitize(commandGroupId == null ? null : commandGroupId.toString());
             String commandGroupClassName = sanitize(commandGroupId == null ? null : commandGroupId.getClass().getName());
-            String normalizedSearchText = (commandName + " " + commandGroupIdText + " " + commandGroupClassName)
+            String normalizedSearchText = String.join(" ", commandName, commandGroupIdText, commandGroupClassName)
+                .replaceAll("\\s+", " ")
                 .trim()
                 .toLowerCase(Locale.ROOT);
             return new CommandContext(commandName, commandGroupIdText, commandGroupClassName, normalizedSearchText);
