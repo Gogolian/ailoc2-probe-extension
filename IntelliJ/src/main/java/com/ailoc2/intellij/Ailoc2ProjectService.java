@@ -36,8 +36,6 @@ public final class Ailoc2ProjectService implements Disposable {
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LINES = 2;
-    private static final int AI_UNDEFINED_COMMAND_MINIMUM_LENGTH = 400;
-    private static final int AI_UNDEFINED_COMMAND_MINIMUM_LINES = 2;
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -255,8 +253,8 @@ public final class Ailoc2ProjectService implements Disposable {
             }
         }
         if (commandContext.hasUndefinedCommandName()
-            && isBulkMultilineInsertion(event, AI_UNDEFINED_COMMAND_MINIMUM_LENGTH, AI_UNDEFINED_COMMAND_MINIMUM_LINES)) {
-            return new ClassificationResult(Ailoc2AttributionBucket.AI, "undefined-command-bulk-insert");
+            && commandContext.hasEmptyCommandGroup()) {
+            return new ClassificationResult(Ailoc2AttributionBucket.AI, "undefined-command");
         }
         if (event.getOldLength() == 0
             && isBulkMultilineInsertion(event, AI_BULK_INSERT_MINIMUM_LENGTH, AI_BULK_INSERT_MINIMUM_LINES)) {
@@ -360,7 +358,11 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         boolean hasUndefinedCommandName() {
-            return "undefined".equals(commandName.toLowerCase(Locale.ROOT));
+            return "undefined".equalsIgnoreCase(commandName);
+        }
+
+        boolean hasEmptyCommandGroup() {
+            return commandGroupId.isEmpty() && commandGroupClassName.isEmpty();
         }
 
         boolean isRecent() {
