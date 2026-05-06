@@ -32,10 +32,11 @@ import java.util.regex.Pattern;
 public final class Ailoc2ProjectService implements Disposable {
     private static final Logger LOG = Logger.getInstance(Ailoc2ProjectService.class);
     private static final Pattern HUNK_PATTERN = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,(\\d+))? @@.*$");
-    private static final long RECENT_COMMAND_CONTEXT_NANOS = TimeUnit.SECONDS.toNanos(2);
+    private static final long RECENT_COMMAND_CONTEXT_NANOS = TimeUnit.MILLISECONDS.toNanos(500);
     private static final int AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD = 4;
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
+    private static final int AI_BULK_INSERT_MINIMUM_LINES = 2;
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -252,7 +253,9 @@ public final class Ailoc2ProjectService implements Disposable {
                 return new ClassificationResult(Ailoc2AttributionBucket.AI, "command-context:" + hint);
             }
         }
-        if (event.getOldLength() == 0 && event.getNewLength() > AI_BULK_INSERT_MINIMUM_LENGTH) {
+        if (event.getOldLength() == 0
+            && event.getNewLength() > AI_BULK_INSERT_MINIMUM_LENGTH
+            && countFragmentLines(event.getNewFragment()) >= AI_BULK_INSERT_MINIMUM_LINES) {
             return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-insert");
         }
         if (event.getOldLength() > 0
@@ -348,7 +351,8 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         boolean isRecent() {
-            return observedAtNanos > 0L && System.nanoTime() - observedAtNanos <= RECENT_COMMAND_CONTEXT_NANOS;
+            long elapsedNanos = System.nanoTime() - observedAtNanos;
+            return observedAtNanos > 0L && elapsedNanos >= 0L && elapsedNanos <= RECENT_COMMAND_CONTEXT_NANOS;
         }
 
         private static String sanitize(String value) {
