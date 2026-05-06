@@ -46,3 +46,14 @@ The plugin registers editor document and command listeners at project startup. R
 Every command start / finish and every persisted document-change event is also written to the IntelliJ log (`idea.log`) with the command context, changed file, edit sizes, and final attribution bucket so you can inspect real-world event patterns.
 
 At commit time the plugin reads the actual staged diff (`git diff --cached --unified=0`) and weights added staged lines against the recorded per-line attribution state. Unknown lines are excluded from the headline percentage unless the file has enough rolling state to provide a file-level fallback.
+
+## Git hooks
+
+The plugin adds two explicit Tools menu actions:
+
+- **AILoc2 Probe: Install Repo Hooks**
+- **AILoc2 Probe: Uninstall Repo Hooks**
+
+Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, writes managed hook files under `.githooks`, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall.
+
+The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. It reads `.ailoc2-metrics/intellij-state`, refreshes `.ailoc2-metrics/summary.json` from the staged diff, and annotates terminal or external Git commit messages with the same `(AI xx.xx%)` suffix used by IntelliJ commit handling.
