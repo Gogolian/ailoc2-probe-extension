@@ -24,7 +24,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -32,7 +31,7 @@ import java.util.regex.Pattern;
 public final class Ailoc2ProjectService implements Disposable {
     private static final Logger LOG = Logger.getInstance(Ailoc2ProjectService.class);
     private static final Pattern HUNK_PATTERN = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,(\\d+))? @@.*$");
-    private static final long RECENT_COMMAND_CONTEXT_NANOS = TimeUnit.MILLISECONDS.toNanos(500);
+    private static final long RECENT_COMMAND_CONTEXT_MILLIS = 500L;
     private static final int AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD = 4;
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
@@ -323,7 +322,7 @@ public final class Ailoc2ProjectService implements Disposable {
         String commandGroupId,
         String commandGroupClassName,
         String normalizedSearchText,
-        long observedAtNanos
+        long observedAtMillis
     ) {
         static CommandContext empty() {
             return new CommandContext("", "", "", "", 0L);
@@ -337,7 +336,7 @@ public final class Ailoc2ProjectService implements Disposable {
             String normalizedSearchText = String.join(" ", commandName, commandGroupIdText, commandGroupClassName)
                 .trim()
                 .toLowerCase(Locale.ROOT);
-            return new CommandContext(commandName, commandGroupIdText, commandGroupClassName, normalizedSearchText, System.nanoTime());
+            return new CommandContext(commandName, commandGroupIdText, commandGroupClassName, normalizedSearchText, System.currentTimeMillis());
         }
 
         String describe() {
@@ -351,8 +350,8 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         boolean isRecent() {
-            long elapsedNanos = System.nanoTime() - observedAtNanos;
-            return observedAtNanos > 0L && elapsedNanos >= 0L && elapsedNanos <= RECENT_COMMAND_CONTEXT_NANOS;
+            long elapsedMillis = System.currentTimeMillis() - observedAtMillis;
+            return observedAtMillis > 0L && elapsedMillis >= 0L && elapsedMillis <= RECENT_COMMAND_CONTEXT_MILLIS;
         }
 
         private static String sanitize(String value) {
