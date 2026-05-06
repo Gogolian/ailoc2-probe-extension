@@ -36,6 +36,8 @@ public final class Ailoc2ProjectService implements Disposable {
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LINES = 2;
+    private static final int AI_UNDEFINED_COMMAND_MINIMUM_LENGTH = 400;
+    private static final int AI_UNDEFINED_COMMAND_MINIMUM_LINES = 2;
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -252,9 +254,12 @@ public final class Ailoc2ProjectService implements Disposable {
                 return new ClassificationResult(Ailoc2AttributionBucket.AI, "command-context:" + hint);
             }
         }
+        if (commandContext.hasUndefinedCommandName()
+            && isBulkMultilineInsertion(event, AI_UNDEFINED_COMMAND_MINIMUM_LENGTH, AI_UNDEFINED_COMMAND_MINIMUM_LINES)) {
+            return new ClassificationResult(Ailoc2AttributionBucket.AI, "undefined-command-bulk-insert");
+        }
         if (event.getOldLength() == 0
-            && event.getNewLength() > AI_BULK_INSERT_MINIMUM_LENGTH
-            && countFragmentLines(event.getNewFragment()) >= AI_BULK_INSERT_MINIMUM_LINES) {
+            && isBulkMultilineInsertion(event, AI_BULK_INSERT_MINIMUM_LENGTH, AI_BULK_INSERT_MINIMUM_LINES)) {
             return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-insert");
         }
         if (event.getOldLength() > 0
@@ -263,6 +268,11 @@ public final class Ailoc2ProjectService implements Disposable {
             return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-replacement");
         }
         return new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "default-human");
+    }
+
+    private boolean isBulkMultilineInsertion(DocumentEvent event, int minimumLength, int minimumLines) {
+        return event.getNewLength() > minimumLength
+            && countFragmentLines(event.getNewFragment()) >= minimumLines;
     }
 
     private CommandContext currentCommandContext() {
@@ -347,6 +357,10 @@ public final class Ailoc2ProjectService implements Disposable {
 
         boolean isEmpty() {
             return normalizedSearchText.isEmpty();
+        }
+
+        boolean hasUndefinedCommandName() {
+            return "undefined".equals(commandName.toLowerCase(Locale.ROOT));
         }
 
         boolean isRecent() {
