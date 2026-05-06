@@ -316,7 +316,6 @@ public final class Ailoc2ProjectService implements Disposable {
             String commandGroupIdText = sanitize(commandGroupId == null ? null : commandGroupId.toString());
             String commandGroupClassName = sanitize(commandGroupId == null ? null : commandGroupId.getClass().getName());
             String normalizedSearchText = String.join(" ", commandName, commandGroupIdText, commandGroupClassName)
-                .replaceAll("\\s+", " ")
                 .trim()
                 .toLowerCase(Locale.ROOT);
             return new CommandContext(commandName, commandGroupIdText, commandGroupClassName, normalizedSearchText);
