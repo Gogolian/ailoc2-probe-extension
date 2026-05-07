@@ -538,10 +538,12 @@ final class Ailoc2HookManager {
                 append_suffix "$MESSAGE_FILE" "$PLACEHOLDER_SUFFIX"
             }
 
+            # Convert a repo-relative path into the sanitized filename used under intellij-state.
             safe_state_file() {
                 printf '%s' "$1" | sed 's#\\\\#/#g; s#[^A-Za-z0-9._-]#_#g'
             }
 
+            # Return success when the path still has unstaged modifications or untracked content.
             has_unstaged_work() {
                 REPO_RELATIVE_PATH="$1"
                 if ! git diff --quiet -- "$REPO_RELATIVE_PATH"; then

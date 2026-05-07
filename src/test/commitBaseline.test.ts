@@ -111,7 +111,7 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
     assert.ok(Math.abs(finalizationResult.summary.unstaged.humanPercentage - 60) < 0.000_001);
 });
 
-test('finalizeRepoCommit clears rolling state for committed files with no remaining unstaged work', async () => {
+test('finalizeRepoCommit clears rolling state for fully committed files', async () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-commit-cleanup-'));
     tempDirectories.push(repoRoot);
 
