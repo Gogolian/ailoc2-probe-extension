@@ -84,9 +84,29 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     public Ailoc2GitSummary refreshStagedSummary(Path repoRoot) {
-        Ailoc2GitSummary summary = computeStagedSummary(repoRoot);
+        Ailoc2GitSummary summary = computeGitSummary(
+            repoRoot,
+            List.of("diff", "--cached", "--unified=0", "--find-renames", "--no-color"),
+            "staged"
+        );
         storage.writeSummary(repoRoot, summary);
         return summary;
+    }
+
+    public Ailoc2RepoSummary refreshRepoSummary(Path repoRoot) {
+        Ailoc2GitSummary stagedSummary = computeGitSummary(
+            repoRoot,
+            List.of("diff", "--cached", "--unified=0", "--find-renames", "--no-color"),
+            "staged"
+        );
+        Ailoc2GitSummary unstagedSummary = computeGitSummary(
+            repoRoot,
+            List.of("diff", "--unified=0", "--find-renames", "--no-color"),
+            "unstaged"
+        );
+        Ailoc2RepoSummary repoSummary = new Ailoc2RepoSummary(repoRoot, stagedSummary, unstagedSummary);
+        storage.writeSummary(repoRoot, stagedSummary, unstagedSummary);
+        return repoSummary;
     }
 
     public Path projectRepoRoot() {
@@ -145,8 +165,8 @@ public final class Ailoc2ProjectService implements Disposable {
         );
     }
 
-    private Ailoc2GitSummary computeStagedSummary(Path repoRoot) {
-        ProcessBuilder processBuilder = new ProcessBuilder("git", "diff", "--cached", "--unified=0", "--find-renames", "--no-color");
+    private Ailoc2GitSummary computeGitSummary(Path repoRoot, List<String> gitArgs, String summaryKind) {
+        ProcessBuilder processBuilder = new ProcessBuilder(withGitCommand(gitArgs));
         processBuilder.directory(repoRoot.toFile());
         try {
             Process process = processBuilder.start();
@@ -159,12 +179,12 @@ public final class Ailoc2ProjectService implements Disposable {
             }
             int exitCode = process.waitFor();
             if (exitCode != 0) {
-                LOG.warn("AILoc2 staged summary failed: git diff exited with code " + exitCode + " for repo " + repoRoot);
+                LOG.warn("AILoc2 " + summaryKind + " summary failed: git exited with code " + exitCode + " for repo " + repoRoot);
                 return Ailoc2GitSummary.unavailable();
             }
             Ailoc2GitSummary summary = summarizeDiff(repoRoot, diff.toString());
             LOG.info(
-                "AILoc2 staged summary refreshed: repo=" + repoRoot
+                "AILoc2 " + summaryKind + " summary refreshed: repo=" + repoRoot
                     + ", changedFiles=" + summary.changedFileCount
                     + ", attributedFiles=" + summary.attributedChangedFileCount
                     + ", aiWeight=" + summary.aiWeightedChangedLines
@@ -177,9 +197,13 @@ public final class Ailoc2ProjectService implements Disposable {
             if (error instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            LOG.warn("AILoc2 staged summary failed for repo " + repoRoot, error);
+            LOG.warn("AILoc2 " + summaryKind + " summary failed for repo " + repoRoot, error);
             return Ailoc2GitSummary.unavailable();
         }
+    }
+
+    private List<String> withGitCommand(List<String> gitArgs) {
+        return java.util.stream.Stream.concat(java.util.stream.Stream.of("git"), gitArgs.stream()).toList();
     }
 
     private Ailoc2GitSummary summarizeDiff(Path repoRoot, String diffText) {

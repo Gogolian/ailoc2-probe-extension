@@ -15,6 +15,12 @@
   </extensions>
 
   <actions>
+    <action id="Ailoc2.ShowSummary"
+            class="com.ailoc2.intellij.Ailoc2ShowSummaryAction"
+            text="AILoc2 Probe: Recompute Repo Summary"
+            description="Recompute and show the AILoc2 summary for the current repository">
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
     <action id="Ailoc2.InstallHooks"
             class="com.ailoc2.intellij.Ailoc2InstallHooksAction"
             text="AILoc2 Probe: Install Repo Hooks"
