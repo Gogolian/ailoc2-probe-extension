@@ -1274,9 +1274,9 @@ async function removeFileIfExists(filePath: string): Promise<void> {
     }
 }
 
-async function removeEmptyParentDirectories(candidateDirectoryPath: string, stopDirectoryPath: string): Promise<void> {
+async function removeEmptyParentDirectories(startDirectoryPath: string, stopDirectoryPath: string): Promise<void> {
     const normalizedStopDirectoryPath = path.resolve(stopDirectoryPath);
-    let currentDirectoryPath = path.resolve(candidateDirectoryPath);
+    let currentDirectoryPath = path.resolve(startDirectoryPath);
 
     while (
         currentDirectoryPath !== normalizedStopDirectoryPath

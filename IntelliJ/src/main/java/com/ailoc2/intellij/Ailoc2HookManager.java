@@ -549,7 +549,10 @@ final class Ailoc2HookManager {
                 if ! git diff --quiet -- "$REPO_RELATIVE_PATH"; then
                     return 0
                 fi
-                git ls-files --others --exclude-standard -- "$REPO_RELATIVE_PATH" | grep -q .
+                if git ls-files --others --exclude-standard -- "$REPO_RELATIVE_PATH" | grep -q .; then
+                    return 0
+                fi
+                return 1
             }
 
             clear_committed_state() {
