@@ -13,4 +13,19 @@
     <postStartupActivity implementation="com.ailoc2.intellij.Ailoc2StartupActivity" />
     <checkinHandlerFactory implementation="com.ailoc2.intellij.Ailoc2CheckinHandlerFactory" />
   </extensions>
+
+  <actions>
+    <action id="Ailoc2.InstallHooks"
+            class="com.ailoc2.intellij.Ailoc2InstallHooksAction"
+            text="AILoc2 Probe: Install Repo Hooks"
+            description="Install AILoc2 Git hooks for the current repository">
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
+    <action id="Ailoc2.UninstallHooks"
+            class="com.ailoc2.intellij.Ailoc2UninstallHooksAction"
+            text="AILoc2 Probe: Uninstall Repo Hooks"
+            description="Uninstall AILoc2 Git hooks from the current repository">
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
+  </actions>
 </idea-plugin>
