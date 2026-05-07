@@ -51,8 +51,11 @@ At commit time the plugin reads the actual staged diff (`git diff --cached --uni
 
 The plugin adds two explicit Tools menu actions:
 
+- **AILoc2 Probe: Recompute Repo Summary**
 - **AILoc2 Probe: Install Repo Hooks**
 - **AILoc2 Probe: Uninstall Repo Hooks**
+
+The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged AI/Human attribution percentages on demand.
 
 Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, writes managed hook files under `.githooks`, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall.
 

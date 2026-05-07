@@ -37,9 +37,24 @@ final class Ailoc2Storage {
     }
 
     void writeSummary(Path repoRoot, Ailoc2GitSummary stagedSummary) {
+        writeSummary(repoRoot, stagedSummary, null);
+    }
+
+    void writeSummary(Path repoRoot, Ailoc2GitSummary stagedSummary, Ailoc2GitSummary unstagedSummary) {
         Path summaryPath = repoRoot.resolve(METRICS_DIRECTORY).resolve("summary.json");
         String repoName = repoRoot.getFileName() == null ? repoRoot.toString() : repoRoot.getFileName().toString();
-        String summaryLine = stagedSummary.available
+        boolean available = stagedSummary.available && (unstagedSummary == null || unstagedSummary.available);
+        String summaryLine = available && unstagedSummary != null
+            ? String.format(
+                java.util.Locale.ROOT,
+                "%s: STAGED -> AI %.2f%% | Human %.2f%% ; UNSTAGED -> AI %.2f%% | Human %.2f%%",
+                repoName,
+                stagedSummary.aiPercentage,
+                stagedSummary.humanPercentage,
+                unstagedSummary.aiPercentage,
+                unstagedSummary.humanPercentage
+            )
+            : stagedSummary.available
             ? String.format("%s: STAGED -> AI %.2f%% | Human %.2f%%", repoName, stagedSummary.aiPercentage, stagedSummary.humanPercentage)
             : repoName + ": summary unavailable";
         String json = "{\n"
@@ -48,16 +63,10 @@ final class Ailoc2Storage {
             + "  \"generatedAt\": \"" + escapeJson(Instant.now().toString()) + "\",\n"
             + "  \"repoRoot\": \"" + escapeJson(repoRoot.toString()) + "\",\n"
             + "  \"repoName\": \"" + escapeJson(repoName) + "\",\n"
-            + "  \"isGitSummaryAvailable\": " + stagedSummary.available + ",\n"
+            + "  \"isGitSummaryAvailable\": " + available + ",\n"
             + "  \"summaryLine\": \"" + escapeJson(summaryLine) + "\",\n"
-            + "  \"staged\": {\n"
-            + "    \"changedFileCount\": " + stagedSummary.changedFileCount + ",\n"
-            + "    \"attributedChangedFileCount\": " + stagedSummary.attributedChangedFileCount + ",\n"
-            + "    \"aiWeightedChangedLines\": " + stagedSummary.aiWeightedChangedLines + ",\n"
-            + "    \"humanWeightedChangedLines\": " + stagedSummary.humanWeightedChangedLines + ",\n"
-            + "    \"aiPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", stagedSummary.aiPercentage) + ",\n"
-            + "    \"humanPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", stagedSummary.humanPercentage) + "\n"
-            + "  }\n"
+            + "  \"staged\": " + summaryJson(stagedSummary)
+            + (unstagedSummary == null ? "\n" : ",\n  \"unstaged\": " + summaryJson(unstagedSummary) + "\n")
             + "}\n";
 
         try {
@@ -67,6 +76,17 @@ final class Ailoc2Storage {
         catch (IOException ignored) {
             // Summary writing is best effort.
         }
+    }
+
+    private String summaryJson(Ailoc2GitSummary summary) {
+        return "{\n"
+            + "    \"changedFileCount\": " + summary.changedFileCount + ",\n"
+            + "    \"attributedChangedFileCount\": " + summary.attributedChangedFileCount + ",\n"
+            + "    \"aiWeightedChangedLines\": " + summary.aiWeightedChangedLines + ",\n"
+            + "    \"humanWeightedChangedLines\": " + summary.humanWeightedChangedLines + ",\n"
+            + "    \"aiPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", summary.aiPercentage) + ",\n"
+            + "    \"humanPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", summary.humanPercentage) + "\n"
+            + "  }";
     }
 
     private Ailoc2FileState readState(Path repoRoot, String repoRelativePath) {
