@@ -5,7 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 final class Ailoc2Storage {
@@ -75,6 +77,23 @@ final class Ailoc2Storage {
         }
         catch (IOException ignored) {
             // Summary writing is best effort.
+        }
+    }
+
+    void clearCommittedState(Path repoRoot, Collection<String> committedRepoRelativePaths, Set<String> preservedRepoRelativePaths) {
+        for (String repoRelativePath : committedRepoRelativePaths) {
+            if (preservedRepoRelativePaths.contains(repoRelativePath)) {
+                continue;
+            }
+
+            StateKey cacheKey = new StateKey(repoRoot.toAbsolutePath().normalize(), repoRelativePath);
+            cachedStates.remove(cacheKey);
+            try {
+                Files.deleteIfExists(statePath(repoRoot, repoRelativePath));
+            }
+            catch (IOException ignored) {
+                // Metrics cleanup must never block normal commits.
+            }
         }
     }
 

@@ -110,6 +110,8 @@ export type RepoCommitFinalizationResult = RepoHookSummaryRefreshResult & {
     baselineSource: 'prepared' | 'current-index';
     preparedBaselinePath: string;
     repoSummaryStatePath: string;
+    clearedRollingStateFileCount: number;
+    preservedUnstagedFileCount: number;
 };
 
 export async function computeRepoUncommittedAttributionSummary(args: {
@@ -223,6 +225,11 @@ export async function finalizeRepoCommit(args: {
         summaryStateToPromote = (await buildRepoCommitBaselineState(args.repoRoot)).summaryState;
     }
 
+    const cleanupResult = await clearCommittedRollingState({
+        repoRoot: args.repoRoot,
+        summaryState: summaryStateToPromote
+    });
+
     await writeJsonFileAtomic(repoSummaryStatePath, summaryStateToPromote);
     await removeFileIfExists(preparedBaselinePath);
 
@@ -231,7 +238,9 @@ export async function finalizeRepoCommit(args: {
         ...refreshedSummary,
         baselineSource,
         preparedBaselinePath,
-        repoSummaryStatePath
+        repoSummaryStatePath,
+        clearedRollingStateFileCount: cleanupResult.clearedRollingStateFileCount,
+        preservedUnstagedFileCount: cleanupResult.preservedUnstagedFileCount
     };
 }
 
@@ -989,6 +998,80 @@ async function buildRepoCommitBaselineState(repoRoot: string): Promise<CommitBas
     };
 }
 
+async function clearCommittedRollingState(args: {
+    repoRoot: string;
+    summaryState: RepoSummaryState;
+}): Promise<{
+    clearedRollingStateFileCount: number;
+    preservedUnstagedFileCount: number;
+}> {
+    const committedRepoRelativePaths = await getLastCommitRepoRelativePaths(args.repoRoot);
+    if (committedRepoRelativePaths.length === 0) {
+        return {
+            clearedRollingStateFileCount: 0,
+            preservedUnstagedFileCount: 0
+        };
+    }
+
+    const unstagedRepoRelativePaths = await getUnstagedRepoRelativePathSet(args.repoRoot);
+    let clearedRollingStateFileCount = 0;
+    let preservedUnstagedFileCount = 0;
+
+    for (const repoRelativePath of committedRepoRelativePaths) {
+        if (unstagedRepoRelativePaths.has(repoRelativePath)) {
+            preservedUnstagedFileCount += 1;
+            continue;
+        }
+
+        const rollingStatePath = getRollingStatePath(args.repoRoot, repoRelativePath);
+        const hadRollingState = await pathExists(rollingStatePath);
+        await removeFileIfExists(rollingStatePath);
+        await removeEmptyParentDirectories(path.dirname(rollingStatePath), getMetricsFilesStateDirectory(args.repoRoot));
+        delete args.summaryState.cleanBaselineByRepoRelativePath[repoRelativePath];
+        if (hadRollingState) {
+            clearedRollingStateFileCount += 1;
+        }
+    }
+
+    return {
+        clearedRollingStateFileCount,
+        preservedUnstagedFileCount
+    };
+}
+
+async function getLastCommitRepoRelativePaths(repoRoot: string): Promise<string[]> {
+    try {
+        const { stdout } = await execFile(
+            'git',
+            ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'],
+            {
+                cwd: repoRoot,
+                windowsHide: true,
+                maxBuffer: 1024 * 1024
+            }
+        );
+
+        return Array.from(new Set(
+            stdout
+                .split(/\r?\n/)
+                .map((line) => normalizeDiffPath(line.trim()))
+                .filter((repoRelativePath): repoRelativePath is string => repoRelativePath !== null)
+        ));
+    }
+    catch {
+        return [];
+    }
+}
+
+async function getUnstagedRepoRelativePathSet(repoRoot: string): Promise<Set<string>> {
+    const unstagedTrackedEntries = await getGitDiffEntries(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color']);
+    const unstagedUntrackedEntries = await getGitUntrackedEntries(repoRoot);
+    return new Set([
+        ...(unstagedTrackedEntries ?? []).map((entry) => entry.repoRelativePath),
+        ...(unstagedUntrackedEntries ?? []).map((entry) => entry.repoRelativePath)
+    ]);
+}
+
 async function resolveCommitBaselineForRollingState(
     repoRoot: string,
     rollingState: FileRollingState
@@ -1188,6 +1271,25 @@ async function removeFileIfExists(filePath: string): Promise<void> {
     }
     catch {
         // Best effort cleanup only.
+    }
+}
+
+async function removeEmptyParentDirectories(candidateDirectoryPath: string, stopDirectoryPath: string): Promise<void> {
+    const normalizedStopDirectoryPath = path.resolve(stopDirectoryPath);
+    let currentDirectoryPath = path.resolve(candidateDirectoryPath);
+
+    while (
+        currentDirectoryPath !== normalizedStopDirectoryPath
+        && !path.relative(normalizedStopDirectoryPath, currentDirectoryPath).startsWith('..')
+    ) {
+        try {
+            await fs.promises.rmdir(currentDirectoryPath);
+        }
+        catch {
+            return;
+        }
+
+        currentDirectoryPath = path.dirname(currentDirectoryPath);
     }
 }
 

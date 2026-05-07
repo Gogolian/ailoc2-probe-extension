@@ -353,7 +353,7 @@ final class Ailoc2HookManager {
             }
 
             if [ -f "$RUNTIME_PATH" ]; then
-                sh "$RUNTIME_PATH" refresh-summary >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 post-commit warning: IntelliJ summary refresh failed.' >&2
+                sh "$RUNTIME_PATH" finalize-commit >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 post-commit warning: IntelliJ committed metrics cleanup failed.' >&2
             fi
 
             run_delegate_hook "$@"
@@ -538,9 +538,40 @@ final class Ailoc2HookManager {
                 append_suffix "$MESSAGE_FILE" "$PLACEHOLDER_SUFFIX"
             }
 
+            safe_state_file() {
+                printf '%s' "$1" | sed 's#\\\\#/#g; s#[^A-Za-z0-9._-]#_#g'
+            }
+
+            has_unstaged_work() {
+                REPO_RELATIVE_PATH="$1"
+                if ! git diff --quiet -- "$REPO_RELATIVE_PATH"; then
+                    return 0
+                fi
+                git ls-files --others --exclude-standard -- "$REPO_RELATIVE_PATH" | grep -q .
+            }
+
+            clear_committed_state() {
+                git diff-tree --no-commit-id --name-only -r HEAD | while IFS= read -r COMMITTED_PATH; do
+                    if [ -z "$COMMITTED_PATH" ] || has_unstaged_work "$COMMITTED_PATH"; then
+                        continue
+                    fi
+
+                    STATE_FILE="$STATE_DIR/$(safe_state_file "$COMMITTED_PATH").tsv"
+                    rm -f "$STATE_FILE"
+                done
+            }
+
+            finalize_commit() {
+                clear_committed_state
+                refresh_summary
+            }
+
             case "$1" in
                 refresh-summary)
                     refresh_summary
+                    ;;
+                finalize-commit)
+                    finalize_commit
                     ;;
                 annotate-commit-message)
                     annotate_commit_message "$2"
@@ -549,7 +580,7 @@ final class Ailoc2HookManager {
                     append_suffix "$2" "$PLACEHOLDER_SUFFIX"
                     ;;
                 *)
-                    printf '%s\\n' 'Usage: ailoc2-intellij-hook-runtime.sh <refresh-summary|annotate-commit-message <messageFile>|append-placeholder <messageFile>>' >&2
+                    printf '%s\\n' 'Usage: ailoc2-intellij-hook-runtime.sh <refresh-summary|finalize-commit|annotate-commit-message <messageFile>|append-placeholder <messageFile>>' >&2
                     exit 1
                     ;;
             esac

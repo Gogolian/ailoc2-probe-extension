@@ -114,12 +114,12 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 - `AILoc2 Summary` output channel for summary refreshes
 - `.ailoc2-metrics/summary.json` inside the tracked repo
 - commit subjects automatically annotated during `git commit`
-- post-commit baseline advancement so the next summary starts from the new committed state instead of the older clean snapshot
+- post-commit baseline advancement and cleanup so fully committed files start fresh while files with remaining unstaged work keep their attribution
 
 
 ### IntelliJ IDEA plugin prototype
 
-The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ editor changes locally, records repo-local metrics under `.ailoc2-metrics/intellij-state`, computes staged AI percentage from `git diff --cached` during IntelliJ commit handling, and appends `(AI xx.xx%)` to the commit subject without requiring prompt, instruction, or source-code tag changes.
+The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ editor changes locally, records repo-local metrics under `.ailoc2-metrics/intellij-state`, computes staged AI percentage from `git diff --cached` during IntelliJ commit handling, appends `(AI xx.xx%)` to the commit subject, and clears fully committed file metrics after successful commits without requiring prompt, instruction, or source-code tag changes.
 
 ## Example output
 
@@ -156,7 +156,7 @@ your-repo/
 - `manifest.json` — lightweight bookkeeping and diagnostics for the extension runtime.
 - `state/repo-summary.json` — repo baseline state used when recomputing attribution against the current committed content.
 - `state/files/**/*.metrics.json` — rolling attribution state per tracked repo file.
-- `.githooks/post-commit` — promotes the just-committed index state into the repo baseline so later commits score only what remains uncommitted.
+- `.githooks/post-commit` — promotes the just-committed index state into the repo baseline and clears fully committed file metrics so later commits score only what remains uncommitted.
 - `.githooks/ailoc2-hook-runtime.cjs` — bundled CommonJS runtime used by installed Git hooks.
 
 ## VS Code commands
