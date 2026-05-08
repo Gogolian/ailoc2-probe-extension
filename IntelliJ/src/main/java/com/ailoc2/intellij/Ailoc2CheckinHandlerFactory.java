@@ -30,6 +30,15 @@ public final class Ailoc2CheckinHandlerFactory extends CheckinHandlerFactory {
                 annotate(panel, stagedSummary.available ? stagedSummary.aiPercentage : null);
                 return ReturnResult.COMMIT;
             }
+
+            @Override
+            public void checkinSuccessful() {
+                Ailoc2ProjectService service = project.getService(Ailoc2ProjectService.class);
+                Path repoRoot = service.projectRepoRoot();
+                if (repoRoot != null) {
+                    service.finalizeCommittedState(repoRoot);
+                }
+            }
         };
     }
 

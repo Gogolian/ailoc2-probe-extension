@@ -232,11 +232,11 @@ That means a blank line still contributes weight `1`, while longer lines count m
 
 The repo-summary baseline is no longer advanced only when the repo happens to become fully clean.
 
-During `pre-commit`, AILoc2 snapshots the **current Git index** into `state/pending-commit-baseline.json`. After a successful commit, `post-commit` promotes that prepared state into `state/repo-summary.json` and then refreshes `summary.json` again.
+During `pre-commit`, AILoc2 snapshots the **current Git index** into `state/pending-commit-baseline.json`. After a successful commit, `post-commit` promotes that prepared state into `state/repo-summary.json`, clears rolling state for committed files that have no remaining unstaged work, and then refreshes `summary.json` again.
 
 That matters for the exact “second commit” problem: if a file still has leftover unstaged work after the first commit, the later summary now subtracts the just-committed index baseline instead of falling all the way back to the last fully clean repo state.
 
-In other words, later commit summaries are anchored to the most recently committed content, not only to the last time the entire repo happened to be spotless.
+In other words, later commit summaries are anchored to the most recently committed content when a file still has uncommitted leftovers, while fully committed files start fresh.
 
 ## Clean baseline refresh
 

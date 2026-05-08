@@ -6,7 +6,8 @@ This folder contains an IntelliJ Platform plugin that mirrors the core AILoc2 be
 - classifies edit signals locally as human-leaning or AI-leaning using editor command context, command group metadata, and bulk-apply heuristics;
 - persists repo-local metrics under `.ailoc2-metrics/intellij-state`;
 - calculates the staged AI percentage from `git diff --cached` during IntelliJ commit handling;
-- appends the staged percentage to the commit subject as `(AI 12.34%)`, or `(AI unavailable)` when Git summary generation fails.
+- appends the staged percentage to the commit subject as `(AI 12.34%)`, or `(AI unavailable)` when Git summary generation fails;
+- clears metrics for files that were fully committed while preserving metrics for committed paths that still have unstaged work.
 
 The implementation is intentionally local-first. It does not call a hosted service and does not depend on LLM-generated markers in source files.
 
@@ -59,4 +60,4 @@ The recompute action resolves the current project's Git root, refreshes `.ailoc2
 
 Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, writes managed hook files under `.githooks`, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall.
 
-The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. It reads `.ailoc2-metrics/intellij-state`, refreshes `.ailoc2-metrics/summary.json` from the staged diff, and annotates terminal or external Git commit messages with the same `(AI xx.xx%)` suffix used by IntelliJ commit handling.
+The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. It reads `.ailoc2-metrics/intellij-state`, refreshes `.ailoc2-metrics/summary.json` from the staged diff, annotates terminal or external Git commit messages with the same `(AI xx.xx%)` suffix used by IntelliJ commit handling, and clears fully committed file metrics from `post-commit`.

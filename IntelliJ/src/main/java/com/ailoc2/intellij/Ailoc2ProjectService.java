@@ -109,6 +109,19 @@ public final class Ailoc2ProjectService implements Disposable {
         return repoSummary;
     }
 
+    public void finalizeCommittedState(Path repoRoot) {
+        Set<String> committedPaths = readGitPathSet(repoRoot, List.of("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"));
+        if (committedPaths.isEmpty()) {
+            refreshRepoSummary(repoRoot);
+            return;
+        }
+
+        Set<String> preservedPaths = readGitPathSet(repoRoot, List.of("diff", "--name-only", "--no-color"));
+        preservedPaths.addAll(readGitPathSet(repoRoot, List.of("ls-files", "--others", "--exclude-standard")));
+        storage.clearCommittedState(repoRoot, committedPaths, preservedPaths);
+        refreshRepoSummary(repoRoot);
+    }
+
     public Path projectRepoRoot() {
         Path basePath = project.getBasePath() == null ? null : Path.of(project.getBasePath());
         if (basePath != null) {
@@ -204,6 +217,35 @@ public final class Ailoc2ProjectService implements Disposable {
 
     private List<String> withGitCommand(List<String> gitArgs) {
         return java.util.stream.Stream.concat(java.util.stream.Stream.of("git"), gitArgs.stream()).toList();
+    }
+
+    private Set<String> readGitPathSet(Path repoRoot, List<String> gitArgs) {
+        ProcessBuilder processBuilder = new ProcessBuilder(withGitCommand(gitArgs));
+        processBuilder.directory(repoRoot.toFile());
+        Set<String> repoRelativePaths = new HashSet<>();
+        try {
+            Process process = processBuilder.start();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String repoRelativePath = line.strip();
+                    if (!repoRelativePath.isEmpty() && !shouldIgnore(repoRoot, repoRoot.resolve(repoRelativePath))) {
+                        repoRelativePaths.add(repoRelativePath.replace('\\', '/'));
+                    }
+                }
+            }
+            int exitCode = process.waitFor();
+            if (exitCode != 0) {
+                return Set.of();
+            }
+        }
+        catch (IOException | InterruptedException error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return Set.of();
+        }
+        return repoRelativePaths;
     }
 
     private Ailoc2GitSummary summarizeDiff(Path repoRoot, String diffText) {

@@ -104,8 +104,77 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
         aiChangeMagnitude: 8,
         humanChangeMagnitude: 3
     });
+    assert.equal(finalizationResult.clearedRollingStateFileCount, 0);
+    assert.equal(finalizationResult.preservedUnstagedFileCount, 1);
+    assert.equal(fs.existsSync(rollingStatePath), true);
     assert.ok(Math.abs(finalizationResult.summary.unstaged.aiPercentage - 40) < 0.000_001);
     assert.ok(Math.abs(finalizationResult.summary.unstaged.humanPercentage - 60) < 0.000_001);
+});
+
+test('finalizeRepoCommit clears rolling state for fully committed files', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-commit-cleanup-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    const gitRelativePath = 'src/example.txt';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'base\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(absoluteFilePath, 'committed\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const stagedBlobOid = readIndexBlobOid(repoRoot, gitRelativePath);
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(rollingStatePath), { recursive: true });
+    fs.writeFileSync(rollingStatePath, JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'file-rolling-state',
+        repoRoot,
+        repoRelativePath,
+        lastRecordedAt: new Date().toISOString(),
+        latestSignal: 'ProbableAIApplyToWorkspaceFile',
+        signalCounters: {
+            ProbableAIApplyToWorkspaceFile: 1,
+            PossibleAIApplyToWorkspaceFile: 0,
+            LikelyHumanEditWhileChatSessionOpen: 0,
+            LikelyHumanOrRegularEditorEdit: 0
+        },
+        cumulativeAiChangeMagnitude: 12,
+        cumulativeHumanChangeMagnitude: 0,
+        saveAttributionCheckpoints: [
+            {
+                gitBlobOid: stagedBlobOid,
+                cumulativeAiChangeMagnitude: 12,
+                cumulativeHumanChangeMagnitude: 0,
+                lineAttributionSpans: []
+            }
+        ],
+        lineAttributionSpans: [],
+        deletedAt: null
+    }, null, 2), 'utf8');
+
+    await prepareRepoCommitBaseline({ repoRoot });
+    runGit(repoRoot, ['commit', '-m', 'stage only']);
+
+    const finalizationResult = await finalizeRepoCommit({ repoRoot });
+    const repoSummaryState = JSON.parse(fs.readFileSync(getRepoSummaryStatePath(repoRoot), 'utf8')) as {
+        cleanBaselineByRepoRelativePath: Record<string, { aiChangeMagnitude: number; humanChangeMagnitude: number; }>;
+    };
+
+    assert.equal(finalizationResult.baselineSource, 'prepared');
+    assert.equal(finalizationResult.clearedRollingStateFileCount, 1);
+    assert.equal(finalizationResult.preservedUnstagedFileCount, 0);
+    assert.equal(fs.existsSync(rollingStatePath), false);
+    assert.equal(repoSummaryState.cleanBaselineByRepoRelativePath[repoRelativePath], undefined);
+    assert.equal(finalizationResult.summary.staged.changedFileCount, 0);
+    assert.equal(finalizationResult.summary.unstaged.changedFileCount, 0);
 });
 
 test('refreshRepoHookSummary needs flushed rolling state to attribute the first staged commit', async () => {

@@ -20,7 +20,7 @@ A fresh managed install provisions exactly four repo-local files:
 | --- | --- |
 | `.githooks/pre-commit` | Prepares the next-HEAD baseline snapshot and refreshes the summary file before commit finalization. |
 | `.githooks/commit-msg` | Appends the AI suffix to the commit subject. |
-| `.githooks/post-commit` | Promotes the committed baseline and refreshes the summary after a successful commit. |
+| `.githooks/post-commit` | Promotes the committed baseline, clears fully committed file metrics, and refreshes the summary after a successful commit. |
 | `.githooks/ailoc2-hook-runtime.cjs` | Bundled runtime CLI invoked by the managed hooks. |
 
 ## Install flow
@@ -105,10 +105,11 @@ The managed `post-commit` hook:
 
    `node ./.githooks/ailoc2-hook-runtime.cjs finalize-commit`
 
-3. if that command fails, prints a warning to stderr and continues
-4. if a delegated repo-local hook exists, runs that delegated `post-commit` hook afterward
+3. during finalization, clears rolling state for files included in the commit unless that path still has unstaged work
+4. if that command fails, prints a warning to stderr and continues
+5. if a delegated repo-local hook exists, runs that delegated `post-commit` hook afterward
 
-This step is what advances the repo baseline from “last fully clean state” to “the state that was just committed,” which is how later commits stop inheriting already-committed attribution from earlier ones.
+This step is what advances the repo baseline from “last fully clean state” to “the state that was just committed,” which is how later commits stop inheriting already-committed attribution from earlier ones. Files that were fully committed start fresh; files with leftover unstaged work keep their metrics and baseline entry so that remaining work can still be summarized later.
 
 ## Commit message mutation rules
 
