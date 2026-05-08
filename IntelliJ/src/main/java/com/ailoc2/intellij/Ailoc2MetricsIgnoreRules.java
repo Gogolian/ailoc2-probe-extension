@@ -172,7 +172,7 @@ final class Ailoc2MetricsIgnoreRules {
 
     private String escapeRegexCharacter(char value) {
         return switch (value) {
-            case '|', '\\', '{', '}', '(', ')', '[', ']', '^', '$', '+', '?', '.' -> "\\" + value;
+            case '|', '\\', '{', '}', '(', ')', '[', ']', '^', '$', '+', '*', '?', '.' -> "\\" + value;
             default -> Character.toString(value);
         };
     }

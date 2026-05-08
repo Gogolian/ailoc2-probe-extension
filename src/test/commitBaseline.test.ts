@@ -16,6 +16,7 @@ import { RepoMetricsStore } from '../metrics/store';
 import { finalizeRepoCommit, prepareRepoCommitBaseline, refreshRepoHookSummary } from '../metrics/summary';
 
 const tempDirectories: string[] = [];
+const FLOATING_POINT_TOLERANCE = 0.000_001;
 
 afterEach(() => {
     while (tempDirectories.length > 0) {
@@ -112,8 +113,8 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
     assert.equal(finalizationResult.clearedRollingStateFileCount, 0);
     assert.equal(finalizationResult.preservedUnstagedFileCount, 1);
     assert.equal(fs.existsSync(rollingStatePath), true);
-    assert.ok(Math.abs(finalizationResult.summary.unstaged.aiPercentage - 40) < 0.000_001);
-    assert.ok(Math.abs(finalizationResult.summary.unstaged.humanPercentage - 60) < 0.000_001);
+    assert.ok(Math.abs(finalizationResult.summary.unstaged.aiPercentage - 40) < FLOATING_POINT_TOLERANCE);
+    assert.ok(Math.abs(finalizationResult.summary.unstaged.humanPercentage - 60) < FLOATING_POINT_TOLERANCE);
 });
 
 test('finalizeRepoCommit clears rolling state for fully committed files', async () => {
@@ -282,7 +283,7 @@ test('refreshRepoHookSummary needs flushed rolling state to attribute the first 
     assert.equal(afterFlush.summary.isGitSummaryAvailable, true);
     assert.equal(afterFlush.summary.staged.changedFileCount, 1);
     assert.equal(afterFlush.summary.staged.attributedChangedFileCount, 1);
-    assert.ok(Math.abs(afterFlush.summary.staged.aiPercentage - 100) < 0.000_001);
+    assert.ok(Math.abs(afterFlush.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
     assert.equal(afterFlush.summary.staged.humanPercentage, 0);
 });
 
@@ -332,7 +333,7 @@ test('metrics ignore rules skip metrics files and diff attribution for ignored p
     const refreshed = await refreshRepoHookSummary({ repoRoot });
     assert.equal(refreshed.summary.staged.changedFileCount, 1);
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
-    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < 0.000_001);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
     assert.equal(refreshed.summary.staged.humanPercentage, 0);
 });
 
