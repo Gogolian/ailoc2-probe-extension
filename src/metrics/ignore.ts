@@ -100,7 +100,6 @@ function compileRule(line: string): CompiledRule | null {
         return null;
     }
 
-    const hasSlash = normalizedPattern.includes('/');
     const prefix = anchored ? '^' : '^(?:.*/)?';
     return {
         negate,
