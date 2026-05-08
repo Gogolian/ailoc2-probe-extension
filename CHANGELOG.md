@@ -8,6 +8,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
 ## [0.1.1] - 2026-05-04
 - Add compatibility to vscode 1.104.3
 
+## [1.0.2] - 2026-05-08
+- Add repo-local `.ailoc2-metrics/.ignore` support for both VS Code and IntelliJ metrics tracking.
+- Skip creating per-file metrics state for ignored files and directories.
+
 ## [0.1.0] - 2026-05-02
 
 ### Added

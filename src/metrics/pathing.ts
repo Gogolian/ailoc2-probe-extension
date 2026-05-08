@@ -6,6 +6,10 @@ export function getMetricsRoot(repoRoot: string): string {
     return path.join(repoRoot, '.ailoc2-metrics');
 }
 
+export function getMetricsIgnoreFilePath(repoRoot: string): string {
+    return path.join(getMetricsRoot(repoRoot), '.ignore');
+}
+
 export function getMetricsSummaryFilePath(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'summary.json');
 }

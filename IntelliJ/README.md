@@ -5,6 +5,7 @@ This folder contains an IntelliJ Platform plugin that mirrors the core AILoc2 be
 - observes edits in IntelliJ projects without asking LLM tools to add prompts, instructions, or source tags;
 - classifies edit signals locally as human-leaning or AI-leaning using editor command context, command group metadata, and bulk-apply heuristics;
 - persists repo-local metrics under `.ailoc2-metrics/intellij-state`;
+- honors optional gitignore-style opt-out rules from `.ailoc2-metrics/.ignore`;
 - calculates the staged AI percentage from `git diff --cached` during IntelliJ commit handling;
 - appends the staged percentage to the commit subject as `(AI 12.34%)`, or `(AI unavailable)` when Git summary generation fails;
 - clears metrics for files that were fully committed while preserving metrics for committed paths that still have unstaged work.
@@ -57,6 +58,8 @@ The plugin adds two explicit Tools menu actions:
 - **AILoc2 Probe: Uninstall Repo Hooks**
 
 The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged AI/Human attribution percentages on demand.
+
+If you want to exclude files or directories from IntelliJ metrics entirely, add gitignore-style rules to `.ailoc2-metrics/.ignore`. Ignored paths will not get IntelliJ rolling-state files and are skipped from the summary counts as well.
 
 Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, writes managed hook files under `.githooks`, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall.
 

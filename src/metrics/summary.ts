@@ -21,6 +21,7 @@ import {
     getRollingStatePath
 } from './pathing';
 import { getGitBlobOidForWorkingTreeFile, getIndexGitBlobOid } from './git';
+import { isRepoRelativePathTrackingIgnored } from './ignore';
 import { getTrackingExclusionReasonForPath } from '../trackingExclusions';
 import * as childProcess from 'child_process';
 import * as util from 'util';
@@ -722,7 +723,7 @@ async function getGitDiffEntries(repoRoot: string, args: string[]): Promise<GitD
             }
         );
 
-        return parseGitDiffEntries(stdout);
+        return await filterIgnoredGitDiffEntries(repoRoot, parseGitDiffEntries(stdout));
     }
     catch {
         return null;
@@ -745,6 +746,10 @@ async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntr
         for (const line of stdout.split(/\r?\n/)) {
             const repoRelativePath = normalizeDiffPath(line.trim());
             if (!repoRelativePath) {
+                continue;
+            }
+
+            if (await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath)) {
                 continue;
             }
 
@@ -917,6 +922,10 @@ function normalizeDiffPath(rawPath: string): string | null {
 }
 
 async function readRollingState(repoRoot: string, repoRelativePath: string): Promise<FileRollingState | null> {
+    if (await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath)) {
+        return null;
+    }
+
     const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
     try {
         const fileContents = await fs.promises.readFile(rollingStatePath, 'utf8');
@@ -930,6 +939,10 @@ async function readRollingState(repoRoot: string, repoRelativePath: string): Pro
 async function readRepoSummaryState(repoRoot: string): Promise<RepoSummaryState> {
     const parsedState = await readRepoSummaryStateFile(getRepoSummaryStatePath(repoRoot), repoRoot);
     if (parsedState) {
+        parsedState.cleanBaselineByRepoRelativePath = await filterIgnoredCleanBaselineEntries(
+            repoRoot,
+            parsedState.cleanBaselineByRepoRelativePath
+        );
         return parsedState;
     }
 
@@ -1137,6 +1150,10 @@ async function readRollingStateFile(rollingStatePath: string, repoRoot: string):
             return null;
         }
 
+        if (await isRepoRelativePathTrackingIgnored(repoRoot, parsed.repoRelativePath)) {
+            return null;
+        }
+
         return {
             schemaVersion: METRICS_SCHEMA_VERSION,
             recordType: 'file-rolling-state',
@@ -1263,6 +1280,31 @@ async function collectRollingStatePaths(directoryPath: string): Promise<string[]
     catch {
         return [];
     }
+}
+
+async function filterIgnoredGitDiffEntries(repoRoot: string, entries: GitDiffStatEntry[]): Promise<GitDiffStatEntry[]> {
+    const filteredEntries: GitDiffStatEntry[] = [];
+    for (const entry of entries) {
+        if (!(await isRepoRelativePathTrackingIgnored(repoRoot, entry.repoRelativePath))) {
+            filteredEntries.push(entry);
+        }
+    }
+
+    return filteredEntries;
+}
+
+async function filterIgnoredCleanBaselineEntries(
+    repoRoot: string,
+    baselineByRepoRelativePath: Record<string, RepoCleanBaselineEntry>
+): Promise<Record<string, RepoCleanBaselineEntry>> {
+    const filteredEntries: Record<string, RepoCleanBaselineEntry> = {};
+    for (const [repoRelativePath, entry] of Object.entries(baselineByRepoRelativePath)) {
+        if (!(await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath))) {
+            filteredEntries[repoRelativePath] = entry;
+        }
+    }
+
+    return filteredEntries;
 }
 
 async function removeFileIfExists(filePath: string): Promise<void> {

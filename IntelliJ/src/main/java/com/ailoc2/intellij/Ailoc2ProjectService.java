@@ -151,6 +151,11 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         String repoRelativePath = repoRoot.relativize(filePath).toString().replace('\\', '/');
+        if (storage.isTrackingIgnored(repoRoot, repoRelativePath)) {
+            storage.removeState(repoRoot, repoRelativePath);
+            return;
+        }
+
         CommandContext commandContext = currentCommandContext();
         ClassificationResult classification = classifyChange(commandContext, event);
         Ailoc2AttributionBucket bucket = classification.bucket();
@@ -229,7 +234,9 @@ public final class Ailoc2ProjectService implements Disposable {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String repoRelativePath = line.strip();
-                    if (!repoRelativePath.isEmpty() && !shouldIgnore(repoRoot, repoRoot.resolve(repoRelativePath))) {
+                    if (!repoRelativePath.isEmpty()
+                        && !shouldIgnore(repoRoot, repoRoot.resolve(repoRelativePath))
+                        && !storage.isTrackingIgnored(repoRoot, repoRelativePath)) {
                         repoRelativePaths.add(repoRelativePath.replace('\\', '/'));
                     }
                 }
@@ -260,8 +267,11 @@ public final class Ailoc2ProjectService implements Disposable {
             if (line.startsWith("+++ ")) {
                 currentPath = parseNewPath(line);
                 currentLine = 0;
-                if (currentPath != null) {
+                if (currentPath != null && !storage.isTrackingIgnored(repoRoot, currentPath)) {
                     changedFiles.add(currentPath);
+                }
+                else {
+                    currentPath = null;
                 }
                 continue;
             }

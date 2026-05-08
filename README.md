@@ -115,6 +115,7 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 - `.ailoc2-metrics/summary.json` inside the tracked repo
 - commit subjects automatically annotated during `git commit`
 - post-commit baseline advancement and cleanup so fully committed files start fresh while files with remaining unstaged work keep their attribution
+- optional `.ailoc2-metrics/.ignore` rules if you want gitignore-style opt-outs for specific tracked files or directories
 
 
 ### IntelliJ IDEA plugin prototype
@@ -137,6 +138,7 @@ The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ edit
 your-repo/
 ├─ .ailoc2-metrics/
 │  ├─ manifest.json
+│  ├─ .ignore
 │  ├─ summary.json
 │  └─ state/
 │     ├─ repo-summary.json
@@ -153,6 +155,7 @@ your-repo/
 ### What those files mean
 
 - `summary.json` — generated output consumed by hooks and other local tooling.
+- `.ignore` — optional gitignore-style rules for files or directories that should never get per-file metrics state.
 - `manifest.json` — lightweight bookkeeping and diagnostics for the extension runtime.
 - `state/repo-summary.json` — repo baseline state used when recomputing attribution against the current committed content.
 - `state/files/**/*.metrics.json` — rolling attribution state per tracked repo file.
@@ -209,6 +212,7 @@ This project is already useful, but it is not pretending to be magic.
 - Some AI-assisted changes may still look human or unknown if the editor does not expose a distinct enough signal.
 - `(AI unavailable)` means summary generation or hook runtime fallback kicked in; it does **not** always mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
+- You can also add repo-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.
 
 ## Development
 

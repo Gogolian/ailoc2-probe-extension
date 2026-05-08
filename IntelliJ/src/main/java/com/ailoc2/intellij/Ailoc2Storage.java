@@ -12,14 +12,24 @@ import java.util.concurrent.ConcurrentHashMap;
 
 final class Ailoc2Storage {
     private static final String METRICS_DIRECTORY = ".ailoc2-metrics";
+    private final Ailoc2MetricsIgnoreRules metricsIgnoreRules = new Ailoc2MetricsIgnoreRules();
     private final Map<StateKey, Ailoc2FileState> cachedStates = new ConcurrentHashMap<>();
 
     Ailoc2FileState stateFor(Path repoRoot, String repoRelativePath) {
+        if (isTrackingIgnored(repoRoot, repoRelativePath)) {
+            return new Ailoc2FileState();
+        }
+
         StateKey cacheKey = new StateKey(repoRoot.toAbsolutePath().normalize(), repoRelativePath);
         return cachedStates.computeIfAbsent(cacheKey, ignored -> readState(repoRoot, repoRelativePath));
     }
 
     void persistState(Path repoRoot, String repoRelativePath, Ailoc2FileState state) {
+        if (isTrackingIgnored(repoRoot, repoRelativePath)) {
+            removeState(repoRoot, repoRelativePath);
+            return;
+        }
+
         Path statePath = statePath(repoRoot, repoRelativePath);
         StringBuilder builder = new StringBuilder();
         builder.append("# AILoc2 IntelliJ rolling state v1\n");
@@ -86,15 +96,23 @@ final class Ailoc2Storage {
                 continue;
             }
 
-            StateKey cacheKey = new StateKey(repoRoot.toAbsolutePath().normalize(), repoRelativePath);
-            cachedStates.remove(cacheKey);
-            try {
-                Files.deleteIfExists(statePath(repoRoot, repoRelativePath));
-            }
-            catch (IOException ignored) {
-                // Metrics cleanup must never block normal commits.
-            }
+            removeState(repoRoot, repoRelativePath);
         }
+    }
+
+    void removeState(Path repoRoot, String repoRelativePath) {
+        StateKey cacheKey = new StateKey(repoRoot.toAbsolutePath().normalize(), repoRelativePath);
+        cachedStates.remove(cacheKey);
+        try {
+            Files.deleteIfExists(statePath(repoRoot, repoRelativePath));
+        }
+        catch (IOException ignored) {
+            // Metrics cleanup must never block normal commits.
+        }
+    }
+
+    boolean isTrackingIgnored(Path repoRoot, String repoRelativePath) {
+        return metricsIgnoreRules.isIgnored(repoRoot, repoRelativePath);
     }
 
     private String summaryJson(Ailoc2GitSummary summary) {
@@ -109,6 +127,10 @@ final class Ailoc2Storage {
     }
 
     private Ailoc2FileState readState(Path repoRoot, String repoRelativePath) {
+        if (isTrackingIgnored(repoRoot, repoRelativePath)) {
+            return new Ailoc2FileState();
+        }
+
         Ailoc2FileState state = new Ailoc2FileState();
         Path statePath = statePath(repoRoot, repoRelativePath);
         if (!Files.isRegularFile(statePath)) {
