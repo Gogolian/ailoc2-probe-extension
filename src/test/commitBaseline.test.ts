@@ -368,6 +368,7 @@ function queueSyntheticWorkspaceMetric(
     recordedAt: string,
     eventId: string
 ): void {
+    const lineCount = countSyntheticTextLines(fileText);
     metricsStore.queueWorkspaceFileMetric({
         schemaVersion: METRICS_SCHEMA_VERSION,
         recordType: 'workspace-file-metric',
@@ -395,16 +396,20 @@ function queueSyntheticWorkspaceMetric(
         afterHash: 'after-hash',
         beforeCharLength: 0,
         afterCharLength: fileText.length,
-        lineCount: fileText.split('\n').filter((line, index, lines) => !(index === lines.length - 1 && line === '')).length,
+        lineCount,
         languageId: 'plaintext',
         isDirty: false,
         lineDiffSegments: [
             {
                 type: 'added',
-                lineCount: Math.max(1, fileText.split('\n').length - 1)
+                lineCount
             }
         ],
         chatCorrelation: null,
         saveCorrelation: null
     });
+}
+
+function countSyntheticTextLines(text: string): number {
+    return Math.max(1, text.split('\n').filter((line, index, lines) => !(index === lines.length - 1 && line === '')).length);
 }
