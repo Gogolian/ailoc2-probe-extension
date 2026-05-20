@@ -40,7 +40,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 - Correlates workspace-file changes with VS Code chat-editing virtual documents.
 - Classifies file changes into AI-leaning and human-leaning signals.
 - Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
-- Builds staged and unstaged summaries from actual Git diff slices.
+- Builds staged and unstaged summaries from actual Git diff slices, ignoring whitespace-only diff noise in the final percentages.
 - Installs repo-local Git hooks into `.githooks`.
 - Annotates commit messages with a suffix like `(AI 23.47%)`.
 - Falls back safely to `(AI unavailable)` when summary data cannot be produced.
@@ -50,6 +50,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 - **Commit-native** — the headline result lands in the commit message, not a side dashboard.
 - **Repo-local** — attribution artifacts are plain JSON written next to the codebase.
 - **Change-focused** — percentages are derived from changed lines, not whole-file ownership guesses.
+- **Formatting-neutral percentages** — whitespace-only edits are ignored in final AI/Human percentages so formatter and linter runs do not receive AI or Human credit.
 - **Auditable** — summaries, rolling state, and manifests are inspectable.
 - **Low-friction** — once hooks are installed, the flow feels like normal Git.
 - **Hook-friendly** — managed hooks can chain an existing repo-local `core.hooksPath` instead of bulldozing it.
@@ -200,7 +201,7 @@ The current heuristic is intentionally conservative.
 
 ### How the summary is computed
 
-AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. It weights changed lines using current line lengths with a minimum weight of `1`, which makes the result more representative than a naive whole-file percentage while staying cheap enough to run inside normal commit workflows.
+AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Final percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. This simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
 
 ## Current limitations
 

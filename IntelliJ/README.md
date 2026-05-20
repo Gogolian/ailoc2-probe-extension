@@ -6,7 +6,7 @@ This folder contains an IntelliJ Platform plugin that mirrors the core AILoc2 be
 - classifies edit signals locally as human-leaning or AI-leaning using editor command context, command group metadata, and bulk-apply heuristics;
 - persists repo-local metrics under `.ailoc2-metrics/intellij-state`;
 - honors optional gitignore-style opt-out rules from `.ailoc2-metrics/.ignore`;
-- calculates the staged AI percentage from `git diff --cached` during IntelliJ commit handling;
+- calculates the staged AI percentage from whitespace-insensitive `git diff --cached` output during IntelliJ commit handling;
 - appends the staged percentage to the commit subject as `(AI 12.34%)`, or `(AI unavailable)` when Git summary generation fails;
 - clears metrics for files that were fully committed while preserving metrics for committed paths that still have unstaged work.
 
@@ -47,7 +47,7 @@ The plugin registers editor document and command listeners at project startup. R
 
 Every command start / finish and every persisted document-change event is also written to the IntelliJ log (`idea.log`) with the command context, changed file, edit sizes, and final attribution bucket so you can inspect real-world event patterns.
 
-At commit time the plugin reads the actual staged diff (`git diff --cached --unified=0`) and weights added staged lines against the recorded per-line attribution state. Unknown lines are excluded from the headline percentage unless the file has enough rolling state to provide a file-level fallback.
+At commit time the plugin reads the actual staged diff with whitespace-only hunks ignored and weights added staged lines by non-whitespace characters against the recorded per-line attribution state. Unknown lines are excluded from the headline percentage unless the file has enough rolling state to provide a file-level fallback. This formatting-neutral simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
 
 ## Git hooks
 

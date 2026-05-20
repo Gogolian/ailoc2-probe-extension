@@ -204,8 +204,8 @@ That gives the summary logic something much better than a whole-file guess: it c
 
 `src/metrics/summary.ts` builds the repo summary from five main inputs:
 
-1. staged tracked-file diff slices via `git diff --cached --unified=0 --find-renames --no-color`
-2. unstaged tracked-file diff slices via `git diff --unified=0 --find-renames --no-color`
+1. staged tracked-file diff slices via `git diff --cached --unified=0 --find-renames --no-color --ignore-all-space`
+2. unstaged tracked-file diff slices via `git diff --unified=0 --find-renames --no-color --ignore-all-space`
 3. unstaged untracked files via `git ls-files --others --exclude-standard`
 4. rolling state from `.ailoc2-metrics/state/files/**/*.metrics.json`
 5. repo baseline state from `.ailoc2-metrics/state/repo-summary.json`
@@ -224,9 +224,9 @@ At a high level, the summary logic does this for each relevant repo-relative pat
 
 ## Line weighting
 
-Changed lines are weighted by current line length with a minimum weight of `1`.
+Changed lines are weighted by their non-whitespace character count. Whitespace-only hunks are ignored by the Git diff inputs, and blank or whitespace-only changed lines contribute zero weight if they are still present in a diff.
 
-That means a blank line still contributes weight `1`, while longer lines count more than extremely short lines. This is still a heuristic, but it is generally more representative than a flat “one line equals one line” policy for the current implementation.
+This deliberately keeps final percentages formatting-neutral: whitespace inserted by formatters or linters is not credited to AI or Human. The current simplification applies to all tracked file types, including whitespace-significant languages, and non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
 
 ## Prepared commit baseline
 
