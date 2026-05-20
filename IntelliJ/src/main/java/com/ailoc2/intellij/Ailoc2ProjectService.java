@@ -86,7 +86,7 @@ public final class Ailoc2ProjectService implements Disposable {
     public Ailoc2GitSummary refreshStagedSummary(Path repoRoot) {
         Ailoc2GitSummary summary = computeGitSummary(
             repoRoot,
-            List.of("diff", "--cached", "--unified=0", "--find-renames", "--no-color"),
+            List.of("diff", "--cached", "--unified=0", "--find-renames", "--no-color", "--ignore-all-space"),
             "staged"
         );
         storage.writeSummary(repoRoot, summary);
@@ -96,12 +96,12 @@ public final class Ailoc2ProjectService implements Disposable {
     public Ailoc2RepoSummary refreshRepoSummary(Path repoRoot) {
         Ailoc2GitSummary stagedSummary = computeGitSummary(
             repoRoot,
-            List.of("diff", "--cached", "--unified=0", "--find-renames", "--no-color"),
+            List.of("diff", "--cached", "--unified=0", "--find-renames", "--no-color", "--ignore-all-space"),
             "staged"
         );
         Ailoc2GitSummary unstagedSummary = computeGitSummary(
             repoRoot,
-            List.of("diff", "--unified=0", "--find-renames", "--no-color"),
+            List.of("diff", "--unified=0", "--find-renames", "--no-color", "--ignore-all-space"),
             "unstaged"
         );
         Ailoc2RepoSummary repoSummary = new Ailoc2RepoSummary(repoRoot, stagedSummary, unstagedSummary);
@@ -292,12 +292,12 @@ public final class Ailoc2ProjectService implements Disposable {
                 if (bucket == Ailoc2AttributionBucket.UNKNOWN) {
                     bucket = state.fallbackBucket();
                 }
-                long weight = Math.max(1, line.length() - 1L);
-                if (bucket == Ailoc2AttributionBucket.AI) {
+                long weight = nonWhitespaceWeight(line.substring(1));
+                if (weight > 0L && bucket == Ailoc2AttributionBucket.AI) {
                     aiWeight += weight;
                     attributedFiles.add(currentPath);
                 }
-                else if (bucket == Ailoc2AttributionBucket.HUMAN) {
+                else if (weight > 0L && bucket == Ailoc2AttributionBucket.HUMAN) {
                     humanWeight += weight;
                     attributedFiles.add(currentPath);
                 }
@@ -320,6 +320,10 @@ public final class Ailoc2ProjectService implements Disposable {
             return pathText.substring(2);
         }
         return pathText;
+    }
+
+    private long nonWhitespaceWeight(String text) {
+        return text.codePoints().filter(codePoint -> !Character.isWhitespace(codePoint)).count();
     }
 
     private ClassificationResult classifyChange(CommandContext commandContext, DocumentEvent event) {

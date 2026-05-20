@@ -118,8 +118,8 @@ export type RepoCommitFinalizationResult = RepoHookSummaryRefreshResult & {
 export async function computeRepoUncommittedAttributionSummary(args: {
     repoRoot: string;
 }): Promise<RepoUncommittedAttributionSummary> {
-    const stagedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--cached', '--unified=0', '--find-renames', '--no-color']);
-    const unstagedTrackedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color']);
+    const stagedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--cached', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']);
+    const unstagedTrackedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']);
     const unstagedUntrackedEntries = await getGitUntrackedEntries(args.repoRoot);
     const unstagedEntries = unstagedTrackedEntries !== null && unstagedUntrackedEntries !== null
         ? mergeGitDiffEntries(unstagedTrackedEntries, unstagedUntrackedEntries)
@@ -700,15 +700,19 @@ function createLineWeights(text: string): number[] {
         return [];
     }
 
-    return text.split(/\r\n|\r|\n/).map((line) => getLineWeight(line.length));
+    return text.split(/\r\n|\r|\n/).map((line) => getLineWeight(getTextNonWhitespaceWeight(line)));
 }
 
 function getLineWeight(lineLength: number | undefined): number {
     if (typeof lineLength !== 'number' || !Number.isFinite(lineLength)) {
-        return 1;
+        return 0;
     }
 
-    return Math.max(1, lineLength);
+    return Math.max(0, lineLength);
+}
+
+function getTextNonWhitespaceWeight(text: string): number {
+    return text.replace(/\s/gu, '').length;
 }
 
 async function getGitDiffEntries(repoRoot: string, args: string[]): Promise<GitDiffStatEntry[] | null> {
@@ -758,7 +762,7 @@ async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntr
                 const lineCount = countTextLines(fileContents);
                 entries.push({
                     repoRelativePath,
-                    changedLines: lineCount,
+                    changedLines: getTextNonWhitespaceWeight(fileContents),
                     currentLineRanges: lineCount > 0 ? [{ startLine: 0, lineCount }] : []
                 });
             }
@@ -791,12 +795,38 @@ function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
             continue;
         }
 
-        if (!currentRepoRelativePath || !line.startsWith('@@ ')) {
+        if (!currentRepoRelativePath) {
             continue;
         }
 
-        const parsedHunk = parseGitDiffHunk(line);
-        if (!parsedHunk) {
+        if (line.startsWith('@@ ')) {
+            const parsedHunk = parseGitDiffHunk(line);
+            if (!parsedHunk) {
+                continue;
+            }
+
+            const entry = entries.get(currentRepoRelativePath) ?? {
+                repoRelativePath: currentRepoRelativePath,
+                changedLines: 0,
+                currentLineRanges: []
+            };
+
+            if (parsedHunk.newLineCount > 0) {
+                entry.currentLineRanges.push({
+                    startLine: parsedHunk.newStartLine - 1,
+                    lineCount: parsedHunk.newLineCount
+                });
+            }
+
+            entries.set(currentRepoRelativePath, entry);
+            continue;
+        }
+
+        if (!line.startsWith('+') && !line.startsWith('-')) {
+            continue;
+        }
+
+        if (line.startsWith('+++') || line.startsWith('---')) {
             continue;
         }
 
@@ -805,15 +835,7 @@ function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
             changedLines: 0,
             currentLineRanges: []
         };
-
-        entry.changedLines += parsedHunk.oldLineCount + parsedHunk.newLineCount;
-        if (parsedHunk.newLineCount > 0) {
-            entry.currentLineRanges.push({
-                startLine: parsedHunk.newStartLine - 1,
-                lineCount: parsedHunk.newLineCount
-            });
-        }
-
+        entry.changedLines += getTextNonWhitespaceWeight(line.slice(1));
         entries.set(currentRepoRelativePath, entry);
     }
 
@@ -1077,7 +1099,7 @@ async function getLastCommitRepoRelativePaths(repoRoot: string): Promise<string[
 }
 
 async function getUnstagedRepoRelativePathSet(repoRoot: string): Promise<Set<string>> {
-    const unstagedTrackedEntries = await getGitDiffEntries(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color']);
+    const unstagedTrackedEntries = await getGitDiffEntries(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']);
     const unstagedUntrackedEntries = await getGitUntrackedEntries(repoRoot);
     return new Set([
         ...(unstagedTrackedEntries ?? []).map((entry) => entry.repoRelativePath),

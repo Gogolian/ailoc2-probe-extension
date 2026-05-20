@@ -337,6 +337,95 @@ test('metrics ignore rules skip metrics files and diff attribution for ignored p
     assert.equal(refreshed.summary.staged.humanPercentage, 0);
 });
 
+test('refreshRepoHookSummary ignores whitespace-only staged changes', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-whitespace-only-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    const gitRelativePath = 'src/example.ts';
+    const absoluteFilePath = path.join(repoRoot, gitRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const value = 1;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(absoluteFilePath, 'const    value    =    1;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    assert.equal(refreshed.summary.isGitSummaryAvailable, true);
+    assert.equal(refreshed.summary.staged.changedFileCount, 0);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 0);
+    assert.equal(refreshed.summary.staged.aiPercentage, 0);
+    assert.equal(refreshed.summary.staged.humanPercentage, 0);
+});
+
+test('refreshRepoHookSummary weights changed lines by non-whitespace content', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-non-whitespace-weights-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    const gitRelativePath = 'src/example.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'oldAi\noldHuman\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(absoluteFilePath, '            aiToken\nhumanToken\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    const stagedBlobOid = readIndexBlobOid(repoRoot, gitRelativePath);
+
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(rollingStatePath), { recursive: true });
+    fs.writeFileSync(rollingStatePath, JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'file-rolling-state',
+        repoRoot,
+        repoRelativePath,
+        lastRecordedAt: new Date().toISOString(),
+        latestSignal: 'LikelyHumanOrRegularEditorEdit',
+        signalCounters: {
+            ProbableAIApplyToWorkspaceFile: 1,
+            PossibleAIApplyToWorkspaceFile: 0,
+            LikelyHumanEditWhileChatSessionOpen: 0,
+            LikelyHumanOrRegularEditorEdit: 1
+        },
+        cumulativeAiChangeMagnitude: 7,
+        cumulativeHumanChangeMagnitude: 10,
+        saveAttributionCheckpoints: [
+            {
+                gitBlobOid: stagedBlobOid,
+                cumulativeAiChangeMagnitude: 7,
+                cumulativeHumanChangeMagnitude: 10,
+                lineAttributionSpans: [
+                    { attribution: 'AI', lineCount: 1 },
+                    { attribution: 'Human', lineCount: 1 }
+                ]
+            }
+        ],
+        lineAttributionSpans: [
+            { attribution: 'AI', lineCount: 1 },
+            { attribution: 'Human', lineCount: 1 }
+        ],
+        deletedAt: null
+    }, null, 2), 'utf8');
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    assert.equal(refreshed.summary.isGitSummaryAvailable, true);
+    assert.equal(refreshed.summary.staged.changedFileCount, 1);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - (7 / 17) * 100) < FLOATING_POINT_TOLERANCE);
+    assert.ok(Math.abs(refreshed.summary.staged.humanPercentage - (10 / 17) * 100) < FLOATING_POINT_TOLERANCE);
+});
+
 function runGit(repoRoot: string, args: string[]): string {
     return childProcess.execFileSync('git', args, {
         cwd: repoRoot,

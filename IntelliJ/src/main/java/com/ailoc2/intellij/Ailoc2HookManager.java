@@ -373,12 +373,17 @@ final class Ailoc2HookManager {
             refresh_summary() {
                 REPO_ROOT=$(pwd)
                 REPO_NAME=${REPO_ROOT##*/}
-                SUMMARY_DATA=$(git diff --cached --unified=0 --find-renames --no-color | awk -v state_dir="$STATE_DIR" '
+                SUMMARY_DATA=$(git diff --cached --unified=0 --find-renames --no-color --ignore-all-space | awk -v state_dir="$STATE_DIR" '
                     function safe_state_file(path, safe) {
                         safe = path
                         gsub(/\\\\/, "/", safe)
                         gsub(/[^A-Za-z0-9._-]/, "_", safe)
                         return safe ".tsv"
+                    }
+                    function non_whitespace_length(text, compact) {
+                        compact = text
+                        gsub(/[[:space:]]/, "", compact)
+                        return length(compact)
                     }
                     function bucket_for(path, line_number, state_file, state_line, parts, found, ai_magnitude, human_magnitude) {
                         state_file = state_dir "/" safe_state_file(path)
@@ -430,15 +435,12 @@ final class Ailoc2HookManager {
                     }
                     current_path != "" && current_line > 0 && /^\\+/ && !/^\\+\\+\\+/ {
                         bucket = bucket_for(current_path, current_line)
-                        weight = length($0) - 1
-                        if (weight < 1) {
-                            weight = 1
-                        }
-                        if (bucket == "AI") {
+                        weight = non_whitespace_length(substr($0, 2))
+                        if (weight > 0 && bucket == "AI") {
                             ai_weight += weight
                             attributed[current_path] = 1
                         }
-                        else if (bucket == "HUMAN") {
+                        else if (weight > 0 && bucket == "HUMAN") {
                             human_weight += weight
                             attributed[current_path] = 1
                         }
