@@ -22,6 +22,7 @@ import {
     getMetricsRoot,
     getRollingStatePath
 } from './pathing';
+import { isRepoRelativePathTrackingIgnored } from './ignore';
 
 const WRITE_DEBOUNCE_MS = 350;
 const MAX_SAVE_ATTRIBUTION_CHECKPOINTS = 64;
@@ -113,6 +114,10 @@ export class RepoMetricsStore {
     }
 
     public async hasTrackedFile(repoRoot: string, repoRelativePath: string): Promise<boolean> {
+        if (await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath)) {
+            return false;
+        }
+
         const repoQueue = this.getOrCreateRepoQueue(repoRoot);
         const hasPendingRecord = repoQueue.pendingRecords.some((entry) => entry.record.repoRelativePath === repoRelativePath);
         if (hasPendingRecord) {
@@ -150,9 +155,17 @@ export class RepoMetricsStore {
         const sourceQueue = this.getOrCreateRepoQueue(args.fromRepoRoot);
         sourceQueue.flushPromise = sourceQueue.flushPromise
             .then(async () => {
+                const sourcePath = getRollingStatePath(args.fromRepoRoot, args.fromRepoRelativePath);
+                const sourceIgnored = await isRepoRelativePathTrackingIgnored(args.fromRepoRoot, args.fromRepoRelativePath);
+                const targetIgnored = await isRepoRelativePathTrackingIgnored(args.toRepoRoot, args.toRepoRelativePath);
+                if (sourceIgnored || targetIgnored) {
+                    await fs.promises.rm(sourcePath, { force: true });
+                    await this.removeEmptyParentDirectories(path.dirname(sourcePath), getMetricsFilesStateDirectory(args.fromRepoRoot));
+                    return;
+                }
+
                 await this.ensureRepoLayout(args.fromRepoRoot);
                 await this.ensureRepoLayout(args.toRepoRoot);
-                const sourcePath = getRollingStatePath(args.fromRepoRoot, args.fromRepoRelativePath);
                 if (!(await this.pathExists(sourcePath))) {
                     return;
                 }
@@ -196,6 +209,11 @@ export class RepoMetricsStore {
         const repoQueue = this.getOrCreateRepoQueue(args.repoRoot);
         repoQueue.flushPromise = repoQueue.flushPromise
             .then(async () => {
+                if (await isRepoRelativePathTrackingIgnored(args.repoRoot, args.repoRelativePath)) {
+                    await this.removeRollingStateIfExists(args.repoRoot, args.repoRelativePath);
+                    return;
+                }
+
                 await this.ensureRepoLayout(args.repoRoot);
                 const rollingStatePath = getRollingStatePath(args.repoRoot, args.repoRelativePath);
                 if (!(await this.pathExists(rollingStatePath))) {
@@ -271,8 +289,22 @@ export class RepoMetricsStore {
             return;
         }
 
-        const recordsToFlush = repoQueue.pendingRecords.splice(0, repoQueue.pendingRecords.length);
-        const saveUpdatesToFlush = repoQueue.pendingSaveUpdates.splice(0, repoQueue.pendingSaveUpdates.length);
+        const pendingRecords = repoQueue.pendingRecords.splice(0, repoQueue.pendingRecords.length);
+        const pendingSaveUpdates = repoQueue.pendingSaveUpdates.splice(0, repoQueue.pendingSaveUpdates.length);
+        const ignoredRepoRelativePaths = await this.collectIgnoredRepoRelativePaths(repoRoot, pendingRecords, pendingSaveUpdates);
+        for (const repoRelativePath of ignoredRepoRelativePaths) {
+            await this.removeRollingStateIfExists(repoRoot, repoRelativePath);
+        }
+
+        const recordsToFlush = pendingRecords.filter((entry) => (
+            !entry.record.repoRelativePath
+            || !ignoredRepoRelativePaths.has(entry.record.repoRelativePath)
+        ));
+        const saveUpdatesToFlush = pendingSaveUpdates.filter((entry) => !ignoredRepoRelativePaths.has(entry.repoRelativePath));
+        if (recordsToFlush.length === 0 && saveUpdatesToFlush.length === 0) {
+            return;
+        }
+
         const latestRecord = recordsToFlush[recordsToFlush.length - 1]?.record;
         const latestSaveUpdate = saveUpdatesToFlush.at(-1) ?? null;
 
@@ -861,5 +893,31 @@ export class RepoMetricsStore {
     private getPendingQueueLength(repoRoot: string): number {
         const queue = this.repoQueues.get(repoRoot);
         return (queue?.pendingRecords.length ?? 0) + (queue?.pendingSaveUpdates.length ?? 0);
+    }
+
+    private async collectIgnoredRepoRelativePaths(
+        repoRoot: string,
+        records: QueuedRecord[],
+        saveUpdates: PendingSaveUpdate[]
+    ): Promise<Set<string>> {
+        const repoRelativePaths = new Set<string>();
+        for (const repoRelativePath of [
+            ...records
+                .map((entry) => entry.record.repoRelativePath)
+                .filter((repoRelativePath): repoRelativePath is string => typeof repoRelativePath === 'string'),
+            ...saveUpdates.map((entry) => entry.repoRelativePath)
+        ]) {
+            if (await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath)) {
+                repoRelativePaths.add(repoRelativePath);
+            }
+        }
+
+        return repoRelativePaths;
+    }
+
+    private async removeRollingStateIfExists(repoRoot: string, repoRelativePath: string): Promise<void> {
+        const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+        await fs.promises.rm(rollingStatePath, { force: true });
+        await this.removeEmptyParentDirectories(path.dirname(rollingStatePath), getMetricsFilesStateDirectory(repoRoot));
     }
 }

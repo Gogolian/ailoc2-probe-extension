@@ -5,12 +5,18 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, test } from 'node:test';
 
-import { getPreparedCommitBaselinePath, getRepoSummaryStatePath, getRollingStatePath } from '../metrics/pathing';
+import {
+    getMetricsIgnoreFilePath,
+    getPreparedCommitBaselinePath,
+    getRepoSummaryStatePath,
+    getRollingStatePath
+} from '../metrics/pathing';
 import { METRICS_SCHEMA_VERSION } from '../metrics/schema';
 import { RepoMetricsStore } from '../metrics/store';
 import { finalizeRepoCommit, prepareRepoCommitBaseline, refreshRepoHookSummary } from '../metrics/summary';
 
 const tempDirectories: string[] = [];
+const FLOATING_POINT_TOLERANCE = 0.000_001;
 
 afterEach(() => {
     while (tempDirectories.length > 0) {
@@ -107,8 +113,8 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
     assert.equal(finalizationResult.clearedRollingStateFileCount, 0);
     assert.equal(finalizationResult.preservedUnstagedFileCount, 1);
     assert.equal(fs.existsSync(rollingStatePath), true);
-    assert.ok(Math.abs(finalizationResult.summary.unstaged.aiPercentage - 40) < 0.000_001);
-    assert.ok(Math.abs(finalizationResult.summary.unstaged.humanPercentage - 60) < 0.000_001);
+    assert.ok(Math.abs(finalizationResult.summary.unstaged.aiPercentage - 40) < FLOATING_POINT_TOLERANCE);
+    assert.ok(Math.abs(finalizationResult.summary.unstaged.humanPercentage - 60) < FLOATING_POINT_TOLERANCE);
 });
 
 test('finalizeRepoCommit clears rolling state for fully committed files', async () => {
@@ -277,8 +283,58 @@ test('refreshRepoHookSummary needs flushed rolling state to attribute the first 
     assert.equal(afterFlush.summary.isGitSummaryAvailable, true);
     assert.equal(afterFlush.summary.staged.changedFileCount, 1);
     assert.equal(afterFlush.summary.staged.attributedChangedFileCount, 1);
-    assert.ok(Math.abs(afterFlush.summary.staged.aiPercentage - 100) < 0.000_001);
+    assert.ok(Math.abs(afterFlush.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
     assert.equal(afterFlush.summary.staged.humanPercentage, 0);
+});
+
+test('metrics ignore rules skip metrics files and diff attribution for ignored paths', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-metrics-ignore-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    const ignoredGitPath = 'src/generated/ignored.txt';
+    const includedGitPath = 'src/generated/included.txt';
+    const ignoredRepoRelativePath = path.normalize(ignoredGitPath);
+    const includedRepoRelativePath = path.normalize(includedGitPath);
+    const ignoredAbsolutePath = path.join(repoRoot, ignoredRepoRelativePath);
+    const includedAbsolutePath = path.join(repoRoot, includedRepoRelativePath);
+
+    fs.mkdirSync(path.dirname(ignoredAbsolutePath), { recursive: true });
+    fs.writeFileSync(ignoredAbsolutePath, 'base ignored\n', 'utf8');
+    fs.writeFileSync(includedAbsolutePath, 'base included\n', 'utf8');
+    runGit(repoRoot, ['add', ignoredGitPath, includedGitPath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.mkdirSync(path.dirname(getMetricsIgnoreFilePath(repoRoot)), { recursive: true });
+    fs.writeFileSync(getMetricsIgnoreFilePath(repoRoot), [
+        'src/generated/',
+        '!src/generated/included.txt'
+    ].join('\n'), 'utf8');
+
+    const ignoredText = 'ignored by metrics\n';
+    const includedText = 'included by metrics\n';
+    fs.writeFileSync(ignoredAbsolutePath, ignoredText, 'utf8');
+    fs.writeFileSync(includedAbsolutePath, includedText, 'utf8');
+    runGit(repoRoot, ['add', ignoredGitPath, includedGitPath]);
+
+    const metricsStore = new RepoMetricsStore('test-session', () => {});
+    const recordedAt = new Date().toISOString();
+    queueSyntheticWorkspaceMetric(metricsStore, repoRoot, ignoredRepoRelativePath, ignoredAbsolutePath, ignoredText, recordedAt, 'event-ignore');
+    queueSyntheticWorkspaceMetric(metricsStore, repoRoot, includedRepoRelativePath, includedAbsolutePath, includedText, recordedAt, 'event-include');
+
+    await metricsStore.flushRepo(repoRoot);
+
+    assert.equal(fs.existsSync(getRollingStatePath(repoRoot, ignoredRepoRelativePath)), false);
+    assert.equal(fs.existsSync(getRollingStatePath(repoRoot, includedRepoRelativePath)), true);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    assert.equal(refreshed.summary.staged.changedFileCount, 1);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
+    assert.equal(refreshed.summary.staged.humanPercentage, 0);
 });
 
 function runGit(repoRoot: string, args: string[]): string {
@@ -302,4 +358,59 @@ function readIndexBlobOid(repoRoot: string, repoRelativePath: string): string {
     const gitBlobOid = fields[1] ?? '';
     assert.match(gitBlobOid, /^[0-9a-f]{40}$/i);
     return gitBlobOid;
+}
+
+function queueSyntheticWorkspaceMetric(
+    metricsStore: RepoMetricsStore,
+    repoRoot: string,
+    repoRelativePath: string,
+    absoluteFilePath: string,
+    fileText: string,
+    recordedAt: string,
+    eventId: string
+): void {
+    const lineCount = countSyntheticTextLines(fileText);
+    metricsStore.queueWorkspaceFileMetric({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'workspace-file-metric',
+        eventId,
+        recordedAt,
+        extensionSessionId: 'test-session',
+        repoRoot,
+        repoRelativePath,
+        logicalPath: absoluteFilePath,
+        documentCategory: 'WorkspaceFile',
+        signal: 'ProbableAIApplyToWorkspaceFile',
+        explanation: 'Synthetic AI edit for metrics ignore coverage.',
+        replacementRatio: 1,
+        totalInsertedTextLength: fileText.length,
+        totalRemovedTextLength: 0,
+        isWholeDocumentReplace: true,
+        hasRecentSnapshotActivity: true,
+        snapshotRequestIds: ['request-1'],
+        requestIds: ['request-1'],
+        lastChatScheme: 'chat-editing-snapshot-text-model',
+        snapshotAgeMs: 0,
+        changeReason: 'RegularEditOrUnknown',
+        documentVersion: 2,
+        beforeHash: 'before-hash',
+        afterHash: 'after-hash',
+        beforeCharLength: 0,
+        afterCharLength: fileText.length,
+        lineCount,
+        languageId: 'plaintext',
+        isDirty: false,
+        lineDiffSegments: [
+            {
+                type: 'added',
+                lineCount
+            }
+        ],
+        chatCorrelation: null,
+        saveCorrelation: null
+    });
+}
+
+function countSyntheticTextLines(text: string): number {
+    return Math.max(1, text.split('\n').filter((line, index, lines) => !(index === lines.length - 1 && line === '')).length);
 }
