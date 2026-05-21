@@ -22,7 +22,7 @@ val ideaSinceBuild = providers.gradleProperty("ideaSinceBuild").orNull?.trim()
     }
 
 group = "com.ailoc2"
-version = "1.0.2"
+version = "1.0.3"
 
 dependencies {
     intellijPlatform {
