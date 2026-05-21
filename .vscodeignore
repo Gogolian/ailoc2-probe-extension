@@ -1,0 +1,9 @@
+.github/
+.githooks/
+.vscode/
+IntelliJ/
+docs/
+src/
+out/test/
+package-lock.json
+tsconfig.json
