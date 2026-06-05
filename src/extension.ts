@@ -2,7 +2,6 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { diffArrays } from 'diff';
 
 import {
     normalizeFsLikePath,
@@ -16,7 +15,6 @@ import {
     getRollingStatePath
 } from './metrics/pathing';
 import {
-    LineDiffSegment,
     METRICS_SCHEMA_VERSION,
     SaveCorrelationSummary,
     SessionBoundaryEvent,
@@ -26,6 +24,7 @@ import {
 import {
     refreshRepoHookSummary
 } from './metrics/summary';
+import { createLineDiffSegments } from './metrics/lineDiff';
 import { RepoMetricsStore } from './metrics/store';
 import { installRepoHooks, uninstallRepoHooks } from './hooks/management';
 import { getTrackingExclusionReasonForPath as getSharedTrackingExclusionReasonForPath } from './trackingExclusions';
@@ -1597,24 +1596,6 @@ function previewText(text: string | undefined): string | null {
     }
 
     return `${escaped.slice(0, TEXT_PREVIEW_LIMIT)}…`;
-}
-
-function createLineDiffSegments(beforeText: string | undefined, afterText: string): LineDiffSegment[] {
-    const beforeLines = splitTextIntoLogicalLines(beforeText ?? '');
-    const afterLines = splitTextIntoLogicalLines(afterText);
-
-    return diffArrays(beforeLines, afterLines).map((part) => ({
-        type: part.added ? 'added' : part.removed ? 'removed' : 'equal',
-        lineCount: part.count ?? part.value.length
-    }));
-}
-
-function splitTextIntoLogicalLines(text: string): string[] {
-    if (text.length === 0) {
-        return [];
-    }
-
-    return text.split(/\r\n|\r|\n/);
 }
 
 function hashText(text: string): string {

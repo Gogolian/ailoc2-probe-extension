@@ -181,6 +181,14 @@ The update rules are straightforward:
 
 This preserves useful locality without pretending that line identity survives every structural transformation.
 
+### Whitespace-insensitive line diffing
+
+The `lineDiffSegments` are computed by `src/metrics/lineDiff.ts`, which compares logical lines **ignoring all whitespace**. A line that only changes by indentation or spacing (for example a Prettier re-indent, a `gofmt` tab/space change, or spaces added around operators) is reported as an `equal` segment rather than a `removed` + `added` pair.
+
+That matters for the linter problem. Without whitespace-insensitive matching, a human-triggered formatter run is classified as a regular human edit and would rewrite every reflowed line — including previously AI-attributed lines — to `Human`, silently deflating the AI percentage. Ignoring whitespace at the rolling-state layer keeps the per-line model consistent with the summary layer, which already diffs Git content with `--ignore-all-space`.
+
+This only neutralizes *whitespace* reformatting. Non-whitespace linter rewrites — quote normalization, semicolon insertion, import sorting — are still scored as real changes and can still move attribution. Closing that gap is tracked in [`IMPROVEMENT_PLANS.md`](../IMPROVEMENT_PLANS.md).
+
 ## Save checkpoints
 
 On each real-file save, `RepoMetricsStore.noteDocumentSaved()` queues a save update. During flush, the store records a checkpoint containing:
