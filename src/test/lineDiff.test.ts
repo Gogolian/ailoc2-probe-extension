@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { areLinesEqualIgnoringWhitespace, createLineDiffSegments } from '../metrics/lineDiff';
+import {
+    areLinesEqualIgnoringWhitespace,
+    areLinesEquivalentForAttribution,
+    createLineDiffSegments
+} from '../metrics/lineDiff';
 
 test('createLineDiffSegments treats pure indentation reflow as equal', () => {
     const before = 'const x = 1\nconst y = 2';
@@ -29,7 +33,7 @@ test('createLineDiffSegments still reports genuinely added lines', () => {
 
     assert.deepEqual(segments, [
         { type: 'equal', lineCount: 1 },
-        { type: 'added', lineCount: 1 }
+        { type: 'added', lineCount: 1, addedNonWhitespaceTextLength: 8 }
     ]);
 });
 
@@ -41,14 +45,11 @@ test('createLineDiffSegments still reports removed lines', () => {
 
     assert.deepEqual(segments, [
         { type: 'equal', lineCount: 1 },
-        { type: 'removed', lineCount: 1 }
+        { type: 'removed', lineCount: 1, removedNonWhitespaceTextLength: 8 }
     ]);
 });
 
-test('createLineDiffSegments treats a non-whitespace token change as a real change', () => {
-    // Quote-style normalization is NOT whitespace, so it must remain a real
-    // add/remove pair. Surviving this transformation is tracked in
-    // IMPROVEMENT_PLANS.md (token/AST-aware attribution).
+test('createLineDiffSegments keeps quote normalization as a real change without a formatter-aware language', () => {
     const before = "const x = 'a'";
     const after = 'const x = "a"';
 
@@ -57,8 +58,43 @@ test('createLineDiffSegments treats a non-whitespace token change as a real chan
     assert.notDeepEqual(segments, [{ type: 'equal', lineCount: 1 }]);
 });
 
+test('createLineDiffSegments treats TypeScript quote normalization as formatter-neutral', () => {
+    const before = "const x = 'a'\nconst y = 'b'";
+    const after = 'const x = "a";\nconst y = "b";';
+
+    const segments = createLineDiffSegments(before, after, { languageId: 'typescript' });
+
+    assert.deepEqual(segments, [{ type: 'equal', lineCount: 2 }]);
+});
+
+test('createLineDiffSegments treats TypeScript trailing comma normalization as formatter-neutral', () => {
+    const before = 'const values = [\n  first\n]';
+    const after = 'const values = [\n  first,\n];';
+
+    const segments = createLineDiffSegments(before, after, { languageId: 'typescript' });
+
+    assert.deepEqual(segments, [{ type: 'equal', lineCount: 3 }]);
+});
+
+test('createLineDiffSegments still reports genuine TypeScript token changes', () => {
+    const before = 'const x = "a";';
+    const after = 'const x = "b";';
+
+    const segments = createLineDiffSegments(before, after, { languageId: 'typescript' });
+
+    assert.deepEqual(segments, [
+        { type: 'removed', lineCount: 1, removedNonWhitespaceTextLength: 11 },
+        { type: 'added', lineCount: 1, addedNonWhitespaceTextLength: 11 }
+    ]);
+});
+
 test('areLinesEqualIgnoringWhitespace ignores all whitespace differences', () => {
     assert.equal(areLinesEqualIgnoringWhitespace('a b c', 'abc'), true);
     assert.equal(areLinesEqualIgnoringWhitespace('\tfoo( )', 'foo()'), true);
     assert.equal(areLinesEqualIgnoringWhitespace('foo', 'bar'), false);
+});
+
+test('areLinesEquivalentForAttribution is formatter-aware for TypeScript only', () => {
+    assert.equal(areLinesEquivalentForAttribution("const x = 'a'", 'const x = "a";', 'typescript'), true);
+    assert.equal(areLinesEquivalentForAttribution("const x = 'a'", 'const x = "a";'), false);
 });

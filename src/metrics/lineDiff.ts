@@ -2,34 +2,37 @@ import { diffArrays } from 'diff';
 
 import { LineDiffSegment } from './schema';
 
+type LineDiffOptions = {
+    languageId?: string | null;
+};
+
 /**
  * Computes logical line-level diff segments between two document snapshots.
  *
- * Lines are compared **ignoring all whitespace**, so that a formatter or linter
- * that only reflows indentation or spacing (for example Prettier re-indentation,
- * gofmt tab/space changes, or spacing around operators) produces `equal`
- * segments instead of `removed` + `added` pairs.
+ * Lines are compared using a conservative formatter-stable key, so common
+ * formatter output produces `equal` segments instead of `removed` + `added`
+ * pairs.
  *
  * That distinction matters for attribution: the rolling per-line attribution
  * model preserves the previous attribution for `equal` segments but reassigns
- * `added` segments to the current event's bucket. Without whitespace-insensitive
- * matching, a human-triggered formatter run would silently rewrite previously
- * AI-attributed lines to Human. Ignoring whitespace here keeps the rolling line
- * model consistent with the summary layer, which already diffs Git content with
- * `--ignore-all-space`.
- *
- * Note: this only neutralizes *whitespace* reformatting. Non-whitespace linter
- * rewrites (quote normalization, semicolon insertion, import sorting) still
- * surface as real changes; see IMPROVEMENT_PLANS.md.
+ * `added` segments to the current event's bucket. Without formatter-aware
+ * matching, a human-triggered linter run would silently rewrite previously
+ * AI-attributed lines to Human.
  */
-export function createLineDiffSegments(beforeText: string | undefined, afterText: string): LineDiffSegment[] {
+export function createLineDiffSegments(
+    beforeText: string | undefined,
+    afterText: string,
+    options: LineDiffOptions = {}
+): LineDiffSegment[] {
     const beforeLines = splitTextIntoLogicalLines(beforeText ?? '');
     const afterLines = splitTextIntoLogicalLines(afterText);
 
-    return diffArrays(beforeLines, afterLines, { comparator: areLinesEqualIgnoringWhitespace }).map((part) => ({
-        type: part.added ? 'added' : part.removed ? 'removed' : 'equal',
-        lineCount: part.count ?? part.value.length
-    }));
+    return diffArrays(beforeLines, afterLines, {
+        comparator: (left, right) => areLinesEquivalentForAttribution(left, right, options.languageId)
+    }).map((part) => createLineDiffSegment(
+        part.added ? 'added' : part.removed ? 'removed' : 'equal',
+        part.value
+    ));
 }
 
 export function splitTextIntoLogicalLines(text: string): string[] {
@@ -44,6 +47,59 @@ export function areLinesEqualIgnoringWhitespace(left: string, right: string): bo
     return stripAllWhitespace(left) === stripAllWhitespace(right);
 }
 
+export function areLinesEquivalentForAttribution(
+    left: string,
+    right: string,
+    languageId?: string | null
+): boolean {
+    if (areLinesEqualIgnoringWhitespace(left, right)) {
+        return true;
+    }
+
+    if (!shouldUseFormatterStableNormalization(languageId)) {
+        return false;
+    }
+
+    return createFormatterStableLineKey(left) === createFormatterStableLineKey(right);
+}
+
+function createLineDiffSegment(type: LineDiffSegment['type'], lines: string[]): LineDiffSegment {
+    const segment: LineDiffSegment = {
+        type,
+        lineCount: lines.length
+    };
+
+    if (type === 'added') {
+        segment.addedNonWhitespaceTextLength = sumNonWhitespaceTextLength(lines);
+    }
+    else if (type === 'removed') {
+        segment.removedNonWhitespaceTextLength = sumNonWhitespaceTextLength(lines);
+    }
+
+    return segment;
+}
+
 function stripAllWhitespace(line: string): string {
     return line.replace(/\s+/g, '');
+}
+
+function shouldUseFormatterStableNormalization(languageId: string | null | undefined): boolean {
+    return languageId === 'javascript'
+        || languageId === 'javascriptreact'
+        || languageId === 'typescript'
+        || languageId === 'typescriptreact';
+}
+
+function createFormatterStableLineKey(line: string): string {
+    const whitespaceFreeLine = stripAllWhitespace(line);
+    const quoteStableLine = normalizeStringLiteralDelimiters(whitespaceFreeLine);
+    return quoteStableLine.replace(/[;,]+$/u, '');
+}
+
+function normalizeStringLiteralDelimiters(line: string): string {
+    return line.replace(/(['"])((?:\\.|(?!\1).)*)\1/gu, (_match, _quote, body: string) => `"${body}"`);
+}
+
+function sumNonWhitespaceTextLength(lines: string[]): number {
+    return lines.reduce((sum, line) => sum + line.replace(/\s/gu, '').length, 0);
 }

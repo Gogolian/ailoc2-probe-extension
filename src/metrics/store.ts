@@ -485,26 +485,53 @@ export class RepoMetricsStore {
         record: WorkspaceFileMetricEvent
     ): void {
         rollingState.lastRecordedAt = record.recordedAt;
-        rollingState.latestSignal = record.signal;
         rollingState.deletedAt = null;
+        const attributionRelevantChangeMagnitude = this.getAttributionRelevantChangeMagnitude(record);
+        if (attributionRelevantChangeMagnitude > 0 || getAttributionBucketForSignal(record.signal) === null) {
+            rollingState.latestSignal = record.signal;
+        }
         this.applyLineDiffSegmentsToRollingState(
             rollingState,
             record.lineDiffSegments,
             getAttributionBucketForSignal(record.signal) ?? 'Unknown'
         );
 
-        if (SIGNAL_COUNTER_KEYS.includes(record.signal as typeof SIGNAL_COUNTER_KEYS[number])) {
+        if (attributionRelevantChangeMagnitude > 0
+            && SIGNAL_COUNTER_KEYS.includes(record.signal as typeof SIGNAL_COUNTER_KEYS[number])) {
             rollingState.signalCounters[record.signal] = (rollingState.signalCounters[record.signal] ?? 0) + 1;
         }
 
         const attributionBucket = getAttributionBucketForSignal(record.signal);
-        const changeMagnitude = record.totalInsertedTextLength + record.totalRemovedTextLength;
         if (attributionBucket === 'AI') {
-            rollingState.cumulativeAiChangeMagnitude += changeMagnitude;
+            rollingState.cumulativeAiChangeMagnitude += attributionRelevantChangeMagnitude;
         }
         else if (attributionBucket === 'Human') {
-            rollingState.cumulativeHumanChangeMagnitude += changeMagnitude;
+            rollingState.cumulativeHumanChangeMagnitude += attributionRelevantChangeMagnitude;
         }
+    }
+
+    private getAttributionRelevantChangeMagnitude(record: WorkspaceFileMetricEvent): number {
+        const authoredSegments = record.lineDiffSegments.filter((segment) => segment.type !== 'equal');
+        if (authoredSegments.length === 0) {
+            return 0;
+        }
+
+        const hasMissingSegmentWeight = authoredSegments.some((segment) => (
+            segment.type === 'added'
+                ? typeof segment.addedNonWhitespaceTextLength !== 'number'
+                : typeof segment.removedNonWhitespaceTextLength !== 'number'
+        ));
+        if (hasMissingSegmentWeight) {
+            return record.totalInsertedTextLength + record.totalRemovedTextLength;
+        }
+
+        return authoredSegments.reduce((sum, segment) => {
+            if (segment.type === 'added') {
+                return sum + (segment.addedNonWhitespaceTextLength ?? 0);
+            }
+
+            return sum + (segment.removedNonWhitespaceTextLength ?? 0);
+        }, 0);
     }
 
     private applyLifecycleEventToRollingState(

@@ -11,6 +11,7 @@ import {
     getRepoSummaryStatePath,
     getRollingStatePath
 } from '../metrics/pathing';
+import { createLineDiffSegments } from '../metrics/lineDiff';
 import { METRICS_SCHEMA_VERSION } from '../metrics/schema';
 import { RepoMetricsStore } from '../metrics/store';
 import { finalizeRepoCommit, prepareRepoCommitBaseline, refreshRepoHookSummary } from '../metrics/summary';
@@ -713,6 +714,109 @@ test('refreshRepoHookSummary attributes a staged small human file plus large AI 
     assert.ok(refreshed.summary.staged.aiPercentage > 98);
 });
 
+test('refreshRepoHookSummary keeps formatter-neutral staged new-file rewrites with their original author', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-formatted-new-file-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), '# seed\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    const metricsStore = new RepoMetricsStore('test-session', () => {});
+    const humanGitPath = 'src/human.ts';
+    const aiGitPath = 'src/ai.ts';
+    const humanRepoRelativePath = path.normalize(humanGitPath);
+    const aiRepoRelativePath = path.normalize(aiGitPath);
+    const humanAbsolutePath = path.join(repoRoot, humanRepoRelativePath);
+    const aiAbsolutePath = path.join(repoRoot, aiRepoRelativePath);
+    const humanText = [
+        'export const humanValue = () => {',
+        "  const owner = 'human'",
+        '  return owner',
+        '}',
+        ''
+    ].join('\n');
+    const aiBeforeFormatText = [
+        'export const aiValue=()=>{',
+        "const owner='ai'",
+        'return owner',
+        '}',
+        ''
+    ].join('\n');
+    const aiAfterFormatText = [
+        'export const aiValue = () => {',
+        '  const owner = "ai";',
+        '  return owner;',
+        '};',
+        ''
+    ].join('\n');
+
+    fs.mkdirSync(path.dirname(humanAbsolutePath), { recursive: true });
+    fs.writeFileSync(humanAbsolutePath, humanText, 'utf8');
+    queueSyntheticEditMetric(
+        metricsStore,
+        repoRoot,
+        humanRepoRelativePath,
+        humanAbsolutePath,
+        '',
+        humanText,
+        'LikelyHumanOrRegularEditorEdit',
+        'event-human-file'
+    );
+    await metricsStore.flushRepo(repoRoot);
+    runGit(repoRoot, ['add', humanGitPath]);
+
+    fs.writeFileSync(aiAbsolutePath, aiBeforeFormatText, 'utf8');
+    queueSyntheticEditMetric(
+        metricsStore,
+        repoRoot,
+        aiRepoRelativePath,
+        aiAbsolutePath,
+        '',
+        aiBeforeFormatText,
+        'ProbableAIApplyToWorkspaceFile',
+        'event-ai-file'
+    );
+    await metricsStore.flushRepo(repoRoot);
+
+    fs.writeFileSync(aiAbsolutePath, aiAfterFormatText, 'utf8');
+    queueSyntheticEditMetric(
+        metricsStore,
+        repoRoot,
+        aiRepoRelativePath,
+        aiAbsolutePath,
+        aiBeforeFormatText,
+        aiAfterFormatText,
+        'LikelyHumanOrRegularEditorEdit',
+        'event-ai-file-formatted'
+    );
+    await metricsStore.flushRepo(repoRoot);
+    runGit(repoRoot, ['add', aiGitPath]);
+
+    const aiRollingState = JSON.parse(fs.readFileSync(getRollingStatePath(repoRoot, aiRepoRelativePath), 'utf8')) as {
+        cumulativeAiChangeMagnitude: number;
+        cumulativeHumanChangeMagnitude: number;
+    };
+    assert.equal(aiRollingState.cumulativeAiChangeMagnitude, nonWhitespaceWeight(aiBeforeFormatText));
+    assert.equal(aiRollingState.cumulativeHumanChangeMagnitude, 0);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    const expectedAiWeight = nonWhitespaceWeight(aiAfterFormatText);
+    const expectedHumanWeight = nonWhitespaceWeight(humanText);
+    const expectedAiPercentage = (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100;
+
+    assert.equal(refreshed.summary.isGitSummaryAvailable, true);
+    assert.equal(refreshed.summary.staged.changedFileCount, 2);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 2);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
+    assert.ok(refreshed.summary.staged.aiPercentage > 45);
+    assert.ok(refreshed.summary.staged.humanPercentage < 55);
+});
+
 function runGit(repoRoot: string, args: string[]): string {
     return childProcess.execFileSync('git', args, {
         cwd: repoRoot,
@@ -783,6 +887,54 @@ function queueSyntheticWorkspaceMetric(
                 lineCount
             }
         ],
+        chatCorrelation: null,
+        saveCorrelation: null
+    });
+}
+
+function queueSyntheticEditMetric(
+    metricsStore: RepoMetricsStore,
+    repoRoot: string,
+    repoRelativePath: string,
+    absoluteFilePath: string,
+    beforeText: string,
+    afterText: string,
+    signal: string,
+    eventId: string
+): void {
+    metricsStore.queueWorkspaceFileMetric({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'workspace-file-metric',
+        eventId,
+        recordedAt: new Date().toISOString(),
+        extensionSessionId: 'test-session',
+        repoRoot,
+        repoRelativePath,
+        logicalPath: absoluteFilePath,
+        documentCategory: 'WorkspaceFile',
+        signal,
+        explanation: 'Synthetic before/after edit for formatter-neutral attribution coverage.',
+        replacementRatio: beforeText.length > 0
+            ? Math.max(beforeText.length, afterText.length) / beforeText.length
+            : 1,
+        totalInsertedTextLength: afterText.length,
+        totalRemovedTextLength: beforeText.length,
+        isWholeDocumentReplace: beforeText.length === 0,
+        hasRecentSnapshotActivity: signal === 'ProbableAIApplyToWorkspaceFile',
+        snapshotRequestIds: signal === 'ProbableAIApplyToWorkspaceFile' ? ['request-1'] : [],
+        requestIds: signal === 'ProbableAIApplyToWorkspaceFile' ? ['request-1'] : [],
+        lastChatScheme: signal === 'ProbableAIApplyToWorkspaceFile' ? 'chat-editing-snapshot-text-model' : null,
+        snapshotAgeMs: signal === 'ProbableAIApplyToWorkspaceFile' ? 0 : null,
+        changeReason: 'RegularEditOrUnknown',
+        documentVersion: 2,
+        beforeHash: beforeText.length > 0 ? 'before-hash' : null,
+        afterHash: 'after-hash',
+        beforeCharLength: beforeText.length,
+        afterCharLength: afterText.length,
+        lineCount: countSyntheticTextLines(afterText),
+        languageId: 'typescript',
+        isDirty: false,
+        lineDiffSegments: createLineDiffSegments(beforeText, afterText, { languageId: 'typescript' }),
         chatCorrelation: null,
         saveCorrelation: null
     });

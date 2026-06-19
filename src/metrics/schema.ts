@@ -25,6 +25,8 @@ export type LineAttribution = AttributionBucket | 'Unknown';
 export type LineDiffSegment = {
     type: 'equal' | 'added' | 'removed';
     lineCount: number;
+    addedNonWhitespaceTextLength?: number;
+    removedNonWhitespaceTextLength?: number;
 };
 
 export type LineAttributionSpan = {

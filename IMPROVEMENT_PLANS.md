@@ -26,9 +26,9 @@ A linter/formatter run damages attribution in several distinct ways:
 
 | # | Linter behavior | Where it hurts | Status |
 |---|---|---|---|
-| A | Whitespace / indentation reflow (Prettier reindent, `gofmt`, spaces around operators) | Rolling state: reflowed lines were rewritten to `Human` | **Fixed now** (whitespace-insensitive line diff) |
+| A | Whitespace / indentation reflow (Prettier reindent, `gofmt`, spaces around operators) | Rolling state: reflowed lines were rewritten to `Human` | **Fixed** (formatter-neutral line diff) |
 | B | Whitespace-only churn in the committed diff | Summary percentages | Already handled (`--ignore-all-space` + non-whitespace weighting) |
-| C | Non-whitespace token rewrites (single→double quotes, semicolon insertion, `as const`, trailing commas) | Rolling state **and** summary: lines look like real human edits | **Open** |
+| C | Non-whitespace token rewrites (single→double quotes, semicolon insertion, trailing commas) | Rolling state **and** new-file summary: lines/magnitudes looked like real human edits | **Partially fixed** for TypeScript/JavaScript quote style, trailing semicolons, and trailing commas |
 | D | Line moves / reordering (import sorting, member sorting) | Rolling state: positional line model misaligns; moved AI lines look removed+added | **Open** |
 | E | Formatter runs *outside* the editor (`eslint --fix` / `prettier -w` on CLI, pre-commit hooks) | Never observed at edit time; only seen as a Git diff at commit | **Open** |
 | F | Formatter output scores as "more AI-like" by style-consistency heuristics | Any future fingerprint-based scoring | Watch-out (see brela note) |
@@ -39,41 +39,48 @@ A linter/formatter run damages attribution in several distinct ways:
 
 - **Fixed case (A):** AI writes 2 lines, human writes 2 lines, formatter reindents
   the whole file → attribution stays `AI 2 / Human 2`.
-- **Known gap (C):** AI writes 2 lines, a quote-normalization rewrite is applied →
-  attribution currently flips to `Human 2`. The test characterizes today's loss so
-  it becomes a regression signal once C is fixed.
+- **Fixed slice (C):** AI writes 2 lines, a quote/semicolon rewrite is applied →
+  attribution stays `AI 2` and the formatter event contributes zero Human magnitude.
 
 ---
 
 ## 2. What was fixed in this pass
 
-**Whitespace-insensitive rolling-state line diffing** (case A).
+**Formatter-neutral rolling-state line diffing and magnitude accounting** (cases A and part of C).
 
 - New pure module `src/metrics/lineDiff.ts` computes `lineDiffSegments` by
-  comparing logical lines with all whitespace stripped (a `diffArrays`
-  `comparator`). Pure reflow becomes `equal` segments, so the rolling per-line
-  model preserves prior attribution instead of reassigning reflowed lines to the
-  editing event's bucket.
+  comparing logical lines with formatter-neutral trivia stripped (a `diffArrays`
+  `comparator`). Pure reflow, plus conservative TypeScript/JavaScript quote,
+  trailing-semicolon, and trailing-comma rewrites, become `equal` segments, so the
+  rolling per-line model preserves prior attribution instead of reassigning
+  reflowed lines to the editing event's bucket.
+- `LineDiffSegment` records added/removed non-whitespace weights. Rolling state
+  now increments cumulative AI/Human magnitude only for attribution-relevant
+  added/removed segments. Formatter-only `equal` segments add zero magnitude and
+  do not advance the latest author signal.
 - This aligns the rolling-state layer with the summary layer, which already uses
   `git diff --ignore-all-space`.
 - Tests: `src/test/lineDiff.test.ts` (unit) and `src/test/linterAttribution.test.ts`
-  (end-to-end through the store).
+  (end-to-end through the store), plus `src/test/commitBaseline.test.ts` for the
+  staged-new-file summary regression.
 - The IntelliJ plugin needs the **same** change; see §4.
 
-This is deliberately the conservative, low-risk slice. Whitespace neutrality
-cannot produce a false "equal" between two semantically different lines, because
-real token differences are still compared.
+This is deliberately the conservative, low-risk slice. Real token differences are
+still compared, and formatter-style token normalization is gated to TypeScript and
+JavaScript.
 
 ---
 
 ## 3. Deferred work (the harder, higher-value parts)
 
-### 3.1 Token-normalized line matching (case C)
+### 3.1 Broader token-normalized line matching (remaining case C)
 
 Compare lines after a language-aware normalization pass, not just whitespace
 stripping, when deciding whether an `added` line is really a reformat of a
-`removed` line. Candidate normalizations: quote-style, trailing semicolons,
-trailing commas, simple equivalent-token spacing.
+`removed` line. Quote-style, trailing semicolons, and trailing commas are already
+handled conservatively for TypeScript/JavaScript. Remaining candidates include
+formatter-produced equivalent-token rewrites such as `as const` insertion or other
+language-specific trivia that should not imply authorship.
 
 - **Risk:** over-normalization can mask a genuine human edit. Keep it conservative
   and ideally per-language (gate by `languageId`).
@@ -136,9 +143,9 @@ invert the very result we care about.
 ## 4. IntelliJ parity
 
 The IntelliJ plugin under `IntelliJ/` computes its own staged AI percentage and
-maintains its own metrics; it must receive the same whitespace-insensitive line
-matching (and, later, §3.1–§3.4). Track this so the two plugins do not diverge in
-how they treat formatter churn.
+maintains its own metrics; it must receive the same formatter-neutral line
+matching and magnitude accounting. Track this so the two plugins do not diverge
+in how they treat formatter churn.
 
 ---
 
@@ -147,18 +154,16 @@ how they treat formatter churn.
 The "does our approach survive linting?" question should be answered by tests, not
 by hand. Current coverage:
 
-- `src/test/lineDiff.test.ts` — comparator behavior (reflow vs real change).
-- `src/test/linterAttribution.test.ts` — end-to-end store invariant for case A,
-  plus a characterization test pinning the case-C gap.
+- `src/test/lineDiff.test.ts` — comparator behavior (reflow, quote/semicolon/trailing-comma normalization, and real token changes).
+- `src/test/linterAttribution.test.ts` — end-to-end store invariants proving formatter-neutral rewrites preserve AI and Human attribution.
+- `src/test/commitBaseline.test.ts` — real Git staged-summary regression for a formatted AI-authored new file staged alongside a human-authored file.
 
 Planned additions as the deferred work lands:
 
 - A scenario matrix: for each transformation (reindent, quote swap, semicolon
   insertion, import sort, CLI `eslint --fix`), assert the AI/Human split is stable
   across a realistic "AI 50% / human 50%" file.
-- A commit-level end-to-end test (real Git repo, like `commitBaseline.test.ts`)
-  that stages a formatter rewrite and asserts the reported `(AI xx.xx%)` is
-  unchanged.
+- Commit-level scenarios for moved/reordered lines and out-of-editor formatter runs once those deferred items land.
 
 When a deferred item is implemented, tighten the corresponding characterization
 test from "documents the loss" to "asserts attribution survived."

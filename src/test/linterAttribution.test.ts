@@ -56,6 +56,10 @@ test('whitespace-only reformat preserves the AI/Human line attribution split', a
         { attribution: 'AI', lineCount: 2 },
         { attribution: 'Human', lineCount: 2 }
     ]);
+    assert.deepEqual(readMagnitudes(repoRoot, repoRelativePath), {
+        ai: 16,
+        human: 12
+    });
 
     // A formatter reindents the whole file and adds spaces around operators.
     // It is observed as a regular (human) edit because no AI context is active.
@@ -71,14 +75,13 @@ test('whitespace-only reformat preserves the AI/Human line attribution split', a
         { attribution: 'AI', lineCount: 2 },
         { attribution: 'Human', lineCount: 2 }
     ]);
+    assert.deepEqual(readMagnitudes(repoRoot, repoRelativePath), {
+        ai: 16,
+        human: 12
+    });
 });
 
-test('known gap: a non-whitespace linter rewrite still moves attribution', async () => {
-    // This is a CHARACTERIZATION test of a known limitation, not desired
-    // behavior. Quote normalization (single -> double quotes) is not whitespace,
-    // so today it is scored as a real human edit and steals AI attribution.
-    // When token/AST-aware attribution lands (see IMPROVEMENT_PLANS.md), the AI
-    // line should survive and this assertion will need to be tightened.
+test('quote and semicolon linter rewrites preserve AI line attribution and magnitude', async () => {
     const { repoRoot, repoRelativePath, store, queueEdit } = createScenario();
 
     queueEdit('ProbableAIApplyToWorkspaceFile', '', "const x = 'a'\nconst y = 'b'");
@@ -91,14 +94,43 @@ test('known gap: a non-whitespace linter rewrite still moves attribution', async
     queueEdit(
         'LikelyHumanOrRegularEditorEdit',
         "const x = 'a'\nconst y = 'b'",
-        'const x = "a"\nconst y = "b"'
+        'const x = "a";\nconst y = "b";'
     );
     await store.flushRepo(repoRoot);
 
-    // Documents the current loss: the AI lines flip to Human after the rewrite.
+    assert.deepEqual(readSpans(repoRoot, repoRelativePath), [
+        { attribution: 'AI', lineCount: 2 }
+    ]);
+    assert.deepEqual(readMagnitudes(repoRoot, repoRelativePath), {
+        ai: 20,
+        human: 0
+    });
+});
+
+test('quote and semicolon linter rewrites preserve human line attribution and magnitude', async () => {
+    const { repoRoot, repoRelativePath, store, queueEdit } = createScenario();
+
+    queueEdit('LikelyHumanOrRegularEditorEdit', '', "const x = 'a'\nconst y = 'b'");
+    await store.flushRepo(repoRoot);
+
     assert.deepEqual(readSpans(repoRoot, repoRelativePath), [
         { attribution: 'Human', lineCount: 2 }
     ]);
+
+    queueEdit(
+        'ProbableAIApplyToWorkspaceFile',
+        "const x = 'a'\nconst y = 'b'",
+        'const x = "a";\nconst y = "b";'
+    );
+    await store.flushRepo(repoRoot);
+
+    assert.deepEqual(readSpans(repoRoot, repoRelativePath), [
+        { attribution: 'Human', lineCount: 2 }
+    ]);
+    assert.deepEqual(readMagnitudes(repoRoot, repoRelativePath), {
+        ai: 0,
+        human: 20
+    });
 });
 
 function createScenario(): {
@@ -144,7 +176,7 @@ function createScenario(): {
             lineCount: after.split('\n').length,
             languageId: 'typescript',
             isDirty: false,
-            lineDiffSegments: createLineDiffSegments(before, after),
+            lineDiffSegments: createLineDiffSegments(before, after, { languageId: 'typescript' }),
             chatCorrelation: null,
             saveCorrelation: null
         };
@@ -155,7 +187,18 @@ function createScenario(): {
 }
 
 function readSpans(repoRoot: string, repoRelativePath: string): LineAttributionSpan[] {
+    return readRollingState(repoRoot, repoRelativePath).lineAttributionSpans;
+}
+
+function readMagnitudes(repoRoot: string, repoRelativePath: string): { ai: number; human: number; } {
+    const rollingState = readRollingState(repoRoot, repoRelativePath);
+    return {
+        ai: rollingState.cumulativeAiChangeMagnitude,
+        human: rollingState.cumulativeHumanChangeMagnitude
+    };
+}
+
+function readRollingState(repoRoot: string, repoRelativePath: string): FileRollingState {
     const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
-    const rollingState = JSON.parse(fs.readFileSync(rollingStatePath, 'utf8')) as FileRollingState;
-    return rollingState.lineAttributionSpans;
+    return JSON.parse(fs.readFileSync(rollingStatePath, 'utf8')) as FileRollingState;
 }

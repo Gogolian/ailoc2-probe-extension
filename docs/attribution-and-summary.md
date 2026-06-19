@@ -159,11 +159,13 @@ The record stores:
 
 ### What “change magnitude” means here
 
-For AI and human buckets, the cumulative magnitude is currently:
+For AI and human buckets, the cumulative magnitude is based on attribution-relevant changed content:
 
-`totalInsertedTextLength + totalRemovedTextLength`
+- `added` line-diff segments contribute their added non-whitespace length
+- `removed` line-diff segments contribute their removed non-whitespace length
+- `equal` segments contribute zero new AI/Human magnitude
 
-for any persisted event whose signal maps to that attribution bucket.
+Records written by older builds that do not contain segment-level weights still fall back to `totalInsertedTextLength + totalRemovedTextLength` when they have real added/removed segments.
 
 This is a pragmatic scoring magnitude, not a statement that every inserted and removed character maps neatly to final authored ownership.
 
@@ -189,13 +191,15 @@ The update rules are straightforward:
 
 This preserves useful locality without pretending that line identity survives every structural transformation.
 
-### Whitespace-insensitive line diffing
+### Formatter-neutral line diffing
 
-The `lineDiffSegments` are computed by `src/metrics/lineDiff.ts`, which compares logical lines **ignoring all whitespace**. A line that only changes by indentation or spacing (for example a Prettier re-indent, a `gofmt` tab/space change, or spaces added around operators) is reported as an `equal` segment rather than a `removed` + `added` pair.
+The `lineDiffSegments` are computed by `src/metrics/lineDiff.ts`, which compares logical lines with formatter-neutral trivia removed. A line that only changes by indentation or spacing (for example a Prettier re-indent, a `gofmt` tab/space change, or spaces added around operators) is reported as an `equal` segment rather than a `removed` + `added` pair.
 
-That matters for the linter problem. Without whitespace-insensitive matching, a human-triggered formatter run is classified as a regular human edit and would rewrite every reflowed line — including previously AI-attributed lines — to `Human`, silently deflating the AI percentage. Ignoring whitespace at the rolling-state layer keeps the per-line model consistent with the summary layer, which already diffs Git content with `--ignore-all-space`.
+For TypeScript and JavaScript files, the formatter-neutral key also treats common quote-style changes, trailing semicolons, and trailing commas as equivalent. That covers common formatter/linter rewrites such as single-to-double quote normalization or semicolon insertion.
 
-This only neutralizes *whitespace* reformatting. Non-whitespace linter rewrites — quote normalization, semicolon insertion, import sorting — are still scored as real changes and can still move attribution. Closing that gap is tracked in [`IMPROVEMENT_PLANS.md`](../IMPROVEMENT_PLANS.md).
+That matters for the linter problem. Without formatter-neutral matching, a human-triggered formatter run is classified as a regular human edit and would rewrite every reflowed line — including previously AI-attributed lines — to `Human`, silently deflating the AI percentage. Equal formatter segments preserve the previous line attribution and add zero new AI/Human magnitude, so formatter output does not become authorship.
+
+Structural rewrites such as import sorting, member reordering, and formatter runs outside the editor are still tracked as known gaps in [`IMPROVEMENT_PLANS.md`](../IMPROVEMENT_PLANS.md).
 
 ## Save checkpoints
 
@@ -245,7 +249,7 @@ New-file scoring deliberately prefers aggregate attribution over line spans. Fir
 
 Changed lines are weighted by their non-whitespace character count. Whitespace-only hunks are ignored by the Git diff inputs, and blank or whitespace-only changed lines contribute zero weight if they are still present in a diff.
 
-This deliberately keeps final percentages formatting-neutral: whitespace inserted by formatters or linters is not credited to AI or Human. The current simplification applies to all tracked file types, including whitespace-significant languages, and non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
+This deliberately keeps final percentages formatting-neutral: formatter/linter trivia is not credited to AI or Human. The whitespace-neutral simplification applies to all tracked file types, including whitespace-significant languages. TypeScript and JavaScript also get conservative token-style neutrality for quote style, trailing semicolons, and trailing commas. Structural rewrites such as import sorting still count as normal changes until move-tolerant attribution lands.
 
 ## Prepared commit baseline
 

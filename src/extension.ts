@@ -1779,7 +1779,8 @@ function createWorkspaceFileMetricEvent(input: {
         isDirty: input.document.isDirty,
         lineDiffSegments: createLineDiffSegments(
             input.beforeSnapshot?.text,
-            input.afterSnapshot?.text ?? input.document.getText()
+            input.afterSnapshot?.text ?? input.document.getText(),
+            { languageId: input.document.languageId }
         ),
         chatCorrelation: input.recentChatEditCorrelation ? { ...input.recentChatEditCorrelation } : null,
         saveCorrelation: input.saveCorrelation
