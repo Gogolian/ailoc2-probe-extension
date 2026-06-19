@@ -24,8 +24,8 @@ The current prototype uses a few hard-coded timing and buffering thresholds:
 | recent snapshot threshold | `1500 ms` | How fresh snapshot activity must be to count as “recent AI apply evidence.” |
 | recent will-save window | `5000 ms` | How long a `willSave` record can be matched to a later `didSave`. |
 | small localized edit threshold | single change, `<= 8` inserted chars, `<= 8` removed chars | Used to bias tiny edits toward human when chat context exists. |
-| bulk insert threshold | `>= 400` inserted chars and `>= 8` inserted lines | Diagnostic flag only; bulk size alone is not AI evidence. |
-| bulk expansion threshold | `>= 400` inserted chars, `>= 8` inserted lines, and inserted chars at least `4x` removed chars | Diagnostic flag only; bulk size alone is not AI evidence. |
+| bulk insert threshold | `>= 400` inserted chars and `>= 8` inserted lines | Counts as probable AI only when recent chat-editing context exists; otherwise diagnostic only. |
+| bulk expansion threshold | `>= 400` inserted chars, `>= 8` inserted lines, and inserted chars at least `4x` removed chars | Counts as probable AI only when recent chat-editing context exists; otherwise diagnostic only. |
 | write debounce | `350 ms` | How long rolling-state writes are coalesced per repo queue. |
 | max save checkpoints | `64` | How many saved attribution checkpoints are retained per tracked file. |
 
@@ -92,8 +92,9 @@ The classification rules are intentionally simple and ordered.
 3. else if the document is a real workspace file, there is very recent snapshot activity, and the file was replaced wholesale, classify it as `ProbableAIApplyToWorkspaceFile`
 4. else if the document is a real workspace file, there is recent chat context, and the edit is tiny and localized, classify it as `LikelyHumanEditWhileChatSessionOpen`
 5. else if the document is a real workspace file and there is recent snapshot activity, classify it as `PossibleAIApplyToWorkspaceFile`
-6. else if the document is a real workspace file, classify it as `LikelyHumanOrRegularEditorEdit`
-7. otherwise classify it as `OtherVirtualOrNonWorkspaceDocument`
+6. else if the document is a real workspace file, there is recent chat context, and the edit is a large one-shot insertion or expansion, classify it as `ProbableAIBulkWorkspaceEdit`
+7. else if the document is a real workspace file, classify it as `LikelyHumanOrRegularEditorEdit`
+8. otherwise classify it as `OtherVirtualOrNonWorkspaceDocument`
 
 The main idea is to keep the strongest AI bucket reserved for a specific sequence: snapshot evidence followed quickly by a workspace-file change, especially a whole-document replacement.
 Large paste-like edits without chat-editing evidence stay in the human/regular bucket; size alone is not authorship evidence.

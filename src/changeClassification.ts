@@ -42,6 +42,13 @@ export function classifyWorkspaceFileChange(input: WorkspaceFileChangeClassifica
         };
     }
 
+    if (input.hasRecentChatCorrelation && (input.isLargeBulkInsertion || input.isLargeBulkExpansion)) {
+        return {
+            signal: 'ProbableAIBulkWorkspaceEdit',
+            explanation: 'A large workspace-file edit occurred with recent chat-editing context but without stronger snapshot metadata.'
+        };
+    }
+
     if (input.isLargeBulkInsertion || input.isLargeBulkExpansion) {
         return {
             signal: 'LikelyHumanOrRegularEditorEdit',

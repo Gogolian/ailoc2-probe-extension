@@ -186,7 +186,7 @@ your-repo/
 The current heuristic is intentionally conservative.
 
 - The **strongest AI signal** is recent `chat-editing-snapshot-text-model` activity followed almost immediately by a workspace-file change — especially a whole-document replacement.
-- Large one-shot multi-line insertions or expansions without chat-editing evidence are treated as regular human/editor activity. Size alone is not enough to call a paste AI.
+- Large one-shot multi-line insertions or expansions require recent chat-editing context to count as probable AI bulk edits. Size alone is not enough to call a paste AI.
 - A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
 - Zero-content change events are filtered out as lifecycle noise.
 - Unknown or unattributed slices are kept out of the headline percentage when possible instead of being quietly counted as AI.
@@ -197,7 +197,7 @@ The current heuristic is intentionally conservative.
 | --- | --- | --- |
 | `ProbableAIApplyToWorkspaceFile` | Strong evidence of AI apply to a real file after recent snapshot activity. | AI |
 | `PossibleAIApplyToWorkspaceFile` | Some AI-like context exists, but the change is less decisive. | AI |
-| `ProbableAIBulkWorkspaceEdit` | Historical/explicit bulk-AI signal retained for existing metrics; live classification no longer emits it from size alone. | AI |
+| `ProbableAIBulkWorkspaceEdit` | Large one-shot workspace-file insertion or expansion with recent chat-editing context but without stronger snapshot metadata. | AI |
 | `LikelyHumanEditWhileChatSessionOpen` | Small manual edit while a chat session is active. | Human |
 | `LikelyHumanOrRegularEditorEdit` | Ordinary workspace-file edit without matching chat-editing context. | Human |
 

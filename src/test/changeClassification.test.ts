@@ -31,6 +31,34 @@ test('large bulk expansion without chat evidence is treated as human paste', () 
     assert.equal(classification.signal, 'LikelyHumanOrRegularEditorEdit');
 });
 
+test('large bulk insertion with chat evidence is treated as probable AI bulk edit', () => {
+    const classification = classifyWorkspaceFileChange({
+        isNoOp: false,
+        isWholeDocumentReplace: false,
+        isSmallLocalizedEdit: false,
+        isLargeBulkInsertion: true,
+        isLargeBulkExpansion: false,
+        hasRecentChatCorrelation: true,
+        hasRecentSnapshotActivity: false
+    });
+
+    assert.equal(classification.signal, 'ProbableAIBulkWorkspaceEdit');
+});
+
+test('large bulk expansion with chat evidence is treated as probable AI bulk edit', () => {
+    const classification = classifyWorkspaceFileChange({
+        isNoOp: false,
+        isWholeDocumentReplace: false,
+        isSmallLocalizedEdit: false,
+        isLargeBulkInsertion: false,
+        isLargeBulkExpansion: true,
+        hasRecentChatCorrelation: true,
+        hasRecentSnapshotActivity: false
+    });
+
+    assert.equal(classification.signal, 'ProbableAIBulkWorkspaceEdit');
+});
+
 test('whole-file replacement with recent snapshot remains probable AI apply', () => {
     const classification = classifyWorkspaceFileChange({
         isNoOp: false,
