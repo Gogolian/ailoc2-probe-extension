@@ -186,6 +186,7 @@ your-repo/
 The current heuristic is intentionally conservative.
 
 - The **strongest AI signal** is recent `chat-editing-snapshot-text-model` activity followed almost immediately by a workspace-file change — especially a whole-document replacement.
+- Large one-shot multi-line insertions or expansions are treated as probable AI bulk edits when stronger chat metadata is missing.
 - A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
 - Zero-content change events are filtered out as lifecycle noise.
 - Unknown or unattributed slices are kept out of the headline percentage when possible instead of being quietly counted as AI.
@@ -196,12 +197,13 @@ The current heuristic is intentionally conservative.
 | --- | --- | --- |
 | `ProbableAIApplyToWorkspaceFile` | Strong evidence of AI apply to a real file after recent snapshot activity. | AI |
 | `PossibleAIApplyToWorkspaceFile` | Some AI-like context exists, but the change is less decisive. | AI |
+| `ProbableAIBulkWorkspaceEdit` | A large one-shot workspace-file insertion or expansion without stronger chat metadata. | AI |
 | `LikelyHumanEditWhileChatSessionOpen` | Small manual edit while a chat session is active. | Human |
 | `LikelyHumanOrRegularEditorEdit` | Ordinary workspace-file edit without matching chat-editing context. | Human |
 
 ### How the summary is computed
 
-AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Final percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. This simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
+AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Final percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
 
 ## Current limitations
 
@@ -211,6 +213,7 @@ This project is already useful, but it is not pretending to be magic.
 - The strongest support is for VS Code chat-editing apply flows.
 - Edits made outside VS Code — or while the extension is inactive — are not observed directly at creation time.
 - Some AI-assisted changes may still look human or unknown if the editor does not expose a distinct enough signal.
+- Large manual paste operations may look like AI bulk edits until richer provenance signals are available.
 - `(AI unavailable)` means summary generation or hook runtime fallback kicked in; it does **not** always mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
 - You can also add repo-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.

@@ -24,6 +24,8 @@ The current prototype uses a few hard-coded timing and buffering thresholds:
 | recent snapshot threshold | `1500 ms` | How fresh snapshot activity must be to count as “recent AI apply evidence.” |
 | recent will-save window | `5000 ms` | How long a `willSave` record can be matched to a later `didSave`. |
 | small localized edit threshold | single change, `<= 8` inserted chars, `<= 8` removed chars | Used to bias tiny edits toward human when chat context exists. |
+| bulk AI insert threshold | `>= 400` inserted chars and `>= 8` inserted lines | Used to catch large one-shot generated inserts when chat metadata is missing. |
+| bulk AI expansion threshold | `>= 400` inserted chars, `>= 8` inserted lines, and inserted chars at least `4x` removed chars | Used to catch large generated expansions when chat metadata is missing. |
 | write debounce | `350 ms` | How long rolling-state writes are coalesced per repo queue. |
 | max save checkpoints | `64` | How many saved attribution checkpoints are retained per tracked file. |
 
@@ -70,9 +72,13 @@ This context is not persisted directly as a repo artifact. It exists to help cla
 | --- | --- |
 | `totalInsertedTextLength` | Sum of inserted text lengths across content changes. |
 | `totalRemovedTextLength` | Sum of removed lengths across content changes. |
+| `totalInsertedLineCount` | Sum of inserted logical lines across content changes. |
+| `totalRemovedLineCount` | Sum of removed logical lines across content changes. |
 | `isNoOp` | `true` when the event has zero content changes. |
 | `isWholeDocumentReplace` | `true` when one change replaces the entire previous document text. |
 | `isSmallLocalizedEdit` | `true` for a single tiny change that looks more like manual editing than an AI apply. |
+| `isLargeBulkInsertion` | `true` when a large multi-line insert arrives in one event. |
+| `isLargeBulkExpansion` | `true` when a large multi-line expansion dwarfs the removed content. |
 | `replacementRatio` | Ratio of the larger insert/remove size to the event baseline size. |
 
 These stats are compact enough to persist later but informative enough to drive heuristics now.
@@ -86,8 +92,9 @@ The classification rules are intentionally simple and ordered.
 3. else if the document is a real workspace file, there is very recent snapshot activity, and the file was replaced wholesale, classify it as `ProbableAIApplyToWorkspaceFile`
 4. else if the document is a real workspace file, there is recent chat context, and the edit is tiny and localized, classify it as `LikelyHumanEditWhileChatSessionOpen`
 5. else if the document is a real workspace file and there is recent snapshot activity, classify it as `PossibleAIApplyToWorkspaceFile`
-6. else if the document is a real workspace file, classify it as `LikelyHumanOrRegularEditorEdit`
-7. otherwise classify it as `OtherVirtualOrNonWorkspaceDocument`
+6. else if the document is a real workspace file and the edit is a large one-shot insertion or expansion, classify it as `ProbableAIBulkWorkspaceEdit`
+7. else if the document is a real workspace file, classify it as `LikelyHumanOrRegularEditorEdit`
+8. otherwise classify it as `OtherVirtualOrNonWorkspaceDocument`
 
 The main idea is to keep the strongest AI bucket reserved for a specific sequence: snapshot evidence followed quickly by a workspace-file change, especially a whole-document replacement.
 
@@ -134,6 +141,7 @@ The record stores:
   "signalCounters": {
     "ProbableAIApplyToWorkspaceFile": 1,
     "PossibleAIApplyToWorkspaceFile": 0,
+    "ProbableAIBulkWorkspaceEdit": 0,
     "LikelyHumanEditWhileChatSessionOpen": 2,
     "LikelyHumanOrRegularEditorEdit": 5
   },
@@ -225,10 +233,13 @@ At a high level, the summary logic does this for each relevant repo-relative pat
 1. read the rolling state for the file
 2. derive the current aggregate attribution by subtracting the clean baseline from cumulative magnitudes
 3. try to derive a staged checkpoint attribution by matching the index blob OID to a save checkpoint
-4. if changed-line attribution is possible, score only the changed line ranges using line-attribution spans
-5. otherwise fall back to aggregate AI vs human magnitudes for that file
-6. accumulate weighted changed-line totals into staged and unstaged slice summaries
-7. convert accumulated weighted totals into percentages
+4. for newly added files, score the whole new-file diff using aggregate AI vs human magnitudes
+5. if changed-line attribution is possible for existing files, score only the changed line ranges using line-attribution spans
+6. otherwise fall back to aggregate AI vs human magnitudes for that file
+7. accumulate weighted changed-line totals into staged and unstaged slice summaries
+8. convert accumulated weighted totals into percentages
+
+New-file scoring deliberately prefers aggregate attribution over line spans. First-file creation can generate stale or noisy line spans when an older extension build missed the initial AI context. For historical states with a large human-only initial checkpoint followed by AI-dominant evidence, the summary marks fallback attribution and treats the new file as AI-dominant instead of requiring the user to delete `.ailoc2-metrics`.
 
 ## Line weighting
 
@@ -316,6 +327,7 @@ The current implementation has several important blind spots:
 
 - AI tools that do not expose distinguishable chat-editing signals may look human or unknown
 - edits made outside VS Code are not observed at edit time
+- large manual paste operations may look like AI bulk edits
 - structural operations such as line moves and large refactors do not preserve perfect per-line identity
 - rename handling preserves file continuity structurally, but not a perfect semantic ownership model
 - `.gitignore` and metrics artifacts are intentionally excluded from tracking

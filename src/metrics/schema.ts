@@ -4,7 +4,8 @@ export const FILE_STATE_SUFFIX = '.metrics.json';
 
 export const AI_SIGNAL_KEYS = [
     'ProbableAIApplyToWorkspaceFile',
-    'PossibleAIApplyToWorkspaceFile'
+    'PossibleAIApplyToWorkspaceFile',
+    'ProbableAIBulkWorkspaceEdit'
 ] as const;
 
 export const HUMAN_SIGNAL_KEYS = [

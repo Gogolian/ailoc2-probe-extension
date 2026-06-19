@@ -426,6 +426,293 @@ test('refreshRepoHookSummary weights changed lines by non-whitespace content', a
     assert.ok(Math.abs(refreshed.summary.staged.humanPercentage - (10 / 17) * 100) < FLOATING_POINT_TOLERANCE);
 });
 
+test('refreshRepoHookSummary uses aggregate attribution for newly staged files', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-new-file-aggregate-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), 'initial\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    const gitRelativePath = 'src/generated-by-ai.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    const fileText = [
+        'export const generated = () => {',
+        '  const first = "ai";',
+        '  const second = "ai";',
+        '  return `${first}-${second}`;',
+        '};',
+        ''
+    ].join('\n');
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, fileText, 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const stagedBlobOid = readIndexBlobOid(repoRoot, gitRelativePath);
+    const lineCount = fileText.split(/\r\n|\r|\n/).length;
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(rollingStatePath), { recursive: true });
+    fs.writeFileSync(rollingStatePath, JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'file-rolling-state',
+        repoRoot,
+        repoRelativePath,
+        lastRecordedAt: new Date().toISOString(),
+        latestSignal: 'ProbableAIBulkWorkspaceEdit',
+        signalCounters: {
+            ProbableAIApplyToWorkspaceFile: 0,
+            PossibleAIApplyToWorkspaceFile: 0,
+            ProbableAIBulkWorkspaceEdit: 1,
+            LikelyHumanEditWhileChatSessionOpen: 0,
+            LikelyHumanOrRegularEditorEdit: 1
+        },
+        cumulativeAiChangeMagnitude: fileText.length,
+        cumulativeHumanChangeMagnitude: 0,
+        saveAttributionCheckpoints: [
+            {
+                gitBlobOid: stagedBlobOid,
+                cumulativeAiChangeMagnitude: fileText.length,
+                cumulativeHumanChangeMagnitude: 0,
+                lineAttributionSpans: [
+                    { attribution: 'Human', lineCount }
+                ]
+            }
+        ],
+        lineAttributionSpans: [
+            { attribution: 'Human', lineCount }
+        ],
+        deletedAt: null
+    }, null, 2), 'utf8');
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    assert.equal(refreshed.summary.isGitSummaryAvailable, true);
+    assert.equal(refreshed.summary.staged.changedFileCount, 1);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
+    assert.equal(refreshed.summary.staged.humanPercentage, 0);
+});
+
+test('refreshRepoHookSummary repairs historical human-labeled bulk checkpoints for AI-dominant new files', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-new-file-repair-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), 'initial\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    const gitRelativePath = 'src/historical-ai-file.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    const fileText = createLargeAiTestFileText();
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, fileText, 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const stagedBlobOid = readIndexBlobOid(repoRoot, gitRelativePath);
+    const lineCount = fileText.split(/\r\n|\r|\n/).length;
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(rollingStatePath), { recursive: true });
+    fs.writeFileSync(rollingStatePath, JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'file-rolling-state',
+        repoRoot,
+        repoRelativePath,
+        lastRecordedAt: new Date().toISOString(),
+        latestSignal: 'LikelyHumanOrRegularEditorEdit',
+        signalCounters: {
+            ProbableAIApplyToWorkspaceFile: 1,
+            PossibleAIApplyToWorkspaceFile: 0,
+            LikelyHumanEditWhileChatSessionOpen: 0,
+            LikelyHumanOrRegularEditorEdit: 2
+        },
+        cumulativeAiChangeMagnitude: 2_000,
+        cumulativeHumanChangeMagnitude: 900,
+        saveAttributionCheckpoints: [
+            {
+                gitBlobOid: '0000000000000000000000000000000000000000',
+                cumulativeAiChangeMagnitude: 0,
+                cumulativeHumanChangeMagnitude: 800,
+                lineAttributionSpans: [
+                    { attribution: 'Human', lineCount }
+                ]
+            },
+            {
+                gitBlobOid: stagedBlobOid,
+                cumulativeAiChangeMagnitude: 2_000,
+                cumulativeHumanChangeMagnitude: 900,
+                lineAttributionSpans: [
+                    { attribution: 'Human', lineCount }
+                ]
+            }
+        ],
+        lineAttributionSpans: [
+            { attribution: 'Human', lineCount }
+        ],
+        deletedAt: null
+    }, null, 2), 'utf8');
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    assert.equal(refreshed.summary.isGitSummaryAvailable, true);
+    assert.equal(refreshed.summary.staged.changedFileCount, 1);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
+    assert.equal(refreshed.summary.staged.humanPercentage, 0);
+    assert.equal(refreshed.summary.staged.usedFallbackAttribution, true);
+});
+
+test('refreshRepoHookSummary still scores unstaged edits when the same file is newly staged', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-new-file-with-unstaged-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), 'initial\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    const gitRelativePath = 'src/new-with-leftover.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    const stagedText = 'const ai = "ai";\n';
+    const workingTreeText = 'const ai = "ai";\nconst human = "human";\n';
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, stagedText, 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    const stagedBlobOid = readIndexBlobOid(repoRoot, gitRelativePath);
+    fs.writeFileSync(absoluteFilePath, workingTreeText, 'utf8');
+
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(rollingStatePath), { recursive: true });
+    fs.writeFileSync(rollingStatePath, JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'file-rolling-state',
+        repoRoot,
+        repoRelativePath,
+        lastRecordedAt: new Date().toISOString(),
+        latestSignal: 'LikelyHumanOrRegularEditorEdit',
+        signalCounters: {
+            ProbableAIApplyToWorkspaceFile: 1,
+            PossibleAIApplyToWorkspaceFile: 0,
+            ProbableAIBulkWorkspaceEdit: 0,
+            LikelyHumanEditWhileChatSessionOpen: 0,
+            LikelyHumanOrRegularEditorEdit: 1
+        },
+        cumulativeAiChangeMagnitude: stagedText.length,
+        cumulativeHumanChangeMagnitude: workingTreeText.length - stagedText.length,
+        saveAttributionCheckpoints: [
+            {
+                gitBlobOid: stagedBlobOid,
+                cumulativeAiChangeMagnitude: stagedText.length,
+                cumulativeHumanChangeMagnitude: 0,
+                lineAttributionSpans: [
+                    { attribution: 'AI', lineCount: 2 }
+                ]
+            }
+        ],
+        lineAttributionSpans: [
+            { attribution: 'AI', lineCount: 1 },
+            { attribution: 'Human', lineCount: 1 },
+            { attribution: 'Unknown', lineCount: 1 }
+        ],
+        deletedAt: null
+    }, null, 2), 'utf8');
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    assert.equal(refreshed.summary.staged.changedFileCount, 1);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
+    assert.equal(refreshed.summary.staged.aiPercentage, 100);
+    assert.equal(refreshed.summary.unstaged.changedFileCount, 1);
+    assert.equal(refreshed.summary.unstaged.attributedChangedFileCount, 1);
+    assert.equal(refreshed.summary.unstaged.aiPercentage, 0);
+    assert.equal(refreshed.summary.unstaged.humanPercentage, 100);
+});
+
+test('refreshRepoHookSummary attributes a staged small human file plus large AI bulk file mostly to AI', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-user-aitest-ratio-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), '# seed\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    const humanGitPath = 'aitest/Ai-test1.js';
+    const aiGitPath = 'aitest/AI-test2.js';
+    const humanRepoRelativePath = path.normalize(humanGitPath);
+    const aiRepoRelativePath = path.normalize(aiGitPath);
+    const humanAbsolutePath = path.join(repoRoot, humanRepoRelativePath);
+    const aiAbsolutePath = path.join(repoRoot, aiRepoRelativePath);
+    fs.mkdirSync(path.dirname(humanAbsolutePath), { recursive: true });
+
+    const humanText = [
+        'export default asd = () => {',
+        '  const a1 = "123";',
+        '  const b2 = "123";',
+        '  const c3 = "123";',
+        '  const d4 = "123";',
+        '  const e5 = "123";',
+        '  const f6 = "123";',
+        '  const g7 = "123";',
+        '  const h8 = "123";',
+        '  return true;',
+        '};',
+        ''
+    ].join('\n');
+    const aiText = createLargeAiTestFileText();
+    fs.writeFileSync(humanAbsolutePath, humanText, 'utf8');
+    fs.writeFileSync(aiAbsolutePath, aiText, 'utf8');
+    runGit(repoRoot, ['add', humanGitPath, aiGitPath]);
+
+    const metricsStore = new RepoMetricsStore('test-session', () => {});
+    const recordedAt = new Date().toISOString();
+    queueSyntheticWorkspaceMetric(
+        metricsStore,
+        repoRoot,
+        humanRepoRelativePath,
+        humanAbsolutePath,
+        humanText,
+        recordedAt,
+        'event-human-file',
+        'LikelyHumanOrRegularEditorEdit'
+    );
+    queueSyntheticWorkspaceMetric(
+        metricsStore,
+        repoRoot,
+        aiRepoRelativePath,
+        aiAbsolutePath,
+        aiText,
+        recordedAt,
+        'event-ai-bulk-file',
+        'ProbableAIBulkWorkspaceEdit'
+    );
+    await metricsStore.flushRepo(repoRoot);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    const expectedAiWeight = nonWhitespaceWeight(aiText);
+    const expectedHumanWeight = nonWhitespaceWeight(humanText);
+    const expectedAiPercentage = (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100;
+
+    assert.equal(refreshed.summary.isGitSummaryAvailable, true);
+    assert.equal(refreshed.summary.staged.changedFileCount, 2);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 2);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
+    assert.ok(refreshed.summary.staged.aiPercentage > 98);
+});
+
 function runGit(repoRoot: string, args: string[]): string {
     return childProcess.execFileSync('git', args, {
         cwd: repoRoot,
@@ -456,7 +743,8 @@ function queueSyntheticWorkspaceMetric(
     absoluteFilePath: string,
     fileText: string,
     recordedAt: string,
-    eventId: string
+    eventId: string,
+    signal = 'ProbableAIApplyToWorkspaceFile'
 ): void {
     const lineCount = countSyntheticTextLines(fileText);
     metricsStore.queueWorkspaceFileMetric({
@@ -469,17 +757,17 @@ function queueSyntheticWorkspaceMetric(
         repoRelativePath,
         logicalPath: absoluteFilePath,
         documentCategory: 'WorkspaceFile',
-        signal: 'ProbableAIApplyToWorkspaceFile',
+        signal,
         explanation: 'Synthetic AI edit for metrics ignore coverage.',
         replacementRatio: 1,
         totalInsertedTextLength: fileText.length,
         totalRemovedTextLength: 0,
         isWholeDocumentReplace: true,
-        hasRecentSnapshotActivity: true,
-        snapshotRequestIds: ['request-1'],
-        requestIds: ['request-1'],
-        lastChatScheme: 'chat-editing-snapshot-text-model',
-        snapshotAgeMs: 0,
+        hasRecentSnapshotActivity: signal === 'ProbableAIApplyToWorkspaceFile',
+        snapshotRequestIds: signal === 'ProbableAIApplyToWorkspaceFile' ? ['request-1'] : [],
+        requestIds: signal === 'ProbableAIApplyToWorkspaceFile' ? ['request-1'] : [],
+        lastChatScheme: signal === 'ProbableAIApplyToWorkspaceFile' ? 'chat-editing-snapshot-text-model' : null,
+        snapshotAgeMs: signal === 'ProbableAIApplyToWorkspaceFile' ? 0 : null,
         changeReason: 'RegularEditOrUnknown',
         documentVersion: 2,
         beforeHash: 'before-hash',
@@ -502,4 +790,23 @@ function queueSyntheticWorkspaceMetric(
 
 function countSyntheticTextLines(text: string): number {
     return Math.max(1, text.split('\n').filter((line, index, lines) => !(index === lines.length - 1 && line === '')).length);
+}
+
+function createLargeAiTestFileText(): string {
+    const chunks: string[] = [];
+    for (const functionName of ['a', 'b', 'c', 'd', 'e']) {
+        chunks.push(`export const AI_test2_${functionName} = () => {`);
+        for (let index = 1; index <= 100; index += 1) {
+            chunks.push(`  const ${functionName}${index} = "123";`);
+        }
+        chunks.push('  return true;');
+        chunks.push('};');
+        chunks.push('');
+    }
+
+    return chunks.join('\n');
+}
+
+function nonWhitespaceWeight(text: string): number {
+    return text.replace(/\s/gu, '').length;
 }

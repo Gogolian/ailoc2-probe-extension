@@ -106,9 +106,13 @@ type ChatEditContextSummary = Omit<RecentChatEditCorrelation, 'ageMs' | 'snapsho
 type ChangeStats = {
     totalInsertedTextLength: number;
     totalRemovedTextLength: number;
+    totalInsertedLineCount: number;
+    totalRemovedLineCount: number;
     isNoOp: boolean;
     isWholeDocumentReplace: boolean;
     isSmallLocalizedEdit: boolean;
+    isLargeBulkInsertion: boolean;
+    isLargeBulkExpansion: boolean;
     replacementRatio: number | null;
 };
 
@@ -124,7 +128,11 @@ type ChangeMetricCandidate = {
     replacementRatio: number | null;
     totalInsertedTextLength: number;
     totalRemovedTextLength: number;
+    totalInsertedLineCount: number;
+    totalRemovedLineCount: number;
     isWholeDocumentReplace: boolean;
+    isLargeBulkInsertion: boolean;
+    isLargeBulkExpansion: boolean;
     hasRecentSnapshotActivity: boolean;
     snapshotRequestIds: string[];
     requestIds: string[];
@@ -152,6 +160,9 @@ const VERBOSE_OUTPUT_CHANNEL_CONFIGURATION_KEY = 'logging.verboseOutputChannel';
 const TEXT_PREVIEW_LIMIT = 240;
 const CHAT_CONTEXT_WINDOW_MS = 120_000;
 const RECENT_WILL_SAVE_WINDOW_MS = 5_000;
+const BULK_AI_INSERT_MINIMUM_TEXT_LENGTH = 400;
+const BULK_AI_INSERT_MINIMUM_LINE_COUNT = 8;
+const BULK_AI_EXPANSION_MULTIPLIER_THRESHOLD = 4;
 
 type ExtensionRuntimeConfiguration = {
     verboseOutputChannel: boolean;
@@ -1213,6 +1224,10 @@ function describeChangeHeuristics(input: {
         replacementRatio: input.changeStats.replacementRatio,
         totalInsertedTextLength: input.changeStats.totalInsertedTextLength,
         totalRemovedTextLength: input.changeStats.totalRemovedTextLength,
+        totalInsertedLineCount: input.changeStats.totalInsertedLineCount,
+        totalRemovedLineCount: input.changeStats.totalRemovedLineCount,
+        isLargeBulkInsertion: input.changeStats.isLargeBulkInsertion,
+        isLargeBulkExpansion: input.changeStats.isLargeBulkExpansion,
         hasRecentChatCorrelation: input.recentChatEditCorrelation !== null,
         hasRecentSnapshotActivity: input.recentChatEditCorrelation?.hasRecentSnapshotActivity ?? false,
         snapshotAgeMs: input.recentChatEditCorrelation?.snapshotAgeMs ?? null,
@@ -1234,6 +1249,11 @@ function computeChangeStats(
 ): ChangeStats {
     const totalInsertedTextLength = event.contentChanges.reduce((sum, change) => sum + change.text.length, 0);
     const totalRemovedTextLength = event.contentChanges.reduce((sum, change) => sum + change.rangeLength, 0);
+    const totalInsertedLineCount = event.contentChanges.reduce((sum, change) => sum + (countTextLines(change.text) ?? 0), 0);
+    const totalRemovedLineCount = event.contentChanges.reduce((sum, change) => {
+        const removedText = beforeSnapshot?.text.slice(change.rangeOffset, change.rangeOffset + change.rangeLength);
+        return sum + (countTextLines(removedText) ?? 0);
+    }, 0);
     const isNoOp = event.contentChanges.length === 0;
     const isWholeDocumentReplace = Boolean(
         beforeSnapshot
@@ -1246,6 +1266,13 @@ function computeChangeStats(
         && event.contentChanges.length === 1
         && totalInsertedTextLength <= 8
         && totalRemovedTextLength <= 8;
+    const isLargeBulkInsertion = totalRemovedTextLength === 0
+        && totalInsertedTextLength >= BULK_AI_INSERT_MINIMUM_TEXT_LENGTH
+        && totalInsertedLineCount >= BULK_AI_INSERT_MINIMUM_LINE_COUNT;
+    const isLargeBulkExpansion = totalRemovedTextLength > 0
+        && totalInsertedTextLength >= BULK_AI_INSERT_MINIMUM_TEXT_LENGTH
+        && totalInsertedLineCount >= BULK_AI_INSERT_MINIMUM_LINE_COUNT
+        && totalInsertedTextLength >= totalRemovedTextLength * BULK_AI_EXPANSION_MULTIPLIER_THRESHOLD;
     const baselineLength = Math.max(beforeSnapshot?.charLength ?? 0, totalInsertedTextLength, totalRemovedTextLength);
     const replacementRatio = baselineLength > 0
         ? Math.max(totalInsertedTextLength, totalRemovedTextLength) / baselineLength
@@ -1254,9 +1281,13 @@ function computeChangeStats(
     return {
         totalInsertedTextLength,
         totalRemovedTextLength,
+        totalInsertedLineCount,
+        totalRemovedLineCount,
         isNoOp,
         isWholeDocumentReplace,
         isSmallLocalizedEdit,
+        isLargeBulkInsertion,
+        isLargeBulkExpansion,
         replacementRatio
     };
 }
@@ -1310,6 +1341,14 @@ function classifyChangeEvent(input: {
         };
     }
 
+    if (input.document.uri.scheme === 'file'
+        && (input.changeStats.isLargeBulkInsertion || input.changeStats.isLargeBulkExpansion)) {
+        return {
+            signal: 'ProbableAIBulkWorkspaceEdit',
+            explanation: 'A large multi-line insertion or expansion landed as one workspace-file edit without stronger chat snapshot metadata.'
+        };
+    }
+
     if (input.document.uri.scheme === 'file') {
         return {
             signal: 'LikelyHumanOrRegularEditorEdit',
@@ -1341,7 +1380,11 @@ function createChangeMetricCandidate(input: {
         replacementRatio: input.changeStats.replacementRatio,
         totalInsertedTextLength: input.changeStats.totalInsertedTextLength,
         totalRemovedTextLength: input.changeStats.totalRemovedTextLength,
+        totalInsertedLineCount: input.changeStats.totalInsertedLineCount,
+        totalRemovedLineCount: input.changeStats.totalRemovedLineCount,
         isWholeDocumentReplace: input.changeStats.isWholeDocumentReplace,
+        isLargeBulkInsertion: input.changeStats.isLargeBulkInsertion,
+        isLargeBulkExpansion: input.changeStats.isLargeBulkExpansion,
         hasRecentSnapshotActivity: input.recentChatEditCorrelation?.hasRecentSnapshotActivity ?? false,
         snapshotRequestIds: input.recentChatEditCorrelation?.snapshotRequestIds ?? [],
         requestIds: input.recentChatEditCorrelation?.requestIds ?? [],
