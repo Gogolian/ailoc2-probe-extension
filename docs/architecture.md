@@ -26,6 +26,8 @@ The current architecture is built around five practical constraints:
 | `src/hooks/management.ts` | Installs and uninstalls managed hooks, copies runtime assets, and handles hook chaining. |
 | `src/hooks/commitMessage.ts` | Applies the `(AI xx.xx%)` or `(AI unavailable)` suffix to the commit subject line. |
 | `src/cli/gitHookCli.ts` | Bundled CLI entrypoint executed by the managed hooks. |
+| `src/cli/claudeCodeCli.ts` | Bundled CLI entrypoint executed by Claude Code hooks. |
+| `src/integrations/claudeCode/` | Claude Code hook payload parsing, before snapshots, hook settings merge, and shared metrics writes. |
 | `src/trackingExclusions.ts` | Prevents the extension from tracking its own metrics artifacts and other excluded paths. |
 
 ## High-level flow
@@ -43,6 +45,8 @@ flowchart TD
     I --> J[pre-commit snapshots index baseline and refreshes summary.json]
     J --> K[commit-msg appends AI suffix]
     K --> L[post-commit promotes baseline and refreshes summary.json]
+    M[Claude Code Write/Edit/MultiEdit] --> N[Claude Code hook runtime records AI edit]
+    N --> I
 ```
 
 ## Activation lifecycle

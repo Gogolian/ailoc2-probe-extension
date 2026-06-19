@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Local-first AI attribution for real Git commits.</strong><br />
-  A VS Code extension + Git hook runtime, now with an IntelliJ IDEA plugin prototype, that estimates how much of your pending change was AI-assisted and writes the answer where teams actually see it: the commit itself.
+  A VS Code extension + Git hook runtime, now with IntelliJ IDEA and Claude Code companion integrations, that estimates how much of your pending change was AI-assisted and writes the answer where teams actually see it: the commit itself.
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@ LLM tooling is increasingly woven into normal editing workflows, but Git history
 
 AILoc2 takes a simpler route:
 
-- observe edits where they actually happen — inside VS Code
+- observe edits where they actually happen — inside VS Code, IntelliJ IDEA, and Claude Code
 - keep attribution artifacts inside the repo
 - summarize attribution against staged and unstaged Git diffs
 - annotate the commit subject automatically via local Git hooks
@@ -37,6 +37,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 ## What AILoc2 does today
 
 - Watches VS Code document edits, saves, renames, and deletes.
+- Records Claude Code `Write`, `Edit`, and `MultiEdit` file mutations through repo-local Claude hooks.
 - Correlates workspace-file changes with VS Code chat-editing virtual documents.
 - Classifies file changes into AI-leaning and human-leaning signals.
 - Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
@@ -59,7 +60,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 
 ```mermaid
 flowchart LR
-    A[Edit code in VS Code] --> B[AILoc2 observes document changes and save signals]
+    A[Edit code in VS Code / IntelliJ / Claude Code] --> B[AILoc2 observes editor and tool signals]
     B --> C[Rolling attribution state in .ailoc2-metrics/state/files]
     C --> D[pre-commit refreshes summary.json]
     D --> E[commit-msg appends AI percentage to the commit subject]
@@ -80,6 +81,7 @@ If you want the implementation details rather than the quick-start view, start h
 - [`docs/architecture.md`](docs/architecture.md) — extension lifecycle, runtime components, and event flow
 - [`docs/attribution-and-summary.md`](docs/attribution-and-summary.md) — heuristics, rolling state, save checkpoints, and summary computation
 - [`docs/hooks-and-runtime.md`](docs/hooks-and-runtime.md) — hook installation, runtime behavior, CLI usage, and fallback semantics
+- [`docs/claude-code.md`](docs/claude-code.md) — Claude Code hook runtime and shared `.ailoc2-metrics` integration
 
 ## Quick start
 
@@ -89,6 +91,7 @@ If you want the implementation details rather than the quick-start view, start h
 - Git
 - VS Code `^1.104.3`
 - IntelliJ IDEA 2024.1+ and Java 17 for the IntelliJ plugin in [`IntelliJ/`](IntelliJ/)
+- Claude Code if you want to record Claude-authored file edits
 - A Git repository you can open in VS Code or IntelliJ IDEA
 
 ### Run the extension locally
@@ -107,7 +110,7 @@ Then open the workspace in VS Code and press `F5` (or use **Run → Start Debugg
 3. Run `AILoc2 Probe: Install Repo Hooks` from the Command Palette.
 4. Edit code, save, stage, and commit as usual.
 
-If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain to that setup instead of replacing it outright.
+If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain to that setup instead of replacing it outright. The install command also updates `.gitignore` for `.ailoc2-metrics/`, `.githooks/`, and `.claude/`, and installs Claude Code hooks when the Claude runtime bundle is available.
 
 ### What you should see
 
@@ -118,6 +121,17 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 - post-commit baseline advancement and cleanup so fully committed files start fresh while files with remaining unstaged work keep their attribution
 - optional `.ailoc2-metrics/.ignore` rules if you want gitignore-style opt-outs for specific tracked files or directories
 
+### Claude Code companion
+
+The Claude Code runtime is bundled as `out/claude-code/ailoc2-claude-code.cjs`. The normal **Install Repo Hooks** flow installs repo-local `.claude/settings.json` hooks that snapshot files before Claude Code `Write`, `Edit`, and `MultiEdit` operations and record successful edits into the same `.ailoc2-metrics/state/files/**` rolling state used by the VS Code extension.
+
+After `npm run build`, you can also install only the Claude Code hooks into a target repo with:
+
+```bash
+node out/claude-code/ailoc2-claude-code.cjs install-claude-hooks C:\path\to\repo out\claude-code\ailoc2-claude-code.cjs
+```
+
+See [`docs/claude-code.md`](docs/claude-code.md) for the hook model and failure behavior.
 
 ### IntelliJ IDEA plugin prototype
 
@@ -146,11 +160,14 @@ your-repo/
 │     └─ files/
 │        └─ src/
 │           └─ example.ts.metrics.json
-└─ .githooks/
-   ├─ pre-commit
-   ├─ commit-msg
-  ├─ post-commit
-   └─ ailoc2-hook-runtime.cjs
+├─ .githooks/
+│  ├─ pre-commit
+│  ├─ commit-msg
+│  ├─ post-commit
+│  └─ ailoc2-hook-runtime.cjs
+└─ .claude/
+    ├─ settings.json
+    └─ ailoc2-claude-code.cjs
 ```
 
 ### What those files mean
@@ -162,6 +179,7 @@ your-repo/
 - `state/files/**/*.metrics.json` — rolling attribution state per tracked repo file.
 - `.githooks/post-commit` — promotes the just-committed index state into the repo baseline and clears fully committed file metrics so later commits score only what remains uncommitted.
 - `.githooks/ailoc2-hook-runtime.cjs` — bundled CommonJS runtime used by installed Git hooks.
+- `.claude/ailoc2-claude-code.cjs` — optional bundled CommonJS runtime used by Claude Code hooks.
 
 ## VS Code commands
 
@@ -211,9 +229,9 @@ This project is already useful, but it is not pretending to be magic.
 
 - Today’s AI detection is heuristic, not universal ground truth.
 - The strongest support is for VS Code chat-editing apply flows.
-- Edits made outside VS Code — or while the extension is inactive — are not observed directly at creation time.
+- Edits made outside supported integrations — or while the relevant integration is inactive — are not observed directly at creation time.
 - Some AI-assisted changes may still look human or unknown if the editor does not expose a distinct enough signal.
-- Large manual paste operations may look like AI bulk edits until richer provenance signals are available.
+- Large manual paste operations without supported AI-tool context are treated as human edits; ambiguous integrations can still produce unknown or incomplete attribution.
 - `(AI unavailable)` means summary generation or hook runtime fallback kicked in; it does **not** always mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
 - You can also add repo-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.
@@ -229,6 +247,7 @@ Useful scripts:
 
 - `npm run build` — compiles the extension and bundles the hook runtime.
 - `npm run build:hook-runtime` — bundles `out/hook-runtime/ailoc2-hook-runtime.cjs`.
+- `npm run build:claude-code-runtime` — bundles `out/claude-code/ailoc2-claude-code.cjs`.
 - `npm run watch` — TypeScript watch mode for extension development.
 
 ## Roadmap

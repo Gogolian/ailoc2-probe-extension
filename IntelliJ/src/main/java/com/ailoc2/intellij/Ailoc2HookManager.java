@@ -1,7 +1,15 @@
 package com.ailoc2.intellij;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -16,11 +24,17 @@ final class Ailoc2HookManager {
     private static final String REPO_HOOKS_DIRECTORY_NAME = ".githooks";
     private static final String REPO_HOOKS_PATH_VALUE = ".githooks";
     private static final String RUNTIME_FILE_NAME = "ailoc2-intellij-hook-runtime.sh";
+    private static final String CLAUDE_DIRECTORY_NAME = ".claude";
+    private static final String CLAUDE_RUNTIME_FILE_NAME = "ailoc2-claude-code.cjs";
+    private static final String CLAUDE_RUNTIME_RESOURCE_PATH = "/claude-code/" + CLAUDE_RUNTIME_FILE_NAME;
     private static final String CORE_HOOKS_PATH_CONFIG_KEY = "core.hooksPath";
     private static final String PREVIOUS_LOCAL_HOOKS_PATH_CONFIG_KEY = "ailoc2Probe.previousLocalHooksPath";
     private static final String DELEGATE_LOCAL_HOOKS_PATH_CONFIG_KEY = "ailoc2Probe.delegateLocalHooksPath";
     private static final String MANAGED_HOOK_MARKER_PREFIX = "# AILoc2 managed IntelliJ hook: ";
     private static final List<String> REQUIRED_REPO_HOOK_FILES = List.of("pre-commit", "commit-msg", "post-commit");
+    private static final List<String> MANAGED_GITIGNORE_PATTERNS = List.of(".ailoc2-metrics/", ".githooks/", ".claude/");
+    private static final String CLAUDE_MANAGED_TOOL_MATCHER = "Write|Edit|MultiEdit";
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     HookInstallResult installRepoHooks(Path repoRoot, boolean allowReplacingExistingLocalHooksPath, boolean chainExistingLocalHooksPath)
         throws IOException, InterruptedException {
@@ -158,16 +172,19 @@ final class Ailoc2HookManager {
     }
 
     private void ensureManagedRepoHookAssetsInstalled(Path repoRoot, String delegatedHooksPath) throws IOException {
+        ensureManagedPathsIgnored(repoRoot);
         Files.createDirectories(getRepoHooksDirectoryPath(repoRoot));
         ensureManagedHookFile(repoRoot, "pre-commit", delegatedHooksPath);
         ensureManagedHookFile(repoRoot, "commit-msg", delegatedHooksPath);
         ensureManagedHookFile(repoRoot, "post-commit", delegatedHooksPath);
         installManagedRuntimeAsset(repoRoot);
+        installManagedClaudeCodeAssets(repoRoot);
 
         for (String hookFileName : REQUIRED_REPO_HOOK_FILES) {
             markExecutableBestEffort(getRepoHooksDirectoryPath(repoRoot).resolve(hookFileName));
         }
         markExecutableBestEffort(getRuntimeFilePath(repoRoot));
+        markExecutableBestEffort(getClaudeRuntimePath(repoRoot));
     }
 
     private void ensureManagedHookFile(Path repoRoot, String hookFileName, String delegatedHooksPath) throws IOException {
@@ -200,8 +217,151 @@ final class Ailoc2HookManager {
             removedManagedHookFiles = removeManagedHookFile(repoRoot, hookFileName) || removedManagedHookFiles;
         }
         boolean removedRuntimeAsset = removeRuntimeAsset(repoRoot);
+        boolean removedClaudeCodeAssets = removeClaudeCodeAssets(repoRoot);
         removeEmptyHookDirectoryIfPossible(repoRoot);
-        return removedManagedHookFiles || removedRuntimeAsset;
+        return removedManagedHookFiles || removedRuntimeAsset || removedClaudeCodeAssets;
+    }
+
+    private void ensureManagedPathsIgnored(Path repoRoot) throws IOException {
+        Path gitignorePath = repoRoot.resolve(".gitignore");
+        String existingContents = Files.exists(gitignorePath)
+            ? Files.readString(gitignorePath, StandardCharsets.UTF_8)
+            : "";
+        Set<String> existingPatterns = existingContents.lines()
+            .map(this::normalizeGitignorePattern)
+            .filter(pattern -> !pattern.isBlank())
+            .collect(java.util.stream.Collectors.toSet());
+        List<String> missingPatterns = MANAGED_GITIGNORE_PATTERNS.stream()
+            .filter(pattern -> !existingPatterns.contains(normalizeGitignorePattern(pattern)))
+            .toList();
+        if (missingPatterns.isEmpty()) {
+            return;
+        }
+
+        String separator = existingContents.isEmpty() || existingContents.endsWith("\n") || existingContents.endsWith("\r") ? "" : "\n";
+        Files.writeString(gitignorePath, existingContents + separator + String.join("\n", missingPatterns) + "\n", StandardCharsets.UTF_8);
+    }
+
+    private String normalizeGitignorePattern(String pattern) {
+        String normalizedPattern = pattern.trim().replace('\\', '/');
+        if (normalizedPattern.startsWith("./")) {
+            normalizedPattern = normalizedPattern.substring(2);
+        }
+        while (normalizedPattern.endsWith("/")) {
+            normalizedPattern = normalizedPattern.substring(0, normalizedPattern.length() - 1);
+        }
+        return normalizedPattern;
+    }
+
+    private void installManagedClaudeCodeAssets(Path repoRoot) throws IOException {
+        Path claudeDirectory = getClaudeDirectoryPath(repoRoot);
+        Files.createDirectories(claudeDirectory);
+        try (InputStream runtimeStream = Ailoc2HookManager.class.getResourceAsStream(CLAUDE_RUNTIME_RESOURCE_PATH)) {
+            if (runtimeStream == null) {
+                throw new IOException("AILoc2 Claude Code runtime resource is missing: " + CLAUDE_RUNTIME_RESOURCE_PATH);
+            }
+            Files.copy(runtimeStream, getClaudeRuntimePath(repoRoot), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        Path settingsPath = getClaudeSettingsPath(repoRoot);
+        JsonObject settings = readClaudeSettings(settingsPath);
+        JsonObject hooks = settings.has("hooks") && settings.get("hooks").isJsonObject()
+            ? settings.getAsJsonObject("hooks")
+            : new JsonObject();
+        removeManagedClaudeHookCommands(hooks);
+        addManagedClaudeHook(hooks, "PreToolUse", createManagedClaudeCommand(repoRoot, "capture-before"));
+        addManagedClaudeHook(hooks, "PostToolUse", createManagedClaudeCommand(repoRoot, "record-edit"));
+        settings.add("hooks", hooks);
+        Files.writeString(settingsPath, GSON.toJson(settings) + "\n", StandardCharsets.UTF_8);
+    }
+
+    private boolean removeClaudeCodeAssets(Path repoRoot) throws IOException {
+        boolean removed = false;
+        Path settingsPath = getClaudeSettingsPath(repoRoot);
+        if (Files.exists(settingsPath)) {
+            JsonObject settings = readClaudeSettings(settingsPath);
+            if (settings.has("hooks") && settings.get("hooks").isJsonObject()) {
+                removeManagedClaudeHookCommands(settings.getAsJsonObject("hooks"));
+                Files.writeString(settingsPath, GSON.toJson(settings) + "\n", StandardCharsets.UTF_8);
+                removed = true;
+            }
+        }
+
+        removed = Files.deleteIfExists(getClaudeRuntimePath(repoRoot)) || removed;
+        return removed;
+    }
+
+    private JsonObject readClaudeSettings(Path settingsPath) throws IOException {
+        if (!Files.exists(settingsPath)) {
+            return new JsonObject();
+        }
+
+        try {
+            JsonElement parsed = JsonParser.parseString(Files.readString(settingsPath, StandardCharsets.UTF_8));
+            return parsed.isJsonObject() ? parsed.getAsJsonObject() : new JsonObject();
+        }
+        catch (RuntimeException ignored) {
+            return new JsonObject();
+        }
+    }
+
+    private void addManagedClaudeHook(JsonObject hooks, String eventName, String command) {
+        JsonArray eventHooks = hooks.has(eventName) && hooks.get(eventName).isJsonArray()
+            ? hooks.getAsJsonArray(eventName)
+            : new JsonArray();
+        JsonObject hookGroup = new JsonObject();
+        hookGroup.addProperty("matcher", CLAUDE_MANAGED_TOOL_MATCHER);
+        JsonArray commands = new JsonArray();
+        JsonObject commandHook = new JsonObject();
+        commandHook.addProperty("type", "command");
+        commandHook.addProperty("command", command);
+        commands.add(commandHook);
+        hookGroup.add("hooks", commands);
+        eventHooks.add(hookGroup);
+        hooks.add(eventName, eventHooks);
+    }
+
+    private void removeManagedClaudeHookCommands(JsonObject hooks) {
+        for (String eventName : new ArrayList<>(hooks.keySet())) {
+            JsonElement value = hooks.get(eventName);
+            if (!value.isJsonArray()) {
+                continue;
+            }
+
+            JsonArray filteredGroups = new JsonArray();
+            for (JsonElement groupElement : value.getAsJsonArray()) {
+                if (!groupElement.isJsonObject()) {
+                    continue;
+                }
+                JsonObject group = groupElement.getAsJsonObject();
+                JsonArray commands = group.has("hooks") && group.get("hooks").isJsonArray()
+                    ? group.getAsJsonArray("hooks")
+                    : new JsonArray();
+                JsonArray unmanagedCommands = new JsonArray();
+                for (JsonElement commandElement : commands) {
+                    if (!isManagedClaudeCommand(commandElement)) {
+                        unmanagedCommands.add(commandElement);
+                    }
+                }
+                if (!unmanagedCommands.isEmpty()) {
+                    group.add("hooks", unmanagedCommands);
+                    filteredGroups.add(group);
+                }
+            }
+            hooks.add(eventName, filteredGroups);
+        }
+    }
+
+    private boolean isManagedClaudeCommand(JsonElement commandElement) {
+        if (!commandElement.isJsonObject()) {
+            return false;
+        }
+        JsonElement command = commandElement.getAsJsonObject().get("command");
+        return command != null && command.isJsonPrimitive() && command.getAsString().contains(CLAUDE_RUNTIME_FILE_NAME);
+    }
+
+    private String createManagedClaudeCommand(Path repoRoot, String command) {
+        return "node \"" + getClaudeRuntimePath(repoRoot).toString().replace("\"", "\\\"") + "\" " + command;
     }
 
     private boolean removeManagedHookFile(Path repoRoot, String hookFileName) throws IOException {
@@ -252,6 +412,18 @@ final class Ailoc2HookManager {
 
     private Path getRuntimeFilePath(Path repoRoot) {
         return getRepoHooksDirectoryPath(repoRoot).resolve(RUNTIME_FILE_NAME);
+    }
+
+    private Path getClaudeDirectoryPath(Path repoRoot) {
+        return repoRoot.resolve(CLAUDE_DIRECTORY_NAME);
+    }
+
+    private Path getClaudeSettingsPath(Path repoRoot) {
+        return getClaudeDirectoryPath(repoRoot).resolve("settings.json");
+    }
+
+    private Path getClaudeRuntimePath(Path repoRoot) {
+        return getClaudeDirectoryPath(repoRoot).resolve(CLAUDE_RUNTIME_FILE_NAME);
     }
 
     private boolean isRepoManagedHooksPath(Path repoRoot, String candidateHooksPath) {

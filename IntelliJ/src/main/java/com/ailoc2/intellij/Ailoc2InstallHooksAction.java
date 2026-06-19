@@ -70,15 +70,15 @@ public final class Ailoc2InstallHooksAction extends AnAction {
         String repoName = repoRoot.getFileName().toString();
         if (installResult.status() == Ailoc2HookManager.HookInstallStatus.ALREADY_INSTALLED) {
             return installResult.delegatedHooksPath() == null
-                ? "AILoc2 hooks are already active for " + repoName + "."
-                : "AILoc2 hooks are already active for " + repoName + " and chained to " + installResult.delegatedHooksPath() + ".";
+                ? "AILoc2 Git and Claude Code hooks are already active for " + repoName + "."
+                : "AILoc2 Git and Claude Code hooks are already active for " + repoName + " and chained to " + installResult.delegatedHooksPath() + ".";
         }
         if (installResult.delegatedHooksPath() != null) {
-            return "AILoc2 hooks installed for " + repoName + " and chained to " + installResult.delegatedHooksPath() + ".";
+            return "AILoc2 Git and Claude Code hooks installed for " + repoName + " and chained to " + installResult.delegatedHooksPath() + ".";
         }
         if (installResult.replacedPreviousLocalHooksPath() != null) {
-            return "AILoc2 hooks installed for " + repoName + ". Previous local hooksPath saved for restore on uninstall.";
+            return "AILoc2 Git and Claude Code hooks installed for " + repoName + ". Previous local hooksPath saved for restore on uninstall.";
         }
-        return "AILoc2 hooks installed for " + repoName + ".";
+        return "AILoc2 Git and Claude Code hooks installed for " + repoName + ".";
     }
 }

@@ -1,0 +1,249 @@
+import assert from 'node:assert/strict';
+import * as childProcess from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { afterEach, test } from 'node:test';
+
+import { createLineDiffSegments } from '../metrics/lineDiff';
+import { getRollingStatePath } from '../metrics/pathing';
+import { METRICS_SCHEMA_VERSION, FileRollingState, WorkspaceFileMetricEvent } from '../metrics/schema';
+import { RepoMetricsStore } from '../metrics/store';
+import { refreshRepoHookSummary } from '../metrics/summary';
+import {
+    captureClaudeCodeBefore,
+    installClaudeCodeHooks,
+    recordClaudeCodePostEdit
+} from '../integrations/claudeCode/runtime';
+
+const tempDirectories: string[] = [];
+const FLOATING_POINT_TOLERANCE = 0.000_001;
+
+afterEach(() => {
+    while (tempDirectories.length > 0) {
+        const directoryPath = tempDirectories.pop();
+        if (!directoryPath) {
+            continue;
+        }
+
+        fs.rmSync(directoryPath, { recursive: true, force: true });
+    }
+});
+
+test('Claude Code Write records an AI rolling state in .ailoc2-metrics', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-write-');
+    const gitRelativePath = 'src/claude.js';
+    const absoluteFilePath = path.join(repoRoot, gitRelativePath);
+    const afterText = [
+        'export function generatedByClaude() {',
+        '  return "ai";',
+        '}',
+        ''
+    ].join('\n');
+    const payload = createClaudePayload(repoRoot, 'Write', gitRelativePath, 'tool-write-1');
+
+    const captureResults = await captureClaudeCodeBefore(payload);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, afterText, 'utf8');
+    const recordResults = await recordClaudeCodePostEdit(payload);
+
+    const rollingState = readRollingState(repoRoot, gitRelativePath);
+    assert.deepEqual({
+        captured: captureResults.map((result) => ({ existed: result.existed })),
+        recorded: recordResults.map((result) => ({ skipped: result.skipped, repoRelativePath: result.repoRelativePath })),
+        aiMagnitude: rollingState.cumulativeAiChangeMagnitude,
+        humanMagnitude: rollingState.cumulativeHumanChangeMagnitude,
+        latestSignal: rollingState.latestSignal,
+        checkpointCount: rollingState.saveAttributionCheckpoints.length
+    }, {
+        captured: [{ existed: false }],
+        recorded: [{ skipped: false, repoRelativePath: path.normalize(gitRelativePath) }],
+        aiMagnitude: nonWhitespaceWeight(afterText),
+        humanMagnitude: 0,
+        latestSignal: 'ProbableAIApplyToWorkspaceFile',
+        checkpointCount: 1
+    });
+});
+
+test('Claude Code Edit without before snapshot is skipped instead of over-attributing the whole file', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-missing-before-');
+    const gitRelativePath = 'src/existing.js';
+    const absoluteFilePath = path.join(repoRoot, gitRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const value = "after";\n', 'utf8');
+
+    const recordResults = await recordClaudeCodePostEdit(createClaudePayload(repoRoot, 'Edit', gitRelativePath, 'tool-edit-1'));
+
+    assert.deepEqual(recordResults.map((result) => ({ skipped: result.skipped, reason: result.reason })), [
+        { skipped: true, reason: 'MissingBeforeSnapshot' }
+    ]);
+    assert.equal(fs.existsSync(getRollingStatePath(repoRoot, path.normalize(gitRelativePath))), false);
+});
+
+test('Claude Code metrics combine with human metrics in staged summary', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-mixed-summary-');
+    const humanGitPath = 'src/human.js';
+    const claudeGitPath = 'src/claude.js';
+    const humanText = [
+        'export function writtenByHuman() {',
+        '  return "human";',
+        '}',
+        ''
+    ].join('\n');
+    const claudeText = [
+        'export function writtenByClaude() {',
+        '  return "ai";',
+        '}',
+        ''
+    ].join('\n');
+
+    const humanAbsolutePath = path.join(repoRoot, humanGitPath);
+    fs.mkdirSync(path.dirname(humanAbsolutePath), { recursive: true });
+    fs.writeFileSync(humanAbsolutePath, humanText, 'utf8');
+    await recordHumanEdit(repoRoot, humanGitPath, humanText);
+
+    const claudeAbsolutePath = path.join(repoRoot, claudeGitPath);
+    const payload = createClaudePayload(repoRoot, 'Write', claudeGitPath, 'tool-write-2');
+    await captureClaudeCodeBefore(payload);
+    fs.writeFileSync(claudeAbsolutePath, claudeText, 'utf8');
+    await recordClaudeCodePostEdit(payload);
+
+    runGit(repoRoot, ['add', humanGitPath, claudeGitPath]);
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+    const expectedAiWeight = nonWhitespaceWeight(claudeText);
+    const expectedHumanWeight = nonWhitespaceWeight(humanText);
+    const expectedAiPercentage = (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100;
+
+    assert.equal(refreshed.summary.staged.changedFileCount, 2);
+    assert.equal(refreshed.summary.staged.attributedChangedFileCount, 2);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
+});
+
+test('installClaudeCodeHooks merges AILoc2 hooks into existing Claude settings', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-hooks-');
+    const runtimeSourcePath = path.join(repoRoot, 'runtime.cjs');
+    fs.writeFileSync(runtimeSourcePath, 'console.log("runtime");\n', 'utf8');
+    const settingsPath = path.join(repoRoot, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({
+        permissions: { allow: ['Bash(git status)'] },
+        hooks: {
+            PostToolUse: [{
+                matcher: 'Bash',
+                hooks: [{ type: 'command', command: 'echo keep-me' }]
+            }]
+        }
+    }, null, 2), 'utf8');
+
+    const installResult = await installClaudeCodeHooks({ repoRoot, runtimeSourcePath });
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as {
+        permissions?: { allow?: string[] };
+        hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
+    };
+
+    assert.equal(fs.existsSync(installResult.runtimePath), true);
+    assert.deepEqual(settings.permissions?.allow, ['Bash(git status)']);
+    assert.equal(settings.hooks?.PreToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('capture-before'))), true);
+    assert.equal(settings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('record-edit'))), true);
+    assert.equal(settings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command === 'echo keep-me')), true);
+});
+
+function createGitRepo(prefix: string): string {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirectories.push(repoRoot);
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), '# seed\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+    return repoRoot;
+}
+
+function createClaudePayload(repoRoot: string, toolName: string, gitRelativePath: string, invocationId: string): Record<string, unknown> {
+    return {
+        session_id: 'claude-session-1',
+        tool_name: toolName,
+        tool_use_id: invocationId,
+        cwd: repoRoot,
+        tool_input: {
+            file_path: gitRelativePath
+        },
+        tool_response: {
+            is_error: false
+        }
+    };
+}
+
+async function recordHumanEdit(repoRoot: string, gitRelativePath: string, fileText: string): Promise<void> {
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    const store = new RepoMetricsStore('human-test-session', () => {});
+    const event: WorkspaceFileMetricEvent = {
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'workspace-file-metric',
+        eventId: 'human-edit',
+        recordedAt: new Date().toISOString(),
+        extensionSessionId: 'human-test-session',
+        repoRoot,
+        repoRelativePath,
+        logicalPath: absoluteFilePath.toLowerCase(),
+        documentCategory: 'WorkspaceFile',
+        signal: 'LikelyHumanOrRegularEditorEdit',
+        explanation: 'Synthetic human edit for Claude Code integration coverage.',
+        replacementRatio: 1,
+        totalInsertedTextLength: fileText.length,
+        totalRemovedTextLength: 0,
+        isWholeDocumentReplace: true,
+        hasRecentSnapshotActivity: false,
+        snapshotRequestIds: [],
+        requestIds: [],
+        lastChatScheme: null,
+        snapshotAgeMs: null,
+        changeReason: 'RegularEditOrUnknown',
+        documentVersion: 1,
+        beforeHash: null,
+        afterHash: 'after',
+        beforeCharLength: 0,
+        afterCharLength: fileText.length,
+        lineCount: fileText.split('\n').length,
+        languageId: 'javascript',
+        isDirty: false,
+        lineDiffSegments: createLineDiffSegments('', fileText, { languageId: 'javascript' }),
+        chatCorrelation: null,
+        saveCorrelation: null
+    };
+    store.queueWorkspaceFileMetric(event);
+    store.noteDocumentSaved({
+        repoRoot,
+        repoRelativePath,
+        savedAt: event.recordedAt,
+        hash: 'after',
+        lineCount: event.lineCount,
+        charLength: fileText.length,
+        documentVersion: 1,
+        saveCorrelation: {
+            hadRecentWillSave: false,
+            possibleSaveWithoutWillSave: true
+        }
+    });
+    await store.flushRepo(repoRoot);
+}
+
+function readRollingState(repoRoot: string, gitRelativePath: string): FileRollingState {
+    return JSON.parse(fs.readFileSync(getRollingStatePath(repoRoot, path.normalize(gitRelativePath)), 'utf8')) as FileRollingState;
+}
+
+function runGit(repoRoot: string, args: string[]): string {
+    return childProcess.execFileSync('git', args, {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true
+    });
+}
+
+function nonWhitespaceWeight(text: string): number {
+    return text.replace(/\s/gu, '').length;
+}
+

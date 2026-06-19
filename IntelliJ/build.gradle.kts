@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.Copy
+
 plugins {
     id("java")
     id("org.jetbrains.intellij.platform")
@@ -22,7 +24,7 @@ val ideaSinceBuild = providers.gradleProperty("ideaSinceBuild").orNull?.trim()
     }
 
 group = "com.ailoc2"
-version = "1.0.7"
+version = "1.0.8"
 
 dependencies {
     intellijPlatform {
@@ -52,4 +54,13 @@ intellijPlatform {
 
 tasks.named("buildSearchableOptions") {
     enabled = false
+}
+
+tasks.named<Copy>("processResources") {
+    val claudeRuntime = rootProject.layout.projectDirectory.file("../out/claude-code/ailoc2-claude-code.cjs")
+    if (claudeRuntime.asFile.exists()) {
+        from(claudeRuntime) {
+            into("claude-code")
+        }
+    }
 }

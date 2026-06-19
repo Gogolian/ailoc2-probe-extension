@@ -332,7 +332,7 @@ The current implementation has several important blind spots:
 
 - AI tools that do not expose distinguishable chat-editing signals may look human or unknown
 - edits made outside VS Code are not observed at edit time
-- large manual paste operations may look like AI bulk edits
+- large manual paste operations without supported AI-tool context are treated as human edits, but unsupported AI tools can still look human or unknown
 - structural operations such as line moves and large refactors do not preserve perfect per-line identity
 - rename handling preserves file continuity structurally, but not a perfect semantic ownership model
 - `.gitignore` and metrics artifacts are intentionally excluded from tracking

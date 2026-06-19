@@ -34,17 +34,19 @@ A fresh managed install provisions exactly four repo-local files:
    - `core.hooksPath` (effective)
    - `ailoc2Probe.delegateLocalHooksPath` (local)
 4. decide whether the repo is already installed, in conflict, or ready for installation
-5. write managed hook files and copy the bundled runtime asset
-6. optionally record the previous local hooks path for restoration on uninstall
-7. optionally record a delegated repo-local hooks path to chain after AILoc2 runs
-8. set local `core.hooksPath` to `.githooks`
+5. update `.gitignore` for `.ailoc2-metrics/`, `.githooks/`, and `.claude/`
+6. write managed hook files and copy the bundled Git hook runtime asset
+7. install Claude Code hooks into `.claude/settings.json` and copy `.claude/ailoc2-claude-code.cjs`
+8. optionally record the previous local hooks path for restoration on uninstall
+9. optionally record a delegated repo-local hooks path to chain after AILoc2 runs
+10. set local `core.hooksPath` to `.githooks`
 
 ## Installation statuses
 
 | Status | Meaning |
 | --- | --- |
-| `installed` | AILoc2 successfully installed its managed assets and set local `core.hooksPath`. |
-| `already-installed` | The repo is already using the managed AILoc2 hooks path. |
+| `installed` | AILoc2 successfully installed managed Git and Claude Code hook assets and set local `core.hooksPath`. |
+| `already-installed` | The repo is already using the managed AILoc2 hooks path; managed assets are refreshed. |
 | `conflict` | The repo already has a different **local** `core.hooksPath`, and replacement was not yet authorized. |
 
 ## Git config keys used by AILoc2

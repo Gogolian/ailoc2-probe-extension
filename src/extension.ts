@@ -434,13 +434,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
                 const infoMessage = installResult.status === 'already-installed'
                     ? installResult.delegatedHooksPath
-                        ? `AILoc2 hooks are already active for ${path.basename(repoRoot)} and chained to ${installResult.delegatedHooksPath}.`
-                        : `AILoc2 hooks are already active for ${path.basename(repoRoot)}.`
+                        ? `AILoc2 Git and Claude Code hooks are already active for ${path.basename(repoRoot)} and chained to ${installResult.delegatedHooksPath}.`
+                        : `AILoc2 Git and Claude Code hooks are already active for ${path.basename(repoRoot)}.`
                     : installResult.delegatedHooksPath
-                    ? `AILoc2 hooks installed for ${path.basename(repoRoot)} and chained to ${installResult.delegatedHooksPath}.`
+                    ? `AILoc2 Git and Claude Code hooks installed for ${path.basename(repoRoot)} and chained to ${installResult.delegatedHooksPath}.`
                     : installResult.replacedPreviousLocalHooksPath
-                    ? `AILoc2 hooks installed for ${path.basename(repoRoot)}. Previous local hooksPath saved for restore on uninstall.`
-                    : `AILoc2 hooks installed for ${path.basename(repoRoot)}.`;
+                    ? `AILoc2 Git and Claude Code hooks installed for ${path.basename(repoRoot)}. Previous local hooksPath saved for restore on uninstall.`
+                    : `AILoc2 Git and Claude Code hooks installed for ${path.basename(repoRoot)}.`;
                 void vscode.window.showInformationMessage(infoMessage);
 
                 if (initialSummaryRefreshError) {

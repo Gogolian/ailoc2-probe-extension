@@ -9,6 +9,7 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 1. [`architecture.md`](architecture.md) — start here for the runtime model, source map, lifecycle, and key moving parts.
 2. [`attribution-and-summary.md`](attribution-and-summary.md) — read this next if you want to understand how edit signals become repo-level AI percentages.
 3. [`hooks-and-runtime.md`](hooks-and-runtime.md) — read this if you care about hook installation, chaining, CLI behavior, and commit-message annotation.
+4. [`claude-code.md`](claude-code.md) — read this for the Claude Code companion runtime and shared `.ailoc2-metrics` flow.
 
 ## Source map
 
@@ -25,6 +26,8 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 | Hook install / uninstall | `src/hooks/management.ts` |
 | Commit message suffix logic | `src/hooks/commitMessage.ts` |
 | Hook runtime CLI entrypoint | `src/cli/gitHookCli.ts` |
+| Claude Code runtime CLI entrypoint | `src/cli/claudeCodeCli.ts` |
+| Claude Code metrics bridge | `src/integrations/claudeCode/` |
 
 ## Quick reference
 
@@ -35,6 +38,7 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 - **Repo-local metrics root:** `.ailoc2-metrics/`
 - **Managed hook directory:** `.githooks/`
 - **Managed hook runtime file:** `.githooks/ailoc2-hook-runtime.cjs`
+- **Claude Code runtime file:** `.claude/ailoc2-claude-code.cjs`
 
 ## Design posture
 

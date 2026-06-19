@@ -3,6 +3,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as util from 'util';
 
+import {
+    ClaudeCodeHooksInstallResult,
+    installClaudeCodeHooks,
+    uninstallClaudeCodeHooks
+} from '../integrations/claudeCode/runtime';
+
 const execFile = util.promisify(childProcess.execFile);
 
 export const REPO_HOOKS_DIRECTORY_NAME = '.githooks';
@@ -21,6 +27,11 @@ const PREVIOUS_LOCAL_HOOKS_PATH_CONFIG_KEY = 'ailoc2Probe.previousLocalHooksPath
 const DELEGATE_LOCAL_HOOKS_PATH_CONFIG_KEY = 'ailoc2Probe.delegateLocalHooksPath';
 const LEGACY_MANAGED_HOOK_RUNTIME_DIRECTORY_NAME = 'ailoc2-runtime';
 const MANAGED_HOOK_MARKER_PREFIX = '# AILoc2 managed hook: ';
+const MANAGED_GITIGNORE_PATTERNS = [
+    '.ailoc2-metrics/',
+    '.githooks/',
+    '.claude/'
+] as const;
 
 export type RepoHookInstallResult = {
     status: 'installed' | 'already-installed' | 'conflict';
@@ -30,6 +41,8 @@ export type RepoHookInstallResult = {
     currentEffectiveHooksPath: string | null;
     replacedPreviousLocalHooksPath: string | null;
     delegatedHooksPath: string | null;
+    claudeCodeHooks: ClaudeCodeHooksInstallResult | null;
+    gitignoreUpdated: boolean;
 };
 
 export type RepoHookUninstallResult = {
@@ -40,6 +53,7 @@ export type RepoHookUninstallResult = {
     currentEffectiveHooksPath: string | null;
     restoredHooksPath: string | null;
     removedManagedHookAssets: boolean;
+    removedClaudeCodeHooks: boolean;
 };
 
 export async function installRepoHooks(args: {
@@ -70,11 +84,15 @@ export async function installRepoHooks(args: {
             currentLocalHooksPath,
             currentEffectiveHooksPath,
             replacedPreviousLocalHooksPath: null,
-            delegatedHooksPath: null
+            delegatedHooksPath: null,
+            claudeCodeHooks: null,
+            gitignoreUpdated: false
         };
     }
 
+    const gitignoreUpdated = await ensureManagedPathsIgnored(repoRoot);
     await ensureManagedRepoHookAssetsInstalled(repoRoot, delegatedHooksPath);
+    const claudeCodeHooks = await ensureClaudeCodeHooksInstalled(repoRoot);
 
     if (isAlreadyInstalled) {
         return {
@@ -84,7 +102,9 @@ export async function installRepoHooks(args: {
             currentLocalHooksPath,
             currentEffectiveHooksPath,
             replacedPreviousLocalHooksPath: null,
-            delegatedHooksPath
+            delegatedHooksPath,
+            claudeCodeHooks,
+            gitignoreUpdated
         };
     }
 
@@ -113,7 +133,9 @@ export async function installRepoHooks(args: {
         currentLocalHooksPath: REPO_HOOKS_PATH_VALUE,
         currentEffectiveHooksPath: REPO_HOOKS_PATH_VALUE,
         replacedPreviousLocalHooksPath,
-        delegatedHooksPath
+        delegatedHooksPath,
+        claudeCodeHooks,
+        gitignoreUpdated
     };
 }
 
@@ -125,6 +147,7 @@ export async function uninstallRepoHooks(args: {
     const currentLocalHooksPath = await getGitConfigValue(repoRoot, CORE_HOOKS_PATH_CONFIG_KEY, 'local');
     const currentEffectiveHooksPath = await getGitConfigValue(repoRoot, CORE_HOOKS_PATH_CONFIG_KEY, 'effective');
     const removedManagedHookAssets = await removeManagedHookAssets(repoRoot);
+    const removedClaudeCodeHooks = await removeClaudeCodeHooks(repoRoot);
 
     if (!isRepoManagedHooksPath(repoRoot, currentLocalHooksPath)) {
         if (removedManagedHookAssets) {
@@ -139,7 +162,8 @@ export async function uninstallRepoHooks(args: {
             currentLocalHooksPath,
             currentEffectiveHooksPath,
             restoredHooksPath: null,
-            removedManagedHookAssets
+            removedManagedHookAssets,
+            removedClaudeCodeHooks
         };
     }
 
@@ -155,7 +179,8 @@ export async function uninstallRepoHooks(args: {
             currentLocalHooksPath,
             currentEffectiveHooksPath: previousLocalHooksPath,
             restoredHooksPath: previousLocalHooksPath,
-            removedManagedHookAssets
+            removedManagedHookAssets,
+            removedClaudeCodeHooks
         };
     }
 
@@ -170,7 +195,8 @@ export async function uninstallRepoHooks(args: {
         currentLocalHooksPath: null,
         currentEffectiveHooksPath: await getGitConfigValue(repoRoot, CORE_HOOKS_PATH_CONFIG_KEY, 'effective'),
         restoredHooksPath: null,
-        removedManagedHookAssets
+        removedManagedHookAssets,
+        removedClaudeCodeHooks
     };
 }
 
@@ -298,6 +324,69 @@ async function removeEmptyHookDirectoryIfPossible(repoRoot: string): Promise<voi
 
 function getExtensionRuntimeFilePath(): string {
     return path.resolve(__dirname, '..', 'hook-runtime', MANAGED_HOOK_RUNTIME_FILE_NAME);
+}
+
+async function ensureManagedPathsIgnored(repoRoot: string): Promise<boolean> {
+    const gitignorePath = path.join(repoRoot, '.gitignore');
+    let existingContents = '';
+    try {
+        existingContents = await fs.promises.readFile(gitignorePath, 'utf8');
+    }
+    catch {
+        existingContents = '';
+    }
+
+    const existingPatterns = new Set(existingContents
+        .split(/\r\n|\r|\n/)
+        .map(normalizeGitignorePattern)
+        .filter((line) => line.length > 0));
+    const missingPatterns = MANAGED_GITIGNORE_PATTERNS.filter((pattern) => !existingPatterns.has(normalizeGitignorePattern(pattern)));
+    if (missingPatterns.length === 0) {
+        return false;
+    }
+
+    const separator = existingContents.length === 0 || existingContents.endsWith('\n') || existingContents.endsWith('\r') ? '' : '\n';
+    await fs.promises.writeFile(
+        gitignorePath,
+        `${existingContents}${separator}${missingPatterns.join('\n')}\n`,
+        'utf8'
+    );
+    return true;
+}
+
+function normalizeGitignorePattern(pattern: string): string {
+    return pattern.trim()
+        .replace(/^\.\//u, '')
+        .replace(/\\/gu, '/')
+        .replace(/\/+$/u, '');
+}
+
+async function ensureClaudeCodeHooksInstalled(repoRoot: string): Promise<ClaudeCodeHooksInstallResult> {
+    const runtimeSourcePath = getExtensionClaudeCodeRuntimeFilePath();
+    if (!(await pathExists(runtimeSourcePath))) {
+        throw new Error(`AILoc2 Claude Code runtime asset is missing at ${runtimeSourcePath}. Build the extension before installing hooks.`);
+    }
+
+    return installClaudeCodeHooks({
+        repoRoot,
+        runtimeSourcePath
+    });
+}
+
+async function removeClaudeCodeHooks(repoRoot: string): Promise<boolean> {
+    const settingsPath = path.join(repoRoot, '.claude', 'settings.json');
+    const runtimePath = path.join(repoRoot, '.claude', 'ailoc2-claude-code.cjs');
+    const hadManagedClaudeCodeFiles = await pathExists(settingsPath) || await pathExists(runtimePath);
+    if (!hadManagedClaudeCodeFiles) {
+        return false;
+    }
+
+    await uninstallClaudeCodeHooks(repoRoot);
+    return true;
+}
+
+function getExtensionClaudeCodeRuntimeFilePath(): string {
+    return path.resolve(__dirname, '..', 'claude-code', 'ailoc2-claude-code.cjs');
 }
 
 function getLegacyManagedHookRuntimeDirectoryPath(repoRoot: string): string {

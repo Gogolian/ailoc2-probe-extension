@@ -2,7 +2,7 @@
   "name": "ailoc2-probe-extension",
   "displayName": "AILoc2 Probe",
   "description": "Local-first AI attribution for real Git commits. Estimates how much of your staged change was AI-assisted and annotates the commit message automatically via Git hooks.",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "publisher": "Gogolian",
   "license": "MIT",
   "repository": {
@@ -83,8 +83,9 @@
     }
   },
   "scripts": {
-    "build": "tsc -p ./ && npm run build:hook-runtime",
+    "build": "tsc -p ./ && npm run build:hook-runtime && npm run build:claude-code-runtime",
     "build:hook-runtime": "esbuild ./src/cli/gitHookCli.ts --bundle --platform=node --format=cjs --target=node18 --outfile=./out/hook-runtime/ailoc2-hook-runtime.cjs",
+    "build:claude-code-runtime": "esbuild ./src/cli/claudeCodeCli.ts --bundle --platform=node --format=cjs --target=node18 --outfile=./out/claude-code/ailoc2-claude-code.cjs",
     "test": "npm run build && node --test \"out/test/*.test.js\"",
     "watch": "tsc -w -p ./",
     "vscode:prepublish": "npm run build"
