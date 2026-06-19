@@ -8,6 +8,10 @@ import {
     classifyWorkspaceFileChange
 } from './changeClassification';
 import {
+    getChatEditingTargetFsPath,
+    isChatEditingUriScheme
+} from './chatEditingUri';
+import {
     normalizeFsLikePath,
     resolveRepoLocationForDocument,
     resolveRepoRootForFsPath,
@@ -53,6 +57,7 @@ type ChatEditingMetadata = {
     scheme: string;
     logicalPath: string | null;
     targetFileName: string;
+    virtualDocumentUri: string;
     kind: string | null;
     documentId: string | null;
     requestId: string | null;
@@ -257,6 +262,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
     for (const document of vscode.workspace.textDocuments) {
         upsertSnapshot(document);
+    }
+
+    const initialTabChatEditContexts = rememberChatEditContextsFromTabs(recentChatEdits, 'TAB_GROUPS_INITIAL_SCAN');
+    if (initialTabChatEditContexts.length > 0) {
+        logEvent('CHAT_EDITING_TABS_SCANNED', {
+            reason: 'activation',
+            chatEditContexts: initialTabChatEditContexts
+        });
     }
 
     context.subscriptions.push(
@@ -510,6 +523,16 @@ export function activate(context: vscode.ExtensionContext): void {
                 chatEditContext,
                 recentChatEditCorrelation: getRecentChatEditCorrelation(recentChatEdits, document),
                 snapshot: summarizeSnapshot(snapshot)
+            });
+        }),
+        vscode.window.tabGroups.onDidChangeTabs(() => {
+            const chatEditContexts = rememberChatEditContextsFromTabs(recentChatEdits, 'TAB_GROUPS_CHANGED');
+            if (chatEditContexts.length === 0) {
+                return;
+            }
+
+            logEvent('CHAT_EDITING_TABS_CHANGED', {
+                chatEditContexts
             });
         }),
         vscode.workspace.onDidCloseTextDocument((document) => {
@@ -1021,8 +1044,8 @@ function getLogicalDocumentPath(document: vscode.TextDocument): string | null {
         return normalizeFsLikePath(document.uri.fsPath);
     }
 
-    if (isChatEditingDocument(document) && path.isAbsolute(document.fileName)) {
-        return normalizeFsLikePath(document.fileName);
+    if (isChatEditingDocument(document)) {
+        return normalizeFsLikePath(getChatEditingTargetFsPath(document.uri, document.fileName));
     }
 
     return null;
@@ -1033,13 +1056,26 @@ function extractChatEditingMetadata(document: vscode.TextDocument): ChatEditingM
         return null;
     }
 
-    const queryRecord = tryParseUriQueryAsRecord(document.uri);
+    return extractChatEditingMetadataFromUri(document.uri, document.fileName, getLogicalDocumentPath(document));
+}
+
+function extractChatEditingMetadataFromUri(
+    uri: vscode.Uri,
+    targetFileName: string | undefined,
+    logicalPath: string | null
+): ChatEditingMetadata | null {
+    if (!isChatEditingUriScheme(uri.scheme)) {
+        return null;
+    }
+
+    const queryRecord = tryParseUriQueryAsRecord(uri);
     const sessionRecord = asRecord(queryRecord?.chatSessionResource) ?? asRecord(queryRecord?.session);
 
     return {
-        scheme: document.uri.scheme,
-        logicalPath: getLogicalDocumentPath(document),
-        targetFileName: document.fileName,
+        scheme: uri.scheme,
+        logicalPath,
+        targetFileName: targetFileName ?? uri.fsPath,
+        virtualDocumentUri: uri.toString(),
         kind: getRecordString(queryRecord, 'kind'),
         documentId: getRecordString(queryRecord, 'documentId'),
         requestId: getRecordString(queryRecord, 'requestId'),
@@ -1063,6 +1099,16 @@ function rememberChatEditContext(
     pruneExpiredChatEditContexts(recentChatEdits);
 
     const metadata = extractChatEditingMetadata(document);
+    return rememberChatEditContextFromMetadata(recentChatEdits, metadata, eventName);
+}
+
+function rememberChatEditContextFromMetadata(
+    recentChatEdits: Map<string, ChatEditContext>,
+    metadata: ChatEditingMetadata | null,
+    eventName: string
+): Record<string, unknown> | null {
+    pruneExpiredChatEditContexts(recentChatEdits);
+
     if (!metadata?.logicalPath) {
         return null;
     }
@@ -1079,7 +1125,7 @@ function rememberChatEditContext(
         requestIds: [],
         snapshotRequestIds: [],
         documentIds: [],
-        lastVirtualDocumentUri: document.uri.toString(),
+        lastVirtualDocumentUri: metadata.virtualDocumentUri,
         lastEventName: eventName,
         eventCount: 0,
         lastSnapshotSeenAtMs: null,
@@ -1090,7 +1136,7 @@ function rememberChatEditContext(
     existing.lastSeenAtMs = nowMs;
     existing.lastSeenAt = nowIso;
     existing.lastScheme = metadata.scheme;
-    existing.lastVirtualDocumentUri = document.uri.toString();
+    existing.lastVirtualDocumentUri = metadata.virtualDocumentUri;
     existing.lastEventName = eventName;
     existing.eventCount += 1;
     existing.chatSession = metadata.chatSession;
@@ -1108,6 +1154,59 @@ function rememberChatEditContext(
 
     recentChatEdits.set(metadata.logicalPath, existing);
     return summarizeChatEditContext(existing);
+}
+
+function rememberChatEditContextsFromTabs(
+    recentChatEdits: Map<string, ChatEditContext>,
+    eventName: string
+): Array<Record<string, unknown>> {
+    const contexts: Array<Record<string, unknown>> = [];
+    for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+            const context = rememberChatEditContextFromTabInput(recentChatEdits, tab.input, eventName);
+            if (context) {
+                contexts.push(context);
+            }
+        }
+    }
+
+    return contexts;
+}
+
+function rememberChatEditContextFromTabInput(
+    recentChatEdits: Map<string, ChatEditContext>,
+    input: unknown,
+    eventName: string
+): Record<string, unknown> | null {
+    if (input instanceof vscode.TabInputTextDiff) {
+        const originalMetadata = extractChatEditingMetadataFromUri(input.original, input.original.fsPath, getChatEditingLogicalPathForUri(input.original));
+        const modifiedMetadata = extractChatEditingMetadataFromUri(input.modified, input.modified.fsPath, getChatEditingLogicalPathForUri(input.modified));
+        const metadata = originalMetadata ?? modifiedMetadata;
+        if (!metadata) {
+            return null;
+        }
+
+        const modifiedLogicalPath = getLogicalPathForFileUri(input.modified) ?? metadata.logicalPath;
+        return rememberChatEditContextFromMetadata(recentChatEdits, {
+            ...metadata,
+            logicalPath: modifiedLogicalPath
+        }, eventName);
+    }
+
+    if (input instanceof vscode.TabInputText) {
+        const metadata = extractChatEditingMetadataFromUri(input.uri, input.uri.fsPath, getChatEditingLogicalPathForUri(input.uri));
+        return rememberChatEditContextFromMetadata(recentChatEdits, metadata, eventName);
+    }
+
+    return null;
+}
+
+function getLogicalPathForFileUri(uri: vscode.Uri): string | null {
+    return uri.scheme === 'file' ? normalizeFsLikePath(uri.fsPath) : null;
+}
+
+function getChatEditingLogicalPathForUri(uri: vscode.Uri): string | null {
+    return normalizeFsLikePath(getChatEditingTargetFsPath(uri, uri.fsPath));
 }
 
 function getRecentChatEditCorrelation(
