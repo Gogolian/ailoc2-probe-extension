@@ -4,6 +4,10 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import {
+    ChangeClassification,
+    classifyWorkspaceFileChange
+} from './changeClassification';
+import {
     normalizeFsLikePath,
     resolveRepoLocationForDocument,
     resolveRepoRootForFsPath,
@@ -114,11 +118,6 @@ type ChangeStats = {
     isLargeBulkInsertion: boolean;
     isLargeBulkExpansion: boolean;
     replacementRatio: number | null;
-};
-
-type ChangeClassification = {
-    signal: string;
-    explanation: string;
 };
 
 type ChangeMetricCandidate = {
@@ -1315,45 +1314,16 @@ function classifyChangeEvent(input: {
         };
     }
 
-    if (input.document.uri.scheme === 'file'
-        && input.recentChatEditCorrelation?.hasRecentSnapshotActivity
-        && input.changeStats.isWholeDocumentReplace) {
-        return {
-            signal: 'ProbableAIApplyToWorkspaceFile',
-            explanation: 'A real workspace file was replaced wholesale shortly after chat-editing snapshot activity for the same logical path.'
-        };
-    }
-
-    if (input.document.uri.scheme === 'file'
-        && input.recentChatEditCorrelation
-        && input.changeStats.isSmallLocalizedEdit) {
-        return {
-            signal: 'LikelyHumanEditWhileChatSessionOpen',
-            explanation: 'A small localized workspace-file edit occurred while chat-editing virtual documents were open, which likely means the human edited the file during an active chat session.'
-        };
-    }
-
-    if (input.document.uri.scheme === 'file'
-        && input.recentChatEditCorrelation?.hasRecentSnapshotActivity) {
-        return {
-            signal: 'PossibleAIApplyToWorkspaceFile',
-            explanation: 'A real workspace file changed soon after chat-editing snapshot activity for the same logical path, but the change was not a whole-document replacement.'
-        };
-    }
-
-    if (input.document.uri.scheme === 'file'
-        && (input.changeStats.isLargeBulkInsertion || input.changeStats.isLargeBulkExpansion)) {
-        return {
-            signal: 'ProbableAIBulkWorkspaceEdit',
-            explanation: 'A large multi-line insertion or expansion landed as one workspace-file edit without stronger chat snapshot metadata.'
-        };
-    }
-
     if (input.document.uri.scheme === 'file') {
-        return {
-            signal: 'LikelyHumanOrRegularEditorEdit',
-            explanation: 'A regular workspace file changed without matching chat-editing context.'
-        };
+        return classifyWorkspaceFileChange({
+            isNoOp: input.changeStats.isNoOp,
+            isWholeDocumentReplace: input.changeStats.isWholeDocumentReplace,
+            isSmallLocalizedEdit: input.changeStats.isSmallLocalizedEdit,
+            isLargeBulkInsertion: input.changeStats.isLargeBulkInsertion,
+            isLargeBulkExpansion: input.changeStats.isLargeBulkExpansion,
+            hasRecentChatCorrelation: input.recentChatEditCorrelation !== null,
+            hasRecentSnapshotActivity: input.recentChatEditCorrelation?.hasRecentSnapshotActivity ?? false
+        });
     }
 
     return {

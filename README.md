@@ -186,7 +186,7 @@ your-repo/
 The current heuristic is intentionally conservative.
 
 - The **strongest AI signal** is recent `chat-editing-snapshot-text-model` activity followed almost immediately by a workspace-file change — especially a whole-document replacement.
-- Large one-shot multi-line insertions or expansions are treated as probable AI bulk edits when stronger chat metadata is missing.
+- Large one-shot multi-line insertions or expansions without chat-editing evidence are treated as regular human/editor activity. Size alone is not enough to call a paste AI.
 - A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
 - Zero-content change events are filtered out as lifecycle noise.
 - Unknown or unattributed slices are kept out of the headline percentage when possible instead of being quietly counted as AI.
@@ -197,13 +197,13 @@ The current heuristic is intentionally conservative.
 | --- | --- | --- |
 | `ProbableAIApplyToWorkspaceFile` | Strong evidence of AI apply to a real file after recent snapshot activity. | AI |
 | `PossibleAIApplyToWorkspaceFile` | Some AI-like context exists, but the change is less decisive. | AI |
-| `ProbableAIBulkWorkspaceEdit` | A large one-shot workspace-file insertion or expansion without stronger chat metadata. | AI |
+| `ProbableAIBulkWorkspaceEdit` | Historical/explicit bulk-AI signal retained for existing metrics; live classification no longer emits it from size alone. | AI |
 | `LikelyHumanEditWhileChatSessionOpen` | Small manual edit while a chat session is active. | Human |
 | `LikelyHumanOrRegularEditorEdit` | Ordinary workspace-file edit without matching chat-editing context. | Human |
 
 ### How the summary is computed
 
-AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Final percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
+AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Final percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; structural formatter/linter rewrites such as import sorting still count as normal changes.
 
 ## Current limitations
 
