@@ -118,6 +118,7 @@ test('installRepoHooks wraps existing unmanaged hook files and uninstall restore
     const delegateContentsBeforeUninstall = fs.readFileSync(delegatePath, 'utf8');
     const rerunResult = await installRepoHooks({ repoRoot });
     const rerunPreCommitContents = fs.readFileSync(preCommitPath, 'utf8');
+    const hasPostCommitBeforeUninstall = fs.existsSync(path.join(hooksDirectoryPath, 'post-commit'));
     const uninstallResult = await uninstallRepoHooks({ repoRoot });
 
     assert.deepEqual({
@@ -127,7 +128,7 @@ test('installRepoHooks wraps existing unmanaged hook files and uninstall restore
         wrappedPreCommitIsManaged: wrappedPreCommitContents.includes('# AILoc2 managed hook: pre-commit'),
         wrappedPreCommitDelegatesOriginal: wrappedPreCommitContents.includes('# AILoc2 wrapped hook delegate: .githooks/pre-commit.ailoc2-delegate'),
         delegateContents: delegateContentsBeforeUninstall,
-        hasPostCommit: fs.existsSync(path.join(hooksDirectoryPath, 'post-commit')),
+        hasPostCommit: hasPostCommitBeforeUninstall,
         rerunStatus: rerunResult.status,
         rerunWrappedHookFiles: rerunResult.wrappedHookFiles,
         rerunPreservesDelegate: rerunPreCommitContents.includes('# AILoc2 wrapped hook delegate: .githooks/pre-commit.ailoc2-delegate'),
