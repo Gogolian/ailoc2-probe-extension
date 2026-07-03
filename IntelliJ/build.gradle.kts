@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.Copy
+import org.gradle.api.tasks.Exec
 
 plugins {
     id("java")
@@ -24,7 +25,12 @@ val ideaSinceBuild = providers.gradleProperty("ideaSinceBuild").orNull?.trim()
     }
 
 group = "com.ailoc2"
-version = "1.0.8"
+version = "1.0.9"
+
+val repositoryRoot = rootProject.layout.projectDirectory.dir("..")
+val claudeRuntime = repositoryRoot.file("out/claude-code/ailoc2-claude-code.cjs")
+
+fun npmCommand(): String = if (System.getProperty("os.name").lowercase().contains("win")) "npm.cmd" else "npm"
 
 dependencies {
     intellijPlatform {
@@ -56,11 +62,15 @@ tasks.named("buildSearchableOptions") {
     enabled = false
 }
 
+val buildClaudeCodeRuntime by tasks.registering(Exec::class) {
+    workingDir = repositoryRoot.asFile
+    commandLine(npmCommand(), "run", "build:claude-code-runtime")
+    outputs.file(claudeRuntime)
+}
+
 tasks.named<Copy>("processResources") {
-    val claudeRuntime = rootProject.layout.projectDirectory.file("../out/claude-code/ailoc2-claude-code.cjs")
-    if (claudeRuntime.asFile.exists()) {
-        from(claudeRuntime) {
-            into("claude-code")
-        }
+    dependsOn(buildClaudeCodeRuntime)
+    from(claudeRuntime) {
+        into("claude-code")
     }
 }

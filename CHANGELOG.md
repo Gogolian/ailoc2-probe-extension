@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.9] - 2026-07-03
+- Fix IntelliJ plugin packaging so the bundled Claude Code runtime is always included before hook installation.
+- Update the IntelliJ plugin CI workflow to install Node dependencies before building plugin artifacts.
+
 ## [1.0.2] - 2026-05-08
 - Add repo-local `.ailoc2-metrics/.ignore` support for both VS Code and IntelliJ metrics tracking.
 - Skip creating per-file metrics state for ignored files and directories.
