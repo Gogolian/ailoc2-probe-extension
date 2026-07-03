@@ -384,10 +384,16 @@ export function activate(context: vscode.ExtensionContext): void {
             }
 
             try {
+                const installOptions = {
+                    repoRoot,
+                    allowReplacingExistingLocalHooksPath: false,
+                    chainExistingLocalHooksPath: false,
+                    wrapExistingHookFiles: false
+                };
                 let installResult = await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
                     title: `AILoc2: Installing hooks for ${path.basename(repoRoot)}`
-                }, async () => installRepoHooks({ repoRoot }));
+                }, async () => installRepoHooks(installOptions));
 
                 if (installResult.status === 'conflict') {
                     const resolutionChoice = await vscode.window.showWarningMessage(
@@ -404,16 +410,45 @@ export function activate(context: vscode.ExtensionContext): void {
                         return;
                     }
 
+                    installOptions.allowReplacingExistingLocalHooksPath = true;
+                    installOptions.chainExistingLocalHooksPath = resolutionChoice === 'Chain hooks';
                     installResult = await vscode.window.withProgress({
                         location: vscode.ProgressLocation.Notification,
                         title: resolutionChoice === 'Chain hooks'
                             ? `AILoc2: Chaining hooks for ${path.basename(repoRoot)}`
                             : `AILoc2: Replacing hooksPath for ${path.basename(repoRoot)}`
-                    }, async () => installRepoHooks({
-                        repoRoot,
-                        allowReplacingExistingLocalHooksPath: true,
-                        chainExistingLocalHooksPath: resolutionChoice === 'Chain hooks'
-                    }));
+                    }, async () => installRepoHooks(installOptions));
+                }
+
+                if (installResult.status === 'hook-file-conflict') {
+                    const hookFileList = formatHookFileList(installResult.conflictingHookFiles);
+                    const resolutionChoice = await vscode.window.showWarningMessage(
+                        `${path.basename(repoRoot)} already has existing hook files that are not managed by AILoc2: ${hookFileList}. Do you want AILoc2 to preserve those hooks and run them after AILoc2?`,
+                        { modal: true },
+                        'Wrap Existing Hooks'
+                    );
+                    if (!resolutionChoice) {
+                        logEvent('COMMAND_INSTALL_HOOKS_CANCELLED', {
+                            repoRoot,
+                            conflictingHookFiles: installResult.conflictingHookFiles
+                        });
+                        return;
+                    }
+
+                    installOptions.wrapExistingHookFiles = true;
+                    installResult = await vscode.window.withProgress({
+                        location: vscode.ProgressLocation.Notification,
+                        title: `AILoc2: Wrapping existing hooks for ${path.basename(repoRoot)}`
+                    }, async () => installRepoHooks(installOptions));
+                }
+
+                if (installResult.status === 'manual-merge-required') {
+                    logEvent('COMMAND_INSTALL_HOOKS_MANUAL_MERGE_REQUIRED', installResult);
+                    void vscode.window.showWarningMessage(
+                        `AILoc2 could not safely wrap existing hooks for ${path.basename(repoRoot)}. Proposed AILoc2 hook files were written to ${installResult.manualMergeHookFiles.join(', ')}. Merge them with ${formatHookFileList(installResult.conflictingHookFiles)}, then rerun install.`,
+                        { modal: true }
+                    );
+                    return;
                 }
 
                 logEvent('COMMAND_INSTALL_HOOKS', installResult);
@@ -441,7 +476,10 @@ export function activate(context: vscode.ExtensionContext): void {
                     : installResult.replacedPreviousLocalHooksPath
                     ? `AILoc2 Git and Claude Code hooks installed for ${path.basename(repoRoot)}. Previous local hooksPath saved for restore on uninstall.`
                     : `AILoc2 Git and Claude Code hooks installed for ${path.basename(repoRoot)}.`;
-                void vscode.window.showInformationMessage(infoMessage);
+                const wrappedHooksMessage = installResult.wrappedHookFiles.length > 0
+                    ? ` Existing hooks were preserved and will run after AILoc2: ${formatHookFileList(installResult.wrappedHookFiles)}.`
+                    : '';
+                void vscode.window.showInformationMessage(`${infoMessage}${wrappedHooksMessage}`);
 
                 if (initialSummaryRefreshError) {
                     void vscode.window.showWarningMessage(
@@ -1950,6 +1988,10 @@ function getTrackingExclusionReasonForUri(uri: vscode.Uri): string | null {
 
 function getTrackingExclusionReasonForPath(candidatePath: string | null | undefined): string | null {
     return getSharedTrackingExclusionReasonForPath(candidatePath);
+}
+
+function formatHookFileList(hookFileNames: readonly string[]): string {
+    return hookFileNames.map((hookFileName) => `.githooks/${hookFileName}`).join(', ');
 }
 
 async function promptForRepoRootForCommand(args: {

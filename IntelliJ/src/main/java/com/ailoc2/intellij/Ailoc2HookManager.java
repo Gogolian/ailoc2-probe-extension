@@ -31,12 +31,20 @@ final class Ailoc2HookManager {
     private static final String PREVIOUS_LOCAL_HOOKS_PATH_CONFIG_KEY = "ailoc2Probe.previousLocalHooksPath";
     private static final String DELEGATE_LOCAL_HOOKS_PATH_CONFIG_KEY = "ailoc2Probe.delegateLocalHooksPath";
     private static final String MANAGED_HOOK_MARKER_PREFIX = "# AILoc2 managed IntelliJ hook: ";
+    private static final String WRAPPED_HOOK_DELEGATE_MARKER_PREFIX = "# AILoc2 wrapped hook delegate: ";
+    private static final String WRAPPED_HOOK_DELEGATE_FILE_SUFFIX = ".ailoc2-delegate";
+    private static final String MANUAL_MERGE_HOOK_FILE_SUFFIX = ".ailoc2-proposed";
     private static final List<String> REQUIRED_REPO_HOOK_FILES = List.of("pre-commit", "commit-msg", "post-commit");
     private static final List<String> MANAGED_GITIGNORE_PATTERNS = List.of(".ailoc2-metrics/", ".githooks/", ".claude/");
     private static final String CLAUDE_MANAGED_TOOL_MATCHER = "Write|Edit|MultiEdit";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
-    HookInstallResult installRepoHooks(Path repoRoot, boolean allowReplacingExistingLocalHooksPath, boolean chainExistingLocalHooksPath)
+    HookInstallResult installRepoHooks(
+        Path repoRoot,
+        boolean allowReplacingExistingLocalHooksPath,
+        boolean chainExistingLocalHooksPath,
+        boolean wrapExistingHookFiles
+    )
         throws IOException, InterruptedException {
         Path normalizedRepoRoot = repoRoot.toAbsolutePath().normalize();
         assertGitRepositoryRoot(normalizedRepoRoot);
@@ -63,11 +71,52 @@ final class Ailoc2HookManager {
                 currentLocalHooksPath,
                 currentEffectiveHooksPath,
                 null,
-                null
+                null,
+                List.of(),
+                List.of(),
+                List.of()
             );
         }
 
-        ensureManagedRepoHookAssetsInstalled(normalizedRepoRoot, delegatedHooksPath);
+        List<String> conflictingHookFiles = findUnmanagedHookFileConflicts(normalizedRepoRoot);
+        if (!conflictingHookFiles.isEmpty() && !wrapExistingHookFiles) {
+            return new HookInstallResult(
+                HookInstallStatus.HOOK_FILE_CONFLICT,
+                normalizedRepoRoot,
+                hooksDirectoryPath,
+                currentLocalHooksPath,
+                currentEffectiveHooksPath,
+                null,
+                delegatedHooksPath,
+                conflictingHookFiles,
+                List.of(),
+                List.of()
+            );
+        }
+
+        assertClaudeRuntimeResourceAvailable();
+
+        List<String> wrappedHookFiles = List.of();
+        if (!conflictingHookFiles.isEmpty()) {
+            HookFileWrapResult wrapResult = wrapUnmanagedHookFiles(normalizedRepoRoot, conflictingHookFiles, delegatedHooksPath);
+            if (!wrapResult.manualMergeHookFiles().isEmpty()) {
+                return new HookInstallResult(
+                    HookInstallStatus.MANUAL_MERGE_REQUIRED,
+                    normalizedRepoRoot,
+                    hooksDirectoryPath,
+                    currentLocalHooksPath,
+                    currentEffectiveHooksPath,
+                    null,
+                    delegatedHooksPath,
+                    conflictingHookFiles,
+                    List.of(),
+                    wrapResult.manualMergeHookFiles()
+                );
+            }
+            wrappedHookFiles = wrapResult.wrappedHookFiles();
+        }
+
+        ensureManagedRepoHookAssetsInstalled(normalizedRepoRoot, delegatedHooksPath, wrappedHookFiles);
 
         if (isAlreadyInstalled) {
             return new HookInstallResult(
@@ -77,7 +126,10 @@ final class Ailoc2HookManager {
                 currentLocalHooksPath,
                 currentEffectiveHooksPath,
                 null,
-                delegatedHooksPath
+                delegatedHooksPath,
+                conflictingHookFiles,
+                wrappedHookFiles,
+                List.of()
             );
         }
 
@@ -106,7 +158,10 @@ final class Ailoc2HookManager {
             REPO_HOOKS_PATH_VALUE,
             REPO_HOOKS_PATH_VALUE,
             replacedPreviousLocalHooksPath,
-            delegatedHooksPath
+            delegatedHooksPath,
+            conflictingHookFiles,
+            wrappedHookFiles,
+            List.of()
         );
     }
 
@@ -171,12 +226,12 @@ final class Ailoc2HookManager {
         }
     }
 
-    private void ensureManagedRepoHookAssetsInstalled(Path repoRoot, String delegatedHooksPath) throws IOException {
+    private void ensureManagedRepoHookAssetsInstalled(Path repoRoot, String delegatedHooksPath, List<String> wrappedHookFiles) throws IOException {
         ensureManagedPathsIgnored(repoRoot);
         Files.createDirectories(getRepoHooksDirectoryPath(repoRoot));
-        ensureManagedHookFile(repoRoot, "pre-commit", delegatedHooksPath);
-        ensureManagedHookFile(repoRoot, "commit-msg", delegatedHooksPath);
-        ensureManagedHookFile(repoRoot, "post-commit", delegatedHooksPath);
+        for (String hookFileName : REQUIRED_REPO_HOOK_FILES) {
+            ensureManagedHookFile(repoRoot, hookFileName, createHookDelegateSpecs(hookFileName, delegatedHooksPath, wrappedHookFiles));
+        }
         installManagedRuntimeAsset(repoRoot);
         installManagedClaudeCodeAssets(repoRoot);
 
@@ -187,9 +242,9 @@ final class Ailoc2HookManager {
         markExecutableBestEffort(getClaudeRuntimePath(repoRoot));
     }
 
-    private void ensureManagedHookFile(Path repoRoot, String hookFileName, String delegatedHooksPath) throws IOException {
-        String expectedContents = createManagedHookFileContents(hookFileName, delegatedHooksPath);
+    private void ensureManagedHookFile(Path repoRoot, String hookFileName, List<HookDelegateSpec> delegateSpecs) throws IOException {
         Path hookFilePath = getRepoHooksDirectoryPath(repoRoot).resolve(hookFileName);
+        List<HookDelegateSpec> expectedDelegateSpecs = new ArrayList<>(delegateSpecs);
         if (Files.exists(hookFilePath)) {
             String existingContents = Files.readString(hookFilePath, StandardCharsets.UTF_8);
             if (!isManagedHookFileText(hookFileName, existingContents)) {
@@ -199,12 +254,91 @@ final class Ailoc2HookManager {
                 );
             }
 
+            expectedDelegateSpecs = mergeHookDelegateSpecs(extractWrappedHookDelegateSpecs(existingContents), expectedDelegateSpecs);
+            String expectedContents = createManagedHookFileContents(hookFileName, expectedDelegateSpecs);
             if (normalizeHookFileText(existingContents).equals(normalizeHookFileText(expectedContents))) {
                 return;
             }
+
+            Files.writeString(hookFilePath, expectedContents, StandardCharsets.UTF_8);
+            return;
         }
 
+        String expectedContents = createManagedHookFileContents(hookFileName, expectedDelegateSpecs);
         Files.writeString(hookFilePath, expectedContents, StandardCharsets.UTF_8);
+    }
+
+    private List<String> findUnmanagedHookFileConflicts(Path repoRoot) {
+        List<String> conflictingHookFiles = new ArrayList<>();
+        for (String hookFileName : REQUIRED_REPO_HOOK_FILES) {
+            Path hookFilePath = getRepoHooksDirectoryPath(repoRoot).resolve(hookFileName);
+            if (!Files.exists(hookFilePath)) {
+                continue;
+            }
+
+            try {
+                if (!Files.isRegularFile(hookFilePath)) {
+                    conflictingHookFiles.add(hookFileName);
+                    continue;
+                }
+
+                String existingContents = Files.readString(hookFilePath, StandardCharsets.UTF_8);
+                if (!isManagedHookFileText(hookFileName, existingContents)) {
+                    conflictingHookFiles.add(hookFileName);
+                }
+            }
+            catch (IOException ignored) {
+                conflictingHookFiles.add(hookFileName);
+            }
+        }
+
+        return conflictingHookFiles;
+    }
+
+    private HookFileWrapResult wrapUnmanagedHookFiles(Path repoRoot, List<String> hookFileNames, String delegatedHooksPath) throws IOException {
+        List<String> unsafeHookFiles = new ArrayList<>();
+        for (String hookFileName : hookFileNames) {
+            Path hookFilePath = getRepoHooksDirectoryPath(repoRoot).resolve(hookFileName);
+            Path delegateFilePath = getWrappedHookDelegateFilePath(repoRoot, hookFileName);
+            if (Files.exists(delegateFilePath) || !Files.isRegularFile(hookFilePath)) {
+                unsafeHookFiles.add(hookFileName);
+            }
+        }
+
+        if (!unsafeHookFiles.isEmpty()) {
+            return new HookFileWrapResult(List.of(), writeManualMergeHookFiles(repoRoot, unsafeHookFiles, delegatedHooksPath));
+        }
+
+        for (String hookFileName : hookFileNames) {
+            Files.move(getRepoHooksDirectoryPath(repoRoot).resolve(hookFileName), getWrappedHookDelegateFilePath(repoRoot, hookFileName));
+        }
+
+        return new HookFileWrapResult(List.copyOf(hookFileNames), List.of());
+    }
+
+    private List<String> writeManualMergeHookFiles(Path repoRoot, List<String> hookFileNames, String delegatedHooksPath) throws IOException {
+        Files.createDirectories(getRepoHooksDirectoryPath(repoRoot));
+        List<String> manualMergeHookFiles = new ArrayList<>();
+        for (String hookFileName : hookFileNames) {
+            String proposedFileName = hookFileName + MANUAL_MERGE_HOOK_FILE_SUFFIX;
+            Path proposedFilePath = getRepoHooksDirectoryPath(repoRoot).resolve(proposedFileName);
+            Files.writeString(
+                proposedFilePath,
+                createManagedHookFileContents(hookFileName, createHookDelegateSpecs(hookFileName, delegatedHooksPath, List.of())),
+                StandardCharsets.UTF_8
+            );
+            manualMergeHookFiles.add(REPO_HOOKS_PATH_VALUE + "/" + proposedFileName);
+        }
+
+        return manualMergeHookFiles;
+    }
+
+    private void assertClaudeRuntimeResourceAvailable() throws IOException {
+        try (InputStream runtimeStream = Ailoc2HookManager.class.getResourceAsStream(CLAUDE_RUNTIME_RESOURCE_PATH)) {
+            if (runtimeStream == null) {
+                throw new IOException("AILoc2 Claude Code runtime resource is missing: " + CLAUDE_RUNTIME_RESOURCE_PATH);
+            }
+        }
     }
 
     private void installManagedRuntimeAsset(Path repoRoot) throws IOException {
@@ -375,6 +509,19 @@ final class Ailoc2HookManager {
             return false;
         }
 
+        HookDelegateSpec restorableDelegate = extractWrappedHookDelegateSpecs(existingContents).stream()
+            .filter(delegateSpec -> delegateSpec.path().equals(getWrappedHookDelegateScriptPath(hookFileName)))
+            .findFirst()
+            .orElse(null);
+        if (restorableDelegate != null) {
+            Path restorableDelegatePath = repoRoot.resolve(restorableDelegate.path()).normalize();
+            if (Files.exists(restorableDelegatePath)) {
+                Files.deleteIfExists(hookFilePath);
+                Files.move(restorableDelegatePath, hookFilePath);
+                return true;
+            }
+        }
+
         Files.deleteIfExists(hookFilePath);
         return true;
     }
@@ -441,31 +588,24 @@ final class Ailoc2HookManager {
         return path.toAbsolutePath().normalize().toString().replace('\\', '/');
     }
 
-    private String createManagedHookFileContents(String hookFileName, String delegatedHooksPath) {
+    private String createManagedHookFileContents(String hookFileName, List<HookDelegateSpec> delegateSpecs) {
         return switch (hookFileName) {
-            case "pre-commit" -> createManagedPreCommitHookScript(delegatedHooksPath);
-            case "commit-msg" -> createManagedCommitMsgHookScript(delegatedHooksPath);
-            case "post-commit" -> createManagedPostCommitHookScript(delegatedHooksPath);
+            case "pre-commit" -> createManagedPreCommitHookScript(delegateSpecs);
+            case "commit-msg" -> createManagedCommitMsgHookScript(delegateSpecs);
+            case "post-commit" -> createManagedPostCommitHookScript(delegateSpecs);
             default -> throw new IllegalArgumentException("Unsupported managed hook file: " + hookFileName);
         };
     }
 
-    private String createManagedPreCommitHookScript(String delegatedHooksPath) {
-        String delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, "pre-commit");
+    private String createManagedPreCommitHookScript(List<HookDelegateSpec> delegateSpecs) {
         return """
             #!/bin/sh
             # AILoc2 managed IntelliJ hook: pre-commit
+            %s
 
             RUNTIME_PATH="./.githooks/%s"
-            DELEGATE_HOOK_PATH="%s"
 
-            run_delegate_hook() {
-                if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
-                    return 0
-                fi
-
-                "$DELEGATE_HOOK_PATH" "$@"
-            }
+            %s
 
             if [ -f "$RUNTIME_PATH" ]; then
                 sh "$RUNTIME_PATH" refresh-summary >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ summary refresh failed; continuing without blocking the commit.' >&2
@@ -473,28 +613,21 @@ final class Ailoc2HookManager {
                 printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ hook runtime is unavailable; skipping summary refresh.' >&2
             fi
 
-            run_delegate_hook "$@"
+            run_delegate_hooks "$@"
             exit $?
-            """.formatted(RUNTIME_FILE_NAME, escapeForDoubleQuotedShell(delegatedHookPath));
+            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
     }
 
-    private String createManagedCommitMsgHookScript(String delegatedHooksPath) {
-        String delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, "commit-msg");
+    private String createManagedCommitMsgHookScript(List<HookDelegateSpec> delegateSpecs) {
         return """
             #!/bin/sh
             # AILoc2 managed IntelliJ hook: commit-msg
+            %s
 
             MESSAGE_FILE="$1"
             RUNTIME_PATH="./.githooks/%s"
-            DELEGATE_HOOK_PATH="%s"
 
-            run_delegate_hook() {
-                if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
-                    return 0
-                fi
-
-                "$DELEGATE_HOOK_PATH" "$@"
-            }
+            %s
 
             if [ -n "$MESSAGE_FILE" ] && [ -f "$RUNTIME_PATH" ]; then
                 sh "$RUNTIME_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || sh "$RUNTIME_PATH" append-placeholder "$MESSAGE_FILE" >/dev/null 2>&1
@@ -502,35 +635,28 @@ final class Ailoc2HookManager {
                 printf '%%s\\n' 'AILoc2 commit-msg warning: IntelliJ hook runtime is unavailable; skipping AI suffix.' >&2
             fi
 
-            run_delegate_hook "$@"
+            run_delegate_hooks "$@"
             exit $?
-            """.formatted(RUNTIME_FILE_NAME, escapeForDoubleQuotedShell(delegatedHookPath));
+            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
     }
 
-    private String createManagedPostCommitHookScript(String delegatedHooksPath) {
-        String delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, "post-commit");
+    private String createManagedPostCommitHookScript(List<HookDelegateSpec> delegateSpecs) {
         return """
             #!/bin/sh
             # AILoc2 managed IntelliJ hook: post-commit
+            %s
 
             RUNTIME_PATH="./.githooks/%s"
-            DELEGATE_HOOK_PATH="%s"
 
-            run_delegate_hook() {
-                if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
-                    return 0
-                fi
-
-                "$DELEGATE_HOOK_PATH" "$@"
-            }
+            %s
 
             if [ -f "$RUNTIME_PATH" ]; then
                 sh "$RUNTIME_PATH" finalize-commit >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 post-commit warning: IntelliJ committed metrics cleanup failed.' >&2
             fi
 
-            run_delegate_hook "$@"
+            run_delegate_hooks "$@"
             exit $?
-            """.formatted(RUNTIME_FILE_NAME, escapeForDoubleQuotedShell(delegatedHookPath));
+            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
     }
 
     private String createManagedRuntimeScript() {
@@ -774,6 +900,91 @@ final class Ailoc2HookManager {
         return delegatedHooksPath.replace('\\', '/') + "/" + hookFileName;
     }
 
+    private List<HookDelegateSpec> createHookDelegateSpecs(String hookFileName, String delegatedHooksPath, List<String> wrappedHookFiles) {
+        List<HookDelegateSpec> delegateSpecs = new ArrayList<>();
+        if (wrappedHookFiles.contains(hookFileName)) {
+            delegateSpecs.add(new HookDelegateSpec(getWrappedHookDelegateScriptPath(hookFileName), true));
+        }
+
+        String delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, hookFileName);
+        if (!delegatedHookPath.isBlank()) {
+            delegateSpecs.add(new HookDelegateSpec(delegatedHookPath, false));
+        }
+
+        return delegateSpecs;
+    }
+
+    private String createDelegateHookFunction(List<HookDelegateSpec> delegateSpecs) {
+        StringBuilder builder = new StringBuilder("run_delegate_hooks() {\n");
+        for (HookDelegateSpec delegateSpec : delegateSpecs) {
+            builder
+                .append("    DELEGATE_HOOK_PATH=\"")
+                .append(escapeForDoubleQuotedShell(delegateSpec.path()))
+                .append("\"\n")
+                .append("    if [ -n \"$DELEGATE_HOOK_PATH\" ] && [ -f \"$DELEGATE_HOOK_PATH\" ]; then\n")
+                .append("        \"$DELEGATE_HOOK_PATH\" \"$@\" || return $?\n")
+                .append("    fi\n\n");
+        }
+        builder.append("    return 0\n}");
+        return builder.toString();
+    }
+
+    private String createWrappedDelegateMarkerBlock(List<HookDelegateSpec> delegateSpecs) {
+        List<String> wrappedDelegateMarkers = delegateSpecs.stream()
+            .filter(HookDelegateSpec::wrapped)
+            .map(delegateSpec -> WRAPPED_HOOK_DELEGATE_MARKER_PREFIX + delegateSpec.path())
+            .toList();
+        return wrappedDelegateMarkers.isEmpty()
+            ? ""
+            : String.join("\n", wrappedDelegateMarkers) + "\n";
+    }
+
+    private List<HookDelegateSpec> mergeHookDelegateSpecs(List<HookDelegateSpec> first, List<HookDelegateSpec> second) {
+        List<HookDelegateSpec> mergedDelegateSpecs = new ArrayList<>();
+        for (HookDelegateSpec delegateSpec : first) {
+            mergeHookDelegateSpec(mergedDelegateSpecs, delegateSpec);
+        }
+        for (HookDelegateSpec delegateSpec : second) {
+            mergeHookDelegateSpec(mergedDelegateSpecs, delegateSpec);
+        }
+        return mergedDelegateSpecs;
+    }
+
+    private void mergeHookDelegateSpec(List<HookDelegateSpec> delegateSpecs, HookDelegateSpec delegateSpec) {
+        for (int i = 0; i < delegateSpecs.size(); i++) {
+            HookDelegateSpec existingDelegateSpec = delegateSpecs.get(i);
+            if (existingDelegateSpec.path().equals(delegateSpec.path())) {
+                delegateSpecs.set(i, new HookDelegateSpec(existingDelegateSpec.path(), existingDelegateSpec.wrapped() || delegateSpec.wrapped()));
+                return;
+            }
+        }
+
+        delegateSpecs.add(delegateSpec);
+    }
+
+    private List<HookDelegateSpec> extractWrappedHookDelegateSpecs(String text) {
+        return normalizeHookFileText(text)
+            .lines()
+            .map(String::trim)
+            .filter(line -> line.startsWith(WRAPPED_HOOK_DELEGATE_MARKER_PREFIX))
+            .map(line -> line.substring(WRAPPED_HOOK_DELEGATE_MARKER_PREFIX.length()).trim())
+            .filter(path -> !path.isBlank())
+            .map(path -> new HookDelegateSpec(path, true))
+            .toList();
+    }
+
+    private Path getWrappedHookDelegateFilePath(Path repoRoot, String hookFileName) {
+        return getRepoHooksDirectoryPath(repoRoot).resolve(getWrappedHookDelegateFileName(hookFileName));
+    }
+
+    private String getWrappedHookDelegateScriptPath(String hookFileName) {
+        return REPO_HOOKS_PATH_VALUE + "/" + getWrappedHookDelegateFileName(hookFileName);
+    }
+
+    private String getWrappedHookDelegateFileName(String hookFileName) {
+        return hookFileName + WRAPPED_HOOK_DELEGATE_FILE_SUFFIX;
+    }
+
     private String escapeForDoubleQuotedShell(String value) {
         return value
             .replace("\\", "\\\\")
@@ -868,7 +1079,9 @@ final class Ailoc2HookManager {
     enum HookInstallStatus {
         INSTALLED,
         ALREADY_INSTALLED,
-        CONFLICT
+        CONFLICT,
+        HOOK_FILE_CONFLICT,
+        MANUAL_MERGE_REQUIRED
     }
 
     enum HookUninstallStatus {
@@ -884,7 +1097,10 @@ final class Ailoc2HookManager {
         String currentLocalHooksPath,
         String currentEffectiveHooksPath,
         String replacedPreviousLocalHooksPath,
-        String delegatedHooksPath
+        String delegatedHooksPath,
+        List<String> conflictingHookFiles,
+        List<String> wrappedHookFiles,
+        List<String> manualMergeHookFiles
     ) {}
 
     record HookUninstallResult(
@@ -901,6 +1117,10 @@ final class Ailoc2HookManager {
         LOCAL,
         EFFECTIVE
     }
+
+    private record HookDelegateSpec(String path, boolean wrapped) {}
+
+    private record HookFileWrapResult(List<String> wrappedHookFiles, List<String> manualMergeHookFiles) {}
 
     private record GitCommandResult(int exitCode, String stdout, String stderr) {}
 }

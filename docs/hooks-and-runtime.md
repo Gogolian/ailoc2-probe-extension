@@ -23,6 +23,8 @@ A fresh managed install provisions exactly four repo-local files:
 | `.githooks/post-commit` | Promotes the committed baseline, clears fully committed file metrics, and refreshes the summary after a successful commit. |
 | `.githooks/ailoc2-hook-runtime.cjs` | Bundled runtime CLI invoked by the managed hooks. |
 
+If the repo already has unmanaged hook files at the same `.githooks/<hook>` paths, AILoc2 asks before changing them. When wrapping is approved, the original hook is moved beside the managed wrapper as `.githooks/<hook>.ailoc2-delegate` and the generated AILoc2 hook runs that preserved hook after AILoc2 finishes.
+
 ## Install flow
 
 `installRepoHooks()` in `src/hooks/management.ts` performs the following steps:
@@ -34,12 +36,14 @@ A fresh managed install provisions exactly four repo-local files:
    - `core.hooksPath` (effective)
    - `ailoc2Probe.delegateLocalHooksPath` (local)
 4. decide whether the repo is already installed, in conflict, or ready for installation
-5. update `.gitignore` for `.ailoc2-metrics/`, `.githooks/`, and `.claude/`
-6. write managed hook files and copy the bundled Git hook runtime asset
-7. install Claude Code hooks into `.claude/settings.json` and copy `.claude/ailoc2-claude-code.cjs`
-8. optionally record the previous local hooks path for restoration on uninstall
-9. optionally record a delegated repo-local hooks path to chain after AILoc2 runs
-10. set local `core.hooksPath` to `.githooks`
+5. detect existing unmanaged `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` files before mutating the repo
+6. if approved, preserve existing unmanaged hook files as `.githooks/<hook>.ailoc2-delegate`
+7. update `.gitignore` for `.ailoc2-metrics/`, `.githooks/`, and `.claude/`
+8. write managed hook files and copy the bundled Git hook runtime asset
+9. install Claude Code hooks into `.claude/settings.json` and copy `.claude/ailoc2-claude-code.cjs`
+10. optionally record the previous local hooks path for restoration on uninstall
+11. optionally record a delegated repo-local hooks path to chain after AILoc2 runs
+12. set local `core.hooksPath` to `.githooks`
 
 ## Installation statuses
 
@@ -48,6 +52,8 @@ A fresh managed install provisions exactly four repo-local files:
 | `installed` | AILoc2 successfully installed managed Git and Claude Code hook assets and set local `core.hooksPath`. |
 | `already-installed` | The repo is already using the managed AILoc2 hooks path; managed assets are refreshed. |
 | `conflict` | The repo already has a different **local** `core.hooksPath`, and replacement was not yet authorized. |
+| `hook-file-conflict` | The repo has existing `.githooks/<hook>` files that are not managed by AILoc2, and wrapping was not yet authorized. |
+| `manual-merge-required` | AILoc2 could not safely preserve an existing hook automatically, so it wrote inactive `.githooks/<hook>.ailoc2-proposed` files for manual merge. |
 
 ## Git config keys used by AILoc2
 
@@ -78,6 +84,8 @@ The managed `pre-commit` hook:
 5. if a delegated repo-local hook path exists, runs the delegated `pre-commit` hook afterward
 
 The key point is that summary refresh is **best effort**. AILoc2 does not try to block every commit because auxiliary metadata could not be refreshed.
+
+If an unmanaged `pre-commit` hook was wrapped during install, the preserved `.githooks/pre-commit.ailoc2-delegate` hook runs after the AILoc2 logic. If AILoc2 also chained to a previous `core.hooksPath`, that previous-path hook runs after the preserved same-directory hook.
 
 ### `commit-msg`
 
@@ -169,8 +177,12 @@ If `repoRoot` is omitted, the CLI resolves it relative to the current working di
 The hook manager is intentionally cautious.
 
 - managed hook files are only overwritten when they already look like AILoc2-managed files or when the target path does not exist
+- unmanaged hook files at AILoc2's target paths are reported before install mutates `.gitignore`, runtime assets, Claude settings, or Git config
+- existing hook files are wrapped only after explicit user approval
+- wrapped hook files are preserved as `.githooks/<hook>.ailoc2-delegate` and restored to their original active path on uninstall
 - uninstall only removes hook files that still match the managed AILoc2 patterns or legacy managed variants
 - if a hook file has been replaced with unrelated custom content, uninstall leaves it alone
+- if a preserved delegate path already exists or the hook path cannot be moved safely, AILoc2 writes `.githooks/<hook>.ailoc2-proposed` and asks for manual merge instead of overwriting anything
 
 This avoids the cheerful disaster mode where a tool deletes a team’s custom hook logic because the filenames happened to match.
 
@@ -206,6 +218,12 @@ This means the repo already has a different **local** `core.hooksPath`. The exte
 
 - chain to that existing repo-local hook path
 - replace it and remember the old value for later restoration
+
+### Hook install reports existing unmanaged hook files
+
+This means `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` already exists and does not look AILoc2-managed. The installer can preserve those files and generate AILoc2 wrappers that run the preserved hooks afterward.
+
+If automatic wrapping is unsafe, AILoc2 writes inactive files such as `.githooks/pre-commit.ailoc2-proposed`. Merge the proposed AILoc2 logic with the existing hook file manually or with Copilot, then rerun install.
 
 ### The repo uses `"type": "module"`
 
