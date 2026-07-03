@@ -27,20 +27,36 @@ const PREVIOUS_LOCAL_HOOKS_PATH_CONFIG_KEY = 'ailoc2Probe.previousLocalHooksPath
 const DELEGATE_LOCAL_HOOKS_PATH_CONFIG_KEY = 'ailoc2Probe.delegateLocalHooksPath';
 const LEGACY_MANAGED_HOOK_RUNTIME_DIRECTORY_NAME = 'ailoc2-runtime';
 const MANAGED_HOOK_MARKER_PREFIX = '# AILoc2 managed hook: ';
+const WRAPPED_HOOK_DELEGATE_MARKER_PREFIX = '# AILoc2 wrapped hook delegate: ';
+const WRAPPED_HOOK_DELEGATE_FILE_SUFFIX = '.ailoc2-delegate';
+const MANUAL_MERGE_HOOK_FILE_SUFFIX = '.ailoc2-proposed';
 const MANAGED_GITIGNORE_PATTERNS = [
     '.ailoc2-metrics/',
     '.githooks/',
     '.claude/'
 ] as const;
 
+type HookDelegateSpec = {
+    path: string;
+    wrapped: boolean;
+};
+
+type HookFileWrapResult = {
+    wrappedHookFiles: RepoHookFileName[];
+    manualMergeHookFiles: string[];
+};
+
 export type RepoHookInstallResult = {
-    status: 'installed' | 'already-installed' | 'conflict';
+    status: 'installed' | 'already-installed' | 'conflict' | 'hook-file-conflict' | 'manual-merge-required';
     repoRoot: string;
     hooksDirectoryPath: string;
     currentLocalHooksPath: string | null;
     currentEffectiveHooksPath: string | null;
     replacedPreviousLocalHooksPath: string | null;
     delegatedHooksPath: string | null;
+    conflictingHookFiles: RepoHookFileName[];
+    wrappedHookFiles: RepoHookFileName[];
+    manualMergeHookFiles: string[];
     claudeCodeHooks: ClaudeCodeHooksInstallResult | null;
     gitignoreUpdated: boolean;
 };
@@ -60,6 +76,7 @@ export async function installRepoHooks(args: {
     repoRoot: string;
     allowReplacingExistingLocalHooksPath?: boolean;
     chainExistingLocalHooksPath?: boolean;
+    wrapExistingHookFiles?: boolean;
 }): Promise<RepoHookInstallResult> {
     const repoRoot = path.resolve(args.repoRoot);
     await assertGitRepositoryRoot(repoRoot);
@@ -85,13 +102,58 @@ export async function installRepoHooks(args: {
             currentEffectiveHooksPath,
             replacedPreviousLocalHooksPath: null,
             delegatedHooksPath: null,
+            conflictingHookFiles: [],
+            wrappedHookFiles: [],
+            manualMergeHookFiles: [],
             claudeCodeHooks: null,
             gitignoreUpdated: false
         };
     }
 
+    const conflictingHookFiles = await findUnmanagedHookFileConflicts(repoRoot);
+    if (conflictingHookFiles.length > 0 && !args.wrapExistingHookFiles) {
+        return {
+            status: 'hook-file-conflict',
+            repoRoot,
+            hooksDirectoryPath,
+            currentLocalHooksPath,
+            currentEffectiveHooksPath,
+            replacedPreviousLocalHooksPath: null,
+            delegatedHooksPath,
+            conflictingHookFiles,
+            wrappedHookFiles: [],
+            manualMergeHookFiles: [],
+            claudeCodeHooks: null,
+            gitignoreUpdated: false
+        };
+    }
+
+    await assertManagedRuntimeAssetsAvailable();
+
+    let wrappedHookFiles: RepoHookFileName[] = [];
+    if (conflictingHookFiles.length > 0) {
+        const wrapResult = await wrapUnmanagedHookFiles(repoRoot, conflictingHookFiles, delegatedHooksPath);
+        if (wrapResult.manualMergeHookFiles.length > 0) {
+            return {
+                status: 'manual-merge-required',
+                repoRoot,
+                hooksDirectoryPath,
+                currentLocalHooksPath,
+                currentEffectiveHooksPath,
+                replacedPreviousLocalHooksPath: null,
+                delegatedHooksPath,
+                conflictingHookFiles,
+                wrappedHookFiles: [],
+                manualMergeHookFiles: wrapResult.manualMergeHookFiles,
+                claudeCodeHooks: null,
+                gitignoreUpdated: false
+            };
+        }
+        wrappedHookFiles = wrapResult.wrappedHookFiles;
+    }
+
     const gitignoreUpdated = await ensureManagedPathsIgnored(repoRoot);
-    await ensureManagedRepoHookAssetsInstalled(repoRoot, delegatedHooksPath);
+    await ensureManagedRepoHookAssetsInstalled(repoRoot, delegatedHooksPath, wrappedHookFiles);
     const claudeCodeHooks = await ensureClaudeCodeHooksInstalled(repoRoot);
 
     if (isAlreadyInstalled) {
@@ -103,6 +165,9 @@ export async function installRepoHooks(args: {
             currentEffectiveHooksPath,
             replacedPreviousLocalHooksPath: null,
             delegatedHooksPath,
+            conflictingHookFiles,
+            wrappedHookFiles,
+            manualMergeHookFiles: [],
             claudeCodeHooks,
             gitignoreUpdated
         };
@@ -134,6 +199,9 @@ export async function installRepoHooks(args: {
         currentEffectiveHooksPath: REPO_HOOKS_PATH_VALUE,
         replacedPreviousLocalHooksPath,
         delegatedHooksPath,
+        conflictingHookFiles,
+        wrappedHookFiles,
+        manualMergeHookFiles: [],
         claudeCodeHooks,
         gitignoreUpdated
     };
@@ -225,10 +293,15 @@ async function assertGitRepositoryRoot(repoRoot: string): Promise<void> {
     }
 }
 
-async function ensureManagedRepoHookAssetsInstalled(repoRoot: string, delegatedHooksPath: string | null): Promise<void> {
+async function ensureManagedRepoHookAssetsInstalled(
+    repoRoot: string,
+    delegatedHooksPath: string | null,
+    wrappedHookFiles: readonly RepoHookFileName[]
+): Promise<void> {
     await fs.promises.mkdir(getRepoHooksDirectoryPath(repoRoot), { recursive: true });
-    await ensureManagedHookFile(repoRoot, 'pre-commit', delegatedHooksPath);
-    await ensureManagedHookFile(repoRoot, 'commit-msg', delegatedHooksPath);
+    for (const hookFileName of REQUIRED_REPO_HOOK_FILES) {
+        await ensureManagedHookFile(repoRoot, hookFileName, createHookDelegateSpecs(hookFileName, delegatedHooksPath, wrappedHookFiles));
+    }
     await installManagedRuntimeAssets(repoRoot);
     await removeLegacyManagedRuntimeAssets(repoRoot);
 
@@ -245,10 +318,10 @@ async function ensureManagedRepoHookAssetsInstalled(repoRoot: string, delegatedH
 async function ensureManagedHookFile(
     repoRoot: string,
     hookFileName: RepoHookFileName,
-    delegatedHooksPath: string | null
+    delegateSpecs: readonly HookDelegateSpec[]
 ): Promise<void> {
-    const expectedContents = createManagedHookFileContents(hookFileName, delegatedHooksPath);
     const hookFilePath = path.join(getRepoHooksDirectoryPath(repoRoot), hookFileName);
+    let expectedDelegateSpecs = [...delegateSpecs];
     if (await pathExists(hookFilePath)) {
         const existingContents = await fs.promises.readFile(hookFilePath, 'utf8');
         if (!isManagedHookFileText(hookFileName, existingContents)) {
@@ -257,12 +330,126 @@ async function ensureManagedHookFile(
             );
         }
 
+        expectedDelegateSpecs = mergeHookDelegateSpecs(extractWrappedHookDelegateSpecs(existingContents), expectedDelegateSpecs);
+        const expectedContents = createManagedHookFileContents(hookFileName, expectedDelegateSpecs);
         if (normalizeHookFileText(existingContents) === normalizeHookFileText(expectedContents)) {
             return;
         }
+
+        await fs.promises.writeFile(hookFilePath, expectedContents, 'utf8');
+        return;
     }
 
+    const expectedContents = createManagedHookFileContents(hookFileName, expectedDelegateSpecs);
     await fs.promises.writeFile(hookFilePath, expectedContents, 'utf8');
+}
+
+async function findUnmanagedHookFileConflicts(repoRoot: string): Promise<RepoHookFileName[]> {
+    const conflictingHookFiles: RepoHookFileName[] = [];
+    for (const hookFileName of REQUIRED_REPO_HOOK_FILES) {
+        const hookFilePath = path.join(getRepoHooksDirectoryPath(repoRoot), hookFileName);
+        if (!(await pathExists(hookFilePath))) {
+            continue;
+        }
+
+        try {
+            const hookFileStat = await fs.promises.stat(hookFilePath);
+            if (!hookFileStat.isFile()) {
+                conflictingHookFiles.push(hookFileName);
+                continue;
+            }
+
+            const existingContents = await fs.promises.readFile(hookFilePath, 'utf8');
+            if (!isManagedHookFileText(hookFileName, existingContents)) {
+                conflictingHookFiles.push(hookFileName);
+            }
+        }
+        catch {
+            conflictingHookFiles.push(hookFileName);
+        }
+    }
+
+    return conflictingHookFiles;
+}
+
+async function wrapUnmanagedHookFiles(
+    repoRoot: string,
+    hookFileNames: readonly RepoHookFileName[],
+    delegatedHooksPath: string | null
+): Promise<HookFileWrapResult> {
+    const unsafeHookFiles: RepoHookFileName[] = [];
+    for (const hookFileName of hookFileNames) {
+        const hookFilePath = path.join(getRepoHooksDirectoryPath(repoRoot), hookFileName);
+        const delegateFilePath = getWrappedHookDelegateFilePath(repoRoot, hookFileName);
+        if (await pathExists(delegateFilePath)) {
+            unsafeHookFiles.push(hookFileName);
+            continue;
+        }
+
+        try {
+            const hookFileStat = await fs.promises.stat(hookFilePath);
+            if (!hookFileStat.isFile()) {
+                unsafeHookFiles.push(hookFileName);
+            }
+        }
+        catch {
+            unsafeHookFiles.push(hookFileName);
+        }
+    }
+
+    if (unsafeHookFiles.length > 0) {
+        const manualMergeHookFiles = await writeManualMergeHookFiles(repoRoot, unsafeHookFiles, delegatedHooksPath);
+        return {
+            wrappedHookFiles: [],
+            manualMergeHookFiles
+        };
+    }
+
+    for (const hookFileName of hookFileNames) {
+        await fs.promises.rename(
+            path.join(getRepoHooksDirectoryPath(repoRoot), hookFileName),
+            getWrappedHookDelegateFilePath(repoRoot, hookFileName)
+        );
+    }
+
+    return {
+        wrappedHookFiles: [...hookFileNames],
+        manualMergeHookFiles: []
+    };
+}
+
+async function writeManualMergeHookFiles(
+    repoRoot: string,
+    hookFileNames: readonly RepoHookFileName[],
+    delegatedHooksPath: string | null
+): Promise<string[]> {
+    await fs.promises.mkdir(getRepoHooksDirectoryPath(repoRoot), { recursive: true });
+
+    const manualMergeHookFiles: string[] = [];
+    for (const hookFileName of hookFileNames) {
+        const proposedFileName = `${hookFileName}${MANUAL_MERGE_HOOK_FILE_SUFFIX}`;
+        const proposedFilePath = path.join(getRepoHooksDirectoryPath(repoRoot), proposedFileName);
+        const proposedContents = createManagedHookFileContents(
+            hookFileName,
+            createHookDelegateSpecs(hookFileName, delegatedHooksPath, [])
+        );
+        await fs.promises.writeFile(proposedFilePath, proposedContents, 'utf8');
+        manualMergeHookFiles.push(path.posix.join(REPO_HOOKS_PATH_VALUE, proposedFileName));
+    }
+
+    return manualMergeHookFiles;
+}
+
+async function assertManagedRuntimeAssetsAvailable(): Promise<void> {
+    const sourceRuntimeFilePath = getExtensionRuntimeFilePath();
+    if (!(await pathExists(sourceRuntimeFilePath))) {
+        throw new Error(`AILoc2 runtime asset is missing at ${sourceRuntimeFilePath}. Build the extension before installing hooks.`);
+    }
+
+    const runtimeSourcePath = getExtensionClaudeCodeRuntimeFilePath();
+    if (!(await pathExists(runtimeSourcePath))) {
+        throw new Error(`AILoc2 Claude Code runtime asset is missing at ${runtimeSourcePath}. Build the extension before installing hooks.`);
+    }
 }
 
 async function installManagedRuntimeAssets(repoRoot: string): Promise<void> {
@@ -302,6 +489,17 @@ async function removeManagedHookFile(repoRoot: string, hookFileName: RepoHookFil
     const existingContents = await fs.promises.readFile(hookFilePath, 'utf8');
     if (!isManagedHookFileText(hookFileName, existingContents)) {
         return false;
+    }
+
+    const restorableDelegate = extractWrappedHookDelegateSpecs(existingContents)
+        .find((delegateSpec) => delegateSpec.path === getWrappedHookDelegateScriptPath(hookFileName));
+    if (restorableDelegate) {
+        const restorableDelegatePath = path.resolve(repoRoot, restorableDelegate.path);
+        if (await pathExists(restorableDelegatePath)) {
+            await fs.promises.rm(hookFilePath, { force: true });
+            await fs.promises.rename(restorableDelegatePath, hookFilePath);
+            return true;
+        }
     }
 
     await fs.promises.rm(hookFilePath, { force: true });
@@ -393,34 +591,27 @@ function getLegacyManagedHookRuntimeDirectoryPath(repoRoot: string): string {
     return path.join(getRepoHooksDirectoryPath(repoRoot), LEGACY_MANAGED_HOOK_RUNTIME_DIRECTORY_NAME);
 }
 
-function createManagedHookFileContents(hookFileName: RepoHookFileName, delegatedHooksPath: string | null): string {
+function createManagedHookFileContents(hookFileName: RepoHookFileName, delegateSpecs: readonly HookDelegateSpec[]): string {
     switch (hookFileName) {
         case 'pre-commit':
-            return createManagedPreCommitHookScript(delegatedHooksPath);
+            return createManagedPreCommitHookScript(delegateSpecs);
         case 'commit-msg':
-            return createManagedCommitMsgHookScript(delegatedHooksPath);
+            return createManagedCommitMsgHookScript(delegateSpecs);
         case 'post-commit':
-            return createManagedPostCommitHookScript(delegatedHooksPath);
+            return createManagedPostCommitHookScript(delegateSpecs);
         default:
             throw new Error(`Unsupported managed hook file: ${hookFileName}`);
     }
 }
 
-function createManagedPreCommitHookScript(delegatedHooksPath: string | null): string {
-    const delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, 'pre-commit');
+function createManagedPreCommitHookScript(delegateSpecs: readonly HookDelegateSpec[]): string {
     return `#!/bin/sh
 # AILoc2 managed hook: pre-commit
+${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
 CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
-DELEGATE_HOOK_PATH="${escapeForDoubleQuotedShell(delegatedHookPath)}"
 
-run_delegate_hook() {
-    if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
-        return 0
-    fi
-
-    "$DELEGATE_HOOK_PATH" "$@"
-}
+${createDelegateHookFunction(delegateSpecs)}
 
 if command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
     node "$CLI_PATH" prepare-commit-baseline >/dev/null 2>&1 || printf '%s\n' 'AILoc2 pre-commit warning: commit baseline snapshot failed; later commits may retain older attribution until the next successful baseline refresh.' >&2
@@ -429,26 +620,19 @@ else
     printf '%s\n' 'AILoc2 pre-commit warning: Node CLI is unavailable; skipping summary refresh.' >&2
 fi
 
-run_delegate_hook "$@"
+run_delegate_hooks "$@"
 exit $?
 `;
 }
 
-function createManagedPostCommitHookScript(delegatedHooksPath: string | null): string {
-    const delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, 'post-commit');
+function createManagedPostCommitHookScript(delegateSpecs: readonly HookDelegateSpec[]): string {
     return `#!/bin/sh
 # AILoc2 managed hook: post-commit
+${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
 CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
-DELEGATE_HOOK_PATH="${escapeForDoubleQuotedShell(delegatedHookPath)}"
 
-run_delegate_hook() {
-    if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
-        return 0
-    fi
-
-    "$DELEGATE_HOOK_PATH" "$@"
-}
+${createDelegateHookFunction(delegateSpecs)}
 
 if command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
     node "$CLI_PATH" finalize-commit >/dev/null 2>&1 || printf '%s\n' 'AILoc2 post-commit warning: baseline advance failed; later commits may still include already committed attribution until the next successful refresh.' >&2
@@ -456,28 +640,21 @@ else
     printf '%s\n' 'AILoc2 post-commit warning: Node CLI is unavailable; skipping baseline advance.' >&2
 fi
 
-run_delegate_hook "$@"
+run_delegate_hooks "$@"
 exit $?
 `;
 }
 
-function createManagedCommitMsgHookScript(delegatedHooksPath: string | null): string {
-    const delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, 'commit-msg');
+function createManagedCommitMsgHookScript(delegateSpecs: readonly HookDelegateSpec[]): string {
     return `#!/bin/sh
 # AILoc2 managed hook: commit-msg
+${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
-DELEGATE_HOOK_PATH="${escapeForDoubleQuotedShell(delegatedHookPath)}"
 PLACEHOLDER_SUFFIX=' (AI unavailable)'
 
-run_delegate_hook() {
-    if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
-        return 0
-    fi
-
-    "$DELEGATE_HOOK_PATH" "$@"
-}
+${createDelegateHookFunction(delegateSpecs)}
 
 append_placeholder_suffix() {
     if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
@@ -503,7 +680,7 @@ else
     append_placeholder_suffix
 fi
 
-run_delegate_hook "$@"
+run_delegate_hooks "$@"
 exit $?
 `;
 }
@@ -566,6 +743,94 @@ function createDelegatedHookScriptPath(delegatedHooksPath: string | null, hookFi
     return path.posix.join(delegatedHooksPath.replace(/\\/g, '/'), hookFileName);
 }
 
+function createHookDelegateSpecs(
+    hookFileName: RepoHookFileName,
+    delegatedHooksPath: string | null,
+    wrappedHookFiles: readonly RepoHookFileName[]
+): HookDelegateSpec[] {
+    const delegateSpecs: HookDelegateSpec[] = [];
+    if (wrappedHookFiles.includes(hookFileName)) {
+        delegateSpecs.push({
+            path: getWrappedHookDelegateScriptPath(hookFileName),
+            wrapped: true
+        });
+    }
+
+    const delegatedHookPath = createDelegatedHookScriptPath(delegatedHooksPath, hookFileName);
+    if (delegatedHookPath) {
+        delegateSpecs.push({
+            path: delegatedHookPath,
+            wrapped: false
+        });
+    }
+
+    return delegateSpecs;
+}
+
+function createDelegateHookFunction(delegateSpecs: readonly HookDelegateSpec[]): string {
+    const delegateBlocks = delegateSpecs.map((delegateSpec) => `    DELEGATE_HOOK_PATH="${escapeForDoubleQuotedShell(delegateSpec.path)}"
+    if [ -n "$DELEGATE_HOOK_PATH" ] && [ -f "$DELEGATE_HOOK_PATH" ]; then
+        "$DELEGATE_HOOK_PATH" "$@" || return $?
+    fi`).join('\n\n');
+    const body = delegateBlocks.length > 0
+        ? `${delegateBlocks}\n\n    return 0`
+        : '    return 0';
+
+    return `run_delegate_hooks() {
+${body}
+}`;
+}
+
+function createWrappedDelegateMarkerBlock(delegateSpecs: readonly HookDelegateSpec[]): string {
+    const wrappedDelegateMarkers = delegateSpecs
+        .filter((delegateSpec) => delegateSpec.wrapped)
+        .map((delegateSpec) => `${WRAPPED_HOOK_DELEGATE_MARKER_PREFIX}${delegateSpec.path}`);
+    return wrappedDelegateMarkers.length > 0
+        ? `${wrappedDelegateMarkers.join('\n')}\n`
+        : '';
+}
+
+function mergeHookDelegateSpecs(...delegateSpecGroups: readonly HookDelegateSpec[][]): HookDelegateSpec[] {
+    const mergedDelegateSpecs: HookDelegateSpec[] = [];
+    for (const delegateSpecGroup of delegateSpecGroups) {
+        for (const delegateSpec of delegateSpecGroup) {
+            const existingDelegateSpec = mergedDelegateSpecs.find((candidate) => candidate.path === delegateSpec.path);
+            if (existingDelegateSpec) {
+                existingDelegateSpec.wrapped = existingDelegateSpec.wrapped || delegateSpec.wrapped;
+                continue;
+            }
+
+            mergedDelegateSpecs.push({ ...delegateSpec });
+        }
+    }
+
+    return mergedDelegateSpecs;
+}
+
+function extractWrappedHookDelegateSpecs(text: string): HookDelegateSpec[] {
+    return normalizeHookFileText(text)
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith(WRAPPED_HOOK_DELEGATE_MARKER_PREFIX))
+        .map((line) => ({
+            path: line.slice(WRAPPED_HOOK_DELEGATE_MARKER_PREFIX.length).trim(),
+            wrapped: true
+        }))
+        .filter((delegateSpec) => delegateSpec.path.length > 0);
+}
+
+function getWrappedHookDelegateFilePath(repoRoot: string, hookFileName: RepoHookFileName): string {
+    return path.join(getRepoHooksDirectoryPath(repoRoot), getWrappedHookDelegateFileName(hookFileName));
+}
+
+function getWrappedHookDelegateScriptPath(hookFileName: RepoHookFileName): string {
+    return path.posix.join(REPO_HOOKS_PATH_VALUE, getWrappedHookDelegateFileName(hookFileName));
+}
+
+function getWrappedHookDelegateFileName(hookFileName: RepoHookFileName): string {
+    return `${hookFileName}${WRAPPED_HOOK_DELEGATE_FILE_SUFFIX}`;
+}
+
 function escapeForDoubleQuotedShell(value: string): string {
     return value
         .replace(/\\/g, '\\\\')
@@ -587,7 +852,7 @@ function isManagedHookFileText(hookFileName: RepoHookFileName, text: string): bo
         : [];
 
     return [
-        createManagedHookFileContents(hookFileName, null),
+        createManagedHookFileContents(hookFileName, []),
         ...legacyVariants
     ].some((candidate) => normalizeHookFileText(candidate) === normalizedText);
 }

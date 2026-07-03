@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../cpc/cpc-bff"
+		},
+		{
+			"path": "../../tryouts2/vscode"
+		}
+	],
+	"settings": {}
+}
