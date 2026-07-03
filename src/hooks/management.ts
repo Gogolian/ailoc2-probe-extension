@@ -14,6 +14,7 @@ const execFile = util.promisify(childProcess.execFile);
 export const REPO_HOOKS_DIRECTORY_NAME = '.githooks';
 export const REPO_HOOKS_PATH_VALUE = '.githooks';
 export const MANAGED_HOOK_RUNTIME_FILE_NAME = 'ailoc2-hook-runtime.cjs';
+export const MIGRATION_PACKAGE_DIRECTORY_NAME = 'migration-package';
 export const REQUIRED_REPO_HOOK_FILES = [
     'pre-commit',
     'commit-msg',
@@ -29,7 +30,6 @@ const LEGACY_MANAGED_HOOK_RUNTIME_DIRECTORY_NAME = 'ailoc2-runtime';
 const MANAGED_HOOK_MARKER_PREFIX = '# AILoc2 managed hook: ';
 const WRAPPED_HOOK_DELEGATE_MARKER_PREFIX = '# AILoc2 wrapped hook delegate: ';
 const WRAPPED_HOOK_DELEGATE_FILE_SUFFIX = '.ailoc2-delegate';
-const MANUAL_MERGE_HOOK_FILE_SUFFIX = '.ailoc2-proposed';
 const MANAGED_GITIGNORE_PATTERNS = [
     '.ailoc2-metrics/',
     '.githooks/',
@@ -57,6 +57,8 @@ export type RepoHookInstallResult = {
     conflictingHookFiles: RepoHookFileName[];
     wrappedHookFiles: RepoHookFileName[];
     manualMergeHookFiles: string[];
+    migrationPackagePath: string | null;
+    migrationPackageFiles: string[];
     claudeCodeHooks: ClaudeCodeHooksInstallResult | null;
     gitignoreUpdated: boolean;
 };
@@ -105,6 +107,8 @@ export async function installRepoHooks(args: {
             conflictingHookFiles: [],
             wrappedHookFiles: [],
             manualMergeHookFiles: [],
+            migrationPackagePath: null,
+            migrationPackageFiles: [],
             claudeCodeHooks: null,
             gitignoreUpdated: false
         };
@@ -123,6 +127,8 @@ export async function installRepoHooks(args: {
             conflictingHookFiles,
             wrappedHookFiles: [],
             manualMergeHookFiles: [],
+            migrationPackagePath: null,
+            migrationPackageFiles: [],
             claudeCodeHooks: null,
             gitignoreUpdated: false
         };
@@ -134,6 +140,7 @@ export async function installRepoHooks(args: {
     if (conflictingHookFiles.length > 0) {
         const wrapResult = await wrapUnmanagedHookFiles(repoRoot, conflictingHookFiles, delegatedHooksPath);
         if (wrapResult.manualMergeHookFiles.length > 0) {
+            const migrationPackagePath = getMigrationPackageDisplayPath();
             return {
                 status: 'manual-merge-required',
                 repoRoot,
@@ -145,6 +152,8 @@ export async function installRepoHooks(args: {
                 conflictingHookFiles,
                 wrappedHookFiles: [],
                 manualMergeHookFiles: wrapResult.manualMergeHookFiles,
+                migrationPackagePath,
+                migrationPackageFiles: wrapResult.manualMergeHookFiles,
                 claudeCodeHooks: null,
                 gitignoreUpdated: false
             };
@@ -153,7 +162,17 @@ export async function installRepoHooks(args: {
     }
 
     const gitignoreUpdated = await ensureManagedPathsIgnored(repoRoot);
-    await ensureManagedRepoHookAssetsInstalled(repoRoot, delegatedHooksPath, wrappedHookFiles);
+    try {
+        await ensureManagedRepoHookAssetsInstalled(repoRoot, delegatedHooksPath, wrappedHookFiles);
+    }
+    catch (error) {
+        if (isUnmanagedHookFileConflictError(error)) {
+            await writeMigrationPackage(repoRoot, delegatedHooksPath);
+            throw new Error(`${error.message} Prepared migration package at ${getMigrationPackageDisplayPath()}.`);
+        }
+
+        throw error;
+    }
     const claudeCodeHooks = await ensureClaudeCodeHooksInstalled(repoRoot);
 
     if (isAlreadyInstalled) {
@@ -168,6 +187,8 @@ export async function installRepoHooks(args: {
             conflictingHookFiles,
             wrappedHookFiles,
             manualMergeHookFiles: [],
+            migrationPackagePath: null,
+            migrationPackageFiles: [],
             claudeCodeHooks,
             gitignoreUpdated
         };
@@ -202,6 +223,8 @@ export async function installRepoHooks(args: {
         conflictingHookFiles,
         wrappedHookFiles,
         manualMergeHookFiles: [],
+        migrationPackagePath: null,
+        migrationPackageFiles: [],
         claudeCodeHooks,
         gitignoreUpdated
     };
@@ -274,6 +297,10 @@ export function getRepoHooksDirectoryPath(repoRoot: string): string {
 
 export function getManagedHookRuntimeFilePath(repoRoot: string): string {
     return path.join(getRepoHooksDirectoryPath(repoRoot), MANAGED_HOOK_RUNTIME_FILE_NAME);
+}
+
+export function getMigrationPackageDirectoryPath(repoRoot: string): string {
+    return path.join(getRepoHooksDirectoryPath(repoRoot), MIGRATION_PACKAGE_DIRECTORY_NAME);
 }
 
 function isRepoManagedHooksPath(repoRoot: string, candidateHooksPath: string | null): boolean {
@@ -420,24 +447,93 @@ async function wrapUnmanagedHookFiles(
 
 async function writeManualMergeHookFiles(
     repoRoot: string,
-    hookFileNames: readonly RepoHookFileName[],
+    _hookFileNames: readonly RepoHookFileName[],
     delegatedHooksPath: string | null
 ): Promise<string[]> {
-    await fs.promises.mkdir(getRepoHooksDirectoryPath(repoRoot), { recursive: true });
+    return writeMigrationPackage(repoRoot, delegatedHooksPath);
+}
 
-    const manualMergeHookFiles: string[] = [];
+async function writeMigrationPackage(
+    repoRoot: string,
+    delegatedHooksPath: string | null,
+    hookFileNames: readonly RepoHookFileName[] = REQUIRED_REPO_HOOK_FILES
+): Promise<string[]> {
+    const migrationPackageDirectoryPath = getMigrationPackageDirectoryPath(repoRoot);
+    await fs.promises.mkdir(migrationPackageDirectoryPath, { recursive: true });
+
+    const migrationPackageFiles: string[] = [];
     for (const hookFileName of hookFileNames) {
-        const proposedFileName = `${hookFileName}${MANUAL_MERGE_HOOK_FILE_SUFFIX}`;
-        const proposedFilePath = path.join(getRepoHooksDirectoryPath(repoRoot), proposedFileName);
-        const proposedContents = createManagedHookFileContents(
+        const hookFilePath = path.join(migrationPackageDirectoryPath, hookFileName);
+        const hookContents = createManagedHookFileContents(
             hookFileName,
             createHookDelegateSpecs(hookFileName, delegatedHooksPath, [])
         );
-        await fs.promises.writeFile(proposedFilePath, proposedContents, 'utf8');
-        manualMergeHookFiles.push(path.posix.join(REPO_HOOKS_PATH_VALUE, proposedFileName));
+        await fs.promises.writeFile(hookFilePath, hookContents, 'utf8');
+        migrationPackageFiles.push(getMigrationPackageDisplayPath(hookFileName));
     }
 
-    return manualMergeHookFiles;
+    const runtimePackagePath = path.join(migrationPackageDirectoryPath, MANAGED_HOOK_RUNTIME_FILE_NAME);
+    await fs.promises.copyFile(getExtensionRuntimeFilePath(), runtimePackagePath);
+    migrationPackageFiles.push(getMigrationPackageDisplayPath(MANAGED_HOOK_RUNTIME_FILE_NAME));
+
+    const instructionsFileName = 'COPILOT-INSTRUCTIONS.md';
+    await fs.promises.writeFile(
+        path.join(migrationPackageDirectoryPath, instructionsFileName),
+        createMigrationPackageInstructions(delegatedHooksPath, hookFileNames),
+        'utf8'
+    );
+    migrationPackageFiles.push(getMigrationPackageDisplayPath(instructionsFileName));
+
+    await Promise.all(hookFileNames.map(async (hookFileName) => {
+        try {
+            await fs.promises.chmod(path.join(migrationPackageDirectoryPath, hookFileName), 0o755);
+        }
+        catch {
+            // Best effort only; Git for Windows does not depend on POSIX executable bits.
+        }
+    }));
+
+    return migrationPackageFiles;
+}
+
+function createMigrationPackageInstructions(
+    delegatedHooksPath: string | null,
+    hookFileNames: readonly RepoHookFileName[]
+): string {
+    const hookFileList = hookFileNames.map((hookFileName) => `- \`${hookFileName}\``).join('\n');
+    const delegatedHooksNote = delegatedHooksPath
+        ? `\nThe generated hook files also chain to the existing local \`core.hooksPath\` value: \`${delegatedHooksPath}\`. Preserve that chaining behavior unless the target repo no longer needs it.\n`
+        : '';
+
+    return `# AILoc2 hook migration package
+
+AILoc2 prepared this package because it could not safely replace existing repo-local Git hooks automatically.
+
+The hook files in this folder are the AILoc2-managed hooks that need to be chained or woven into the repo's existing hooks:
+
+${hookFileList}
+
+The bundled runtime file is \`${MANAGED_HOOK_RUNTIME_FILE_NAME}\`. Copy it to \`${path.posix.join(REPO_HOOKS_PATH_VALUE, MANAGED_HOOK_RUNTIME_FILE_NAME)}\` when the merge is complete, or update the generated hook \`CLI_PATH\` values if you intentionally keep it elsewhere.${delegatedHooksNote}
+
+For Copilot:
+
+1. Compare each existing repo hook in \`${REPO_HOOKS_PATH_VALUE}/\` with the matching file in this migration package.
+2. Preserve all existing hook behavior and exit-code semantics.
+3. Add the AILoc2 runtime calls from the generated hook files so AILoc2 runs before any existing delegated hook logic.
+4. Do not blindly overwrite unmanaged hook files.
+5. After merging, rerun \`AILoc2 Probe: Install Repo Hooks\` to let AILoc2 verify and refresh managed assets.
+`;
+}
+
+function getMigrationPackageDisplayPath(fileName?: string): string {
+    return fileName
+        ? path.posix.join(REPO_HOOKS_PATH_VALUE, MIGRATION_PACKAGE_DIRECTORY_NAME, fileName)
+        : path.posix.join(REPO_HOOKS_PATH_VALUE, MIGRATION_PACKAGE_DIRECTORY_NAME);
+}
+
+function isUnmanagedHookFileConflictError(error: unknown): error is Error {
+    return error instanceof Error
+        && error.message.includes('file already exists and is not managed by AILoc2');
 }
 
 async function assertManagedRuntimeAssetsAvailable(): Promise<void> {

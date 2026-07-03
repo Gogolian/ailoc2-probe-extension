@@ -25,6 +25,8 @@ A fresh managed install provisions exactly four repo-local files:
 
 If the repo already has unmanaged hook files at the same `.githooks/<hook>` paths, AILoc2 asks before changing them. When wrapping is approved, the original hook is moved beside the managed wrapper as `.githooks/<hook>.ailoc2-delegate` and the generated AILoc2 hook runs that preserved hook after AILoc2 finishes.
 
+When automatic wrapping is unsafe, AILoc2 prepares `.githooks/migration-package/` instead. The package contains generated AILoc2 `pre-commit`, `commit-msg`, and `post-commit` hook files, `ailoc2-hook-runtime.cjs`, and `COPILOT-INSTRUCTIONS.md` with guidance for a follow-up Copilot session to chain the generated logic into the existing hooks.
+
 ## Install flow
 
 `installRepoHooks()` in `src/hooks/management.ts` performs the following steps:
@@ -37,7 +39,7 @@ If the repo already has unmanaged hook files at the same `.githooks/<hook>` path
    - `ailoc2Probe.delegateLocalHooksPath` (local)
 4. decide whether the repo is already installed, in conflict, or ready for installation
 5. detect existing unmanaged `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` files before mutating the repo
-6. if approved, preserve existing unmanaged hook files as `.githooks/<hook>.ailoc2-delegate`
+6. if approved, preserve existing unmanaged hook files as `.githooks/<hook>.ailoc2-delegate`, or prepare `.githooks/migration-package/` if automatic wrapping is unsafe
 7. update `.gitignore` for `.ailoc2-metrics/`, `.githooks/`, and `.claude/`
 8. write managed hook files and copy the bundled Git hook runtime asset
 9. install Claude Code hooks into `.claude/settings.json` and copy `.claude/ailoc2-claude-code.cjs`
@@ -53,7 +55,7 @@ If the repo already has unmanaged hook files at the same `.githooks/<hook>` path
 | `already-installed` | The repo is already using the managed AILoc2 hooks path; managed assets are refreshed. |
 | `conflict` | The repo already has a different **local** `core.hooksPath`, and replacement was not yet authorized. |
 | `hook-file-conflict` | The repo has existing `.githooks/<hook>` files that are not managed by AILoc2, and wrapping was not yet authorized. |
-| `manual-merge-required` | AILoc2 could not safely preserve an existing hook automatically, so it wrote inactive `.githooks/<hook>.ailoc2-proposed` files for manual merge. |
+| `manual-merge-required` | AILoc2 could not safely preserve an existing hook automatically, so it prepared `.githooks/migration-package/` for manual or Copilot-assisted chaining. |
 
 ## Git config keys used by AILoc2
 
@@ -182,7 +184,7 @@ The hook manager is intentionally cautious.
 - wrapped hook files are preserved as `.githooks/<hook>.ailoc2-delegate` and restored to their original active path on uninstall
 - uninstall only removes hook files that still match the managed AILoc2 patterns or legacy managed variants
 - if a hook file has been replaced with unrelated custom content, uninstall leaves it alone
-- if a preserved delegate path already exists or the hook path cannot be moved safely, AILoc2 writes `.githooks/<hook>.ailoc2-proposed` and asks for manual merge instead of overwriting anything
+- if a preserved delegate path already exists or the hook path cannot be moved safely, AILoc2 prepares `.githooks/migration-package/` and asks for manual or Copilot-assisted chaining instead of overwriting anything
 
 This avoids the cheerful disaster mode where a tool deletes a team’s custom hook logic because the filenames happened to match.
 
@@ -223,7 +225,7 @@ This means the repo already has a different **local** `core.hooksPath`. The exte
 
 This means `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` already exists and does not look AILoc2-managed. The installer can preserve those files and generate AILoc2 wrappers that run the preserved hooks afterward.
 
-If automatic wrapping is unsafe, AILoc2 writes inactive files such as `.githooks/pre-commit.ailoc2-proposed`. Merge the proposed AILoc2 logic with the existing hook file manually or with Copilot, then rerun install.
+If automatic wrapping is unsafe, AILoc2 prepares `.githooks/migration-package/` with generated hook files, the runtime, and Copilot instructions. Merge the packaged AILoc2 logic with the existing hook files manually or with Copilot, then rerun install.
 
 ### The repo uses `"type": "module"`
 

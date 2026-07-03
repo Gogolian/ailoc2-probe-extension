@@ -180,7 +180,7 @@ test('installRepoHooks wraps multiple unmanaged repo hook files', async () => {
     });
 });
 
-test('installRepoHooks creates proposed hook files when wrapping would overwrite a delegate', async () => {
+test('installRepoHooks creates a migration package when wrapping would overwrite a delegate', async () => {
     const repoRoot = createGitRepo('ailoc2-hook-manual-merge-');
     const hooksDirectoryPath = path.join(repoRoot, '.githooks');
     const preCommitPath = path.join(hooksDirectoryPath, 'pre-commit');
@@ -199,21 +199,43 @@ test('installRepoHooks creates proposed hook files when wrapping would overwrite
         conflictingHookFiles: installResult.conflictingHookFiles,
         wrappedHookFiles: installResult.wrappedHookFiles,
         manualMergeHookFiles: installResult.manualMergeHookFiles,
+        migrationPackagePath: installResult.migrationPackagePath,
+        migrationPackageFiles: installResult.migrationPackageFiles,
         preCommitContents: fs.readFileSync(preCommitPath, 'utf8'),
         commitMsgContents: fs.readFileSync(commitMsgPath, 'utf8'),
-        proposedIsManaged: fs.readFileSync(path.join(hooksDirectoryPath, 'pre-commit.ailoc2-proposed'), 'utf8').includes('# AILoc2 managed hook: pre-commit'),
-        commitMsgProposedIsManaged: fs.readFileSync(path.join(hooksDirectoryPath, 'commit-msg.ailoc2-proposed'), 'utf8').includes('# AILoc2 managed hook: commit-msg'),
+        packagedPreCommitIsManaged: fs.readFileSync(path.join(hooksDirectoryPath, 'migration-package', 'pre-commit'), 'utf8').includes('# AILoc2 managed hook: pre-commit'),
+        packagedCommitMsgIsManaged: fs.readFileSync(path.join(hooksDirectoryPath, 'migration-package', 'commit-msg'), 'utf8').includes('# AILoc2 managed hook: commit-msg'),
+        packagedPostCommitIsManaged: fs.readFileSync(path.join(hooksDirectoryPath, 'migration-package', 'post-commit'), 'utf8').includes('# AILoc2 managed hook: post-commit'),
+        packagedRuntimeExists: fs.existsSync(path.join(hooksDirectoryPath, 'migration-package', 'ailoc2-hook-runtime.cjs')),
+        packagedInstructionsMentionCopilot: fs.readFileSync(path.join(hooksDirectoryPath, 'migration-package', 'COPILOT-INSTRUCTIONS.md'), 'utf8').includes('For Copilot:'),
         coreHooksPath: runGitAllowFailure(repoRoot, ['config', '--local', '--get', 'core.hooksPath']).trim(),
         gitignoreExists: fs.existsSync(path.join(repoRoot, '.gitignore'))
     }, {
         status: 'manual-merge-required',
         conflictingHookFiles: ['pre-commit', 'commit-msg'],
         wrappedHookFiles: [],
-        manualMergeHookFiles: ['.githooks/pre-commit.ailoc2-proposed', '.githooks/commit-msg.ailoc2-proposed'],
+        manualMergeHookFiles: [
+            '.githooks/migration-package/pre-commit',
+            '.githooks/migration-package/commit-msg',
+            '.githooks/migration-package/post-commit',
+            '.githooks/migration-package/ailoc2-hook-runtime.cjs',
+            '.githooks/migration-package/COPILOT-INSTRUCTIONS.md'
+        ],
+        migrationPackagePath: '.githooks/migration-package',
+        migrationPackageFiles: [
+            '.githooks/migration-package/pre-commit',
+            '.githooks/migration-package/commit-msg',
+            '.githooks/migration-package/post-commit',
+            '.githooks/migration-package/ailoc2-hook-runtime.cjs',
+            '.githooks/migration-package/COPILOT-INSTRUCTIONS.md'
+        ],
         preCommitContents: originalPreCommitContents,
         commitMsgContents: originalCommitMsgContents,
-        proposedIsManaged: true,
-        commitMsgProposedIsManaged: true,
+        packagedPreCommitIsManaged: true,
+        packagedCommitMsgIsManaged: true,
+        packagedPostCommitIsManaged: true,
+        packagedRuntimeExists: true,
+        packagedInstructionsMentionCopilot: true,
         coreHooksPath: '',
         gitignoreExists: false
     });

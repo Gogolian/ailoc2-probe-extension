@@ -445,7 +445,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 if (installResult.status === 'manual-merge-required') {
                     logEvent('COMMAND_INSTALL_HOOKS_MANUAL_MERGE_REQUIRED', installResult);
                     void vscode.window.showWarningMessage(
-                        `AILoc2 could not safely wrap existing hooks for ${path.basename(repoRoot)}. Proposed AILoc2 hook files were written to ${installResult.manualMergeHookFiles.join(', ')}. Merge them with ${formatHookFileList(installResult.conflictingHookFiles)}, then rerun install.`,
+                        `AILoc2 could not safely wrap existing hooks for ${path.basename(repoRoot)}. Prepared migration package at ${installResult.migrationPackagePath ?? '.githooks/migration-package'} with AILoc2 hook files and Copilot instructions. Merge them with ${formatHookFileList(installResult.conflictingHookFiles)}, then rerun install.`,
                         { modal: true }
                     );
                     return;

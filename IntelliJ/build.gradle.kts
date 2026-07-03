@@ -25,7 +25,7 @@ val ideaSinceBuild = providers.gradleProperty("ideaSinceBuild").orNull?.trim()
     }
 
 group = "com.ailoc2"
-version = "1.0.10"
+version = "1.0.11"
 
 val repositoryRoot = rootProject.layout.projectDirectory.dir("..")
 val claudeRuntime = repositoryRoot.file("out/claude-code/ailoc2-claude-code.cjs")

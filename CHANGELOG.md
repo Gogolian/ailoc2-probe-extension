@@ -5,8 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
-## [1.0.10] - 2026-07-03
-- Bump the extension and IntelliJ plugin version to 1.0.10.
+## [1.0.11] - 2026-07-03
+- Bump the extension and IntelliJ plugin version to 1.0.11.
 
 ## [1.0.9] - 2026-07-03
 - Fix IntelliJ plugin packaging so the bundled Claude Code runtime is always included before hook installation.
