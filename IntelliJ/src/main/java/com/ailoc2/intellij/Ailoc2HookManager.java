@@ -306,7 +306,7 @@ final class Ailoc2HookManager {
         }
 
         if (!unsafeHookFiles.isEmpty()) {
-            return new HookFileWrapResult(List.of(), writeManualMergeHookFiles(repoRoot, unsafeHookFiles, delegatedHooksPath));
+            return new HookFileWrapResult(List.of(), writeManualMergeHookFiles(repoRoot, hookFileNames, delegatedHooksPath));
         }
 
         for (String hookFileName : hookFileNames) {

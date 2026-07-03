@@ -184,9 +184,12 @@ test('installRepoHooks creates proposed hook files when wrapping would overwrite
     const repoRoot = createGitRepo('ailoc2-hook-manual-merge-');
     const hooksDirectoryPath = path.join(repoRoot, '.githooks');
     const preCommitPath = path.join(hooksDirectoryPath, 'pre-commit');
+    const commitMsgPath = path.join(hooksDirectoryPath, 'commit-msg');
     const originalPreCommitContents = '#!/bin/sh\nprintf "%s\\n" custom-pre-commit\n';
+    const originalCommitMsgContents = '#!/bin/sh\nprintf "%s\\n" custom-commit-msg\n';
     fs.mkdirSync(hooksDirectoryPath);
     fs.writeFileSync(preCommitPath, originalPreCommitContents, 'utf8');
+    fs.writeFileSync(commitMsgPath, originalCommitMsgContents, 'utf8');
     fs.writeFileSync(path.join(hooksDirectoryPath, 'pre-commit.ailoc2-delegate'), '#!/bin/sh\nprintf "%s\\n" existing-delegate\n', 'utf8');
 
     const installResult = await installRepoHooks({ repoRoot, wrapExistingHookFiles: true });
@@ -197,16 +200,20 @@ test('installRepoHooks creates proposed hook files when wrapping would overwrite
         wrappedHookFiles: installResult.wrappedHookFiles,
         manualMergeHookFiles: installResult.manualMergeHookFiles,
         preCommitContents: fs.readFileSync(preCommitPath, 'utf8'),
+        commitMsgContents: fs.readFileSync(commitMsgPath, 'utf8'),
         proposedIsManaged: fs.readFileSync(path.join(hooksDirectoryPath, 'pre-commit.ailoc2-proposed'), 'utf8').includes('# AILoc2 managed hook: pre-commit'),
+        commitMsgProposedIsManaged: fs.readFileSync(path.join(hooksDirectoryPath, 'commit-msg.ailoc2-proposed'), 'utf8').includes('# AILoc2 managed hook: commit-msg'),
         coreHooksPath: runGitAllowFailure(repoRoot, ['config', '--local', '--get', 'core.hooksPath']).trim(),
         gitignoreExists: fs.existsSync(path.join(repoRoot, '.gitignore'))
     }, {
         status: 'manual-merge-required',
-        conflictingHookFiles: ['pre-commit'],
+        conflictingHookFiles: ['pre-commit', 'commit-msg'],
         wrappedHookFiles: [],
-        manualMergeHookFiles: ['.githooks/pre-commit.ailoc2-proposed'],
+        manualMergeHookFiles: ['.githooks/pre-commit.ailoc2-proposed', '.githooks/commit-msg.ailoc2-proposed'],
         preCommitContents: originalPreCommitContents,
+        commitMsgContents: originalCommitMsgContents,
         proposedIsManaged: true,
+        commitMsgProposedIsManaged: true,
         coreHooksPath: '',
         gitignoreExists: false
     });

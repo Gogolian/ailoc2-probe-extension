@@ -398,7 +398,7 @@ async function wrapUnmanagedHookFiles(
     }
 
     if (unsafeHookFiles.length > 0) {
-        const manualMergeHookFiles = await writeManualMergeHookFiles(repoRoot, unsafeHookFiles, delegatedHooksPath);
+        const manualMergeHookFiles = await writeManualMergeHookFiles(repoRoot, hookFileNames, delegatedHooksPath);
         return {
             wrappedHookFiles: [],
             manualMergeHookFiles
