@@ -182,10 +182,11 @@ export async function installClaudeCodeHooks(args: {
     const claudeDirectory = path.join(args.repoRoot, '.claude');
     const settingsPath = path.join(claudeDirectory, 'settings.json');
     const runtimePath = path.join(claudeDirectory, CLAUDE_CODE_RUNTIME_FILE_NAME);
+
+    const settings = await readClaudeSettings(settingsPath);
     await fs.promises.mkdir(claudeDirectory, { recursive: true });
     await fs.promises.copyFile(args.runtimeSourcePath, runtimePath);
 
-    const settings = await readClaudeSettings(settingsPath);
     const hooks = normalizeHooks(settings.hooks);
     removeManagedClaudeHooks(hooks);
     addManagedClaudeHook(hooks, 'PreToolUse', createManagedCommand(runtimePath, 'capture-before'));
@@ -279,13 +280,34 @@ async function readTextFileIfExists(filePath: string): Promise<string | null> {
 }
 
 async function readClaudeSettings(settingsPath: string): Promise<Record<string, unknown>> {
+    let fileContents: string;
     try {
-        const parsed = JSON.parse(await fs.promises.readFile(settingsPath, 'utf8')) as unknown;
-        return isRecord(parsed) ? parsed : {};
+        fileContents = await fs.promises.readFile(settingsPath, 'utf8');
     }
-    catch {
-        return {};
+    catch (error) {
+        if (isMissingFileError(error)) {
+            return {};
+        }
+        throw error;
     }
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(fileContents);
+    }
+    catch (error) {
+        throw new Error(
+            `AILoc2 could not parse the existing Claude settings at ${settingsPath}, so it will not overwrite them. Fix or remove the file, then retry. Underlying error: ${error instanceof Error ? error.message : String(error)}`
+        );
+    }
+
+    if (!isRecord(parsed)) {
+        throw new Error(
+            `AILoc2 will not overwrite the existing Claude settings at ${settingsPath} because they are not a JSON object. Fix or remove the file, then retry.`
+        );
+    }
+
+    return parsed;
 }
 
 function normalizeHooks(value: unknown): Record<string, unknown[]> {
@@ -423,6 +445,12 @@ function isFailedToolUse(payload: ClaudeCodeHookPayload): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isMissingFileError(error: unknown): boolean {
+    return typeof error === 'object'
+        && error !== null
+        && (error as { code?: unknown }).code === 'ENOENT';
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

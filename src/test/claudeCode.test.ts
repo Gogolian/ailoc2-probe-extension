@@ -148,6 +148,23 @@ test('installClaudeCodeHooks merges AILoc2 hooks into existing Claude settings',
     assert.equal(settings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command === 'echo keep-me')), true);
 });
 
+test('installClaudeCodeHooks refuses to overwrite unparseable Claude settings', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-corrupt-settings-');
+    const runtimeSourcePath = path.join(repoRoot, 'runtime.cjs');
+    fs.writeFileSync(runtimeSourcePath, 'console.log("runtime");\n', 'utf8');
+    const settingsPath = path.join(repoRoot, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    const corruptContents = '{ "hooks": [ this is not valid json';
+    fs.writeFileSync(settingsPath, corruptContents, 'utf8');
+
+    await assert.rejects(
+        installClaudeCodeHooks({ repoRoot, runtimeSourcePath }),
+        /could not parse the existing Claude settings/
+    );
+
+    assert.equal(fs.readFileSync(settingsPath, 'utf8'), corruptContents);
+});
+
 function createGitRepo(prefix: string): string {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     tempDirectories.push(repoRoot);
