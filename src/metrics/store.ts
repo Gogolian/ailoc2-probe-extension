@@ -23,6 +23,8 @@ import {
     getRollingStatePath
 } from './pathing';
 import { isRepoRelativePathTrackingIgnored } from './ignore';
+import { toErrorMessage } from '../util/errors';
+import { pathExists } from '../util/fsUtils';
 
 const WRITE_DEBOUNCE_MS = 350;
 const MAX_SAVE_ATTRIBUTION_CHECKPOINTS = 64;
@@ -124,7 +126,7 @@ export class RepoMetricsStore {
             return true;
         }
 
-        return this.pathExists(getRollingStatePath(repoRoot, repoRelativePath));
+        return pathExists(getRollingStatePath(repoRoot, repoRelativePath));
     }
 
     public noteDocumentSaved(args: {
@@ -166,7 +168,7 @@ export class RepoMetricsStore {
 
                 await this.ensureRepoLayout(args.fromRepoRoot);
                 await this.ensureRepoLayout(args.toRepoRoot);
-                if (!(await this.pathExists(sourcePath))) {
+                if (!(await pathExists(sourcePath))) {
                     return;
                 }
 
@@ -196,7 +198,7 @@ export class RepoMetricsStore {
                     fromRepoRelativePath: args.fromRepoRelativePath,
                     toRepoRoot: args.toRepoRoot,
                     toRepoRelativePath: args.toRepoRelativePath,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
             });
     }
@@ -216,7 +218,7 @@ export class RepoMetricsStore {
 
                 await this.ensureRepoLayout(args.repoRoot);
                 const rollingStatePath = getRollingStatePath(args.repoRoot, args.repoRelativePath);
-                if (!(await this.pathExists(rollingStatePath))) {
+                if (!(await pathExists(rollingStatePath))) {
                     return;
                 }
 
@@ -235,7 +237,7 @@ export class RepoMetricsStore {
                 this.logEvent('METRICS_STORE_MARK_DELETE_FAILED', {
                     repoRoot: args.repoRoot,
                     repoRelativePath: args.repoRelativePath,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
             });
     }
@@ -252,7 +254,7 @@ export class RepoMetricsStore {
             .catch((error) => {
                 this.logEvent('METRICS_STORE_FLUSH_FAILED', {
                     repoRoot,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
             });
 
@@ -315,7 +317,7 @@ export class RepoMetricsStore {
         let actualRollingStateWriteCount = 0;
         let skippedSaveOnlyBatchCount = 0;
         for (const batch of rollingStateBatches.values()) {
-            const hadExistingRollingState = await this.pathExists(batch.rollingStatePath);
+            const hadExistingRollingState = await pathExists(batch.rollingStatePath);
             if (!hadExistingRollingState && batch.operations.every((operation) => operation.kind === 'save-update')) {
                 skippedSaveOnlyBatchCount += 1;
                 continue;
@@ -556,7 +558,7 @@ export class RepoMetricsStore {
         repoRoot: string,
         repoRelativePath: string
     ): Promise<FileRollingState> {
-        if (await this.pathExists(rollingStatePath)) {
+        if (await pathExists(rollingStatePath)) {
             try {
                 const existing = JSON.parse(await fs.promises.readFile(rollingStatePath, 'utf8')) as Partial<FileRollingState>;
                 const emptyState = this.createEmptyRollingState(repoRoot, repoRelativePath);
@@ -768,7 +770,7 @@ export class RepoMetricsStore {
         await fs.promises.mkdir(getMetricsFilesStateDirectory(repoRoot), { recursive: true });
 
         const manifestPath = getMetricsManifestPath(repoRoot);
-        if (!(await this.pathExists(manifestPath))) {
+        if (!(await pathExists(manifestPath))) {
             const manifest: RepoManifest = {
                 schemaVersion: METRICS_SCHEMA_VERSION,
                 extensionSessionId: this.extensionSessionId,
@@ -820,7 +822,7 @@ export class RepoMetricsStore {
         }
 
         const manifestPath = getMetricsManifestPath(repoRoot);
-        if (await this.pathExists(manifestPath)) {
+        if (await pathExists(manifestPath)) {
             try {
                 const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8')) as RepoManifest;
                 this.manifestCache.set(repoRoot, manifest);
@@ -883,16 +885,6 @@ export class RepoMetricsStore {
             }
 
             currentPath = parentPath;
-        }
-    }
-
-    private async pathExists(candidatePath: string): Promise<boolean> {
-        try {
-            await fs.promises.access(candidatePath);
-            return true;
-        }
-        catch {
-            return false;
         }
     }
 

@@ -1,15 +1,13 @@
-import * as childProcess from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as util from 'util';
 
 import {
     ClaudeCodeHooksInstallResult,
     installClaudeCodeHooks,
     uninstallClaudeCodeHooks
 } from '../integrations/claudeCode/runtime';
-
-const execFile = util.promisify(childProcess.execFile);
+import { runGitCommand, tryRunGitCommand } from '../util/gitCommand';
+import { makeFilesExecutable, pathExists } from '../util/fsUtils';
 
 export const REPO_HOOKS_DIRECTORY_NAME = '.githooks';
 export const REPO_HOOKS_PATH_VALUE = '.githooks';
@@ -332,14 +330,7 @@ async function ensureManagedRepoHookAssetsInstalled(
     await installManagedRuntimeAssets(repoRoot);
     await removeLegacyManagedRuntimeAssets(repoRoot);
 
-    await Promise.all(REQUIRED_REPO_HOOK_FILES.map(async (hookFileName) => {
-        try {
-            await fs.promises.chmod(path.join(getRepoHooksDirectoryPath(repoRoot), hookFileName), 0o755);
-        }
-        catch {
-            // Best effort only; Git for Windows does not depend on POSIX executable bits.
-        }
-    }));
+    await makeFilesExecutable(getRepoHooksDirectoryPath(repoRoot), REQUIRED_REPO_HOOK_FILES);
 }
 
 async function ensureManagedHookFile(
@@ -484,14 +475,7 @@ async function writeMigrationPackage(
     );
     migrationPackageFiles.push(getMigrationPackageDisplayPath(instructionsFileName));
 
-    await Promise.all(hookFileNames.map(async (hookFileName) => {
-        try {
-            await fs.promises.chmod(path.join(migrationPackageDirectoryPath, hookFileName), 0o755);
-        }
-        catch {
-            // Best effort only; Git for Windows does not depend on POSIX executable bits.
-        }
-    }));
+    await makeFilesExecutable(migrationPackageDirectoryPath, hookFileNames);
 
     return migrationPackageFiles;
 }
@@ -966,50 +950,27 @@ async function getGitConfigValue(
         ? ['config', '--local', '--get', key]
         : ['config', '--get', key];
 
-    try {
-        const { stdout } = await execFile('git', args, {
-            cwd: repoRoot,
-            windowsHide: true,
-            maxBuffer: 1024 * 1024
-        });
-        const value = stdout.trim();
-        return value.length > 0 ? value : null;
-    }
-    catch {
+    const stdout = await tryRunGitCommand(repoRoot, args);
+    if (stdout === null) {
         return null;
     }
+
+    const value = stdout.trim();
+    return value.length > 0 ? value : null;
 }
 
 async function setLocalGitConfigValue(repoRoot: string, key: string, value: string): Promise<void> {
-    await execFile('git', ['config', '--local', key, value], {
-        cwd: repoRoot,
-        windowsHide: true,
-        maxBuffer: 1024 * 1024
-    });
+    await runGitCommand(repoRoot, ['config', '--local', key, value]);
 }
 
 async function unsetLocalGitConfigValue(repoRoot: string, key: string, ignoreMissing: boolean): Promise<void> {
     try {
-        await execFile('git', ['config', '--local', '--unset', key], {
-            cwd: repoRoot,
-            windowsHide: true,
-            maxBuffer: 1024 * 1024
-        });
+        await runGitCommand(repoRoot, ['config', '--local', '--unset', key]);
     }
     catch (error) {
         if (!ignoreMissing) {
             throw error;
         }
-    }
-}
-
-async function pathExists(candidatePath: string): Promise<boolean> {
-    try {
-        await fs.promises.access(candidatePath);
-        return true;
-    }
-    catch {
-        return false;
     }
 }
 

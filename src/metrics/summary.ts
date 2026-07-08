@@ -23,10 +23,9 @@ import {
 import { getGitBlobOidForWorkingTreeFile, getIndexGitBlobOid } from './git';
 import { isRepoRelativePathTrackingIgnored } from './ignore';
 import { getTrackingExclusionReasonForPath } from '../trackingExclusions';
-import * as childProcess from 'child_process';
-import * as util from 'util';
+import { toGitRepoPath, tryRunGitCommand } from '../util/gitCommand';
+import { pathExists, readTextFileIfExists } from '../util/fsUtils';
 
-const execFile = util.promisify(childProcess.execFile);
 const NEW_FILE_AI_DOMINANCE_RATIO = 2;
 const HISTORICAL_BULK_HUMAN_CHECKPOINT_MINIMUM_MAGNITUDE = 400;
 
@@ -740,32 +739,12 @@ async function getCachedWorkingTreeLineWeights(
 }
 
 async function readIndexFileText(repoRoot: string, repoRelativePath: string): Promise<string | null> {
-    try {
-        const gitPath = repoRelativePath.split(path.sep).join('/');
-        const { stdout } = await execFile(
-            'git',
-            ['-c', 'core.quotepath=false', 'show', `:${gitPath}`],
-            {
-                cwd: repoRoot,
-                windowsHide: true,
-                maxBuffer: 1024 * 1024
-            }
-        );
-
-        return stdout;
-    }
-    catch {
-        return null;
-    }
+    const gitPath = toGitRepoPath(repoRelativePath);
+    return tryRunGitCommand(repoRoot, ['-c', 'core.quotepath=false', 'show', `:${gitPath}`]);
 }
 
 async function readWorkingTreeFileText(repoRoot: string, repoRelativePath: string): Promise<string | null> {
-    try {
-        return await fs.promises.readFile(path.join(repoRoot, repoRelativePath), 'utf8');
-    }
-    catch {
-        return null;
-    }
+    return readTextFileIfExists(path.join(repoRoot, repoRelativePath));
 }
 
 function createLineWeights(text: string): number[] {
@@ -789,67 +768,46 @@ function getTextNonWhitespaceWeight(text: string): number {
 }
 
 async function getGitDiffEntries(repoRoot: string, args: string[]): Promise<GitDiffStatEntry[] | null> {
-    try {
-        const { stdout } = await execFile(
-            'git',
-            ['-c', 'core.quotepath=false', ...args],
-            {
-                cwd: repoRoot,
-                windowsHide: true,
-                maxBuffer: 1024 * 1024
-            }
-        );
-
-        return await filterIgnoredGitDiffEntries(repoRoot, parseGitDiffEntries(stdout));
-    }
-    catch {
+    const stdout = await tryRunGitCommand(repoRoot, ['-c', 'core.quotepath=false', ...args]);
+    if (stdout === null) {
         return null;
     }
+
+    return filterIgnoredGitDiffEntries(repoRoot, parseGitDiffEntries(stdout));
 }
 
 async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntry[] | null> {
-    try {
-        const { stdout } = await execFile(
-            'git',
-            ['ls-files', '--others', '--exclude-standard'],
-            {
-                cwd: repoRoot,
-                windowsHide: true,
-                maxBuffer: 1024 * 1024
-            }
-        );
-
-        const entries: GitDiffStatEntry[] = [];
-        for (const line of stdout.split(/\r?\n/)) {
-            const repoRelativePath = normalizeDiffPath(line.trim());
-            if (!repoRelativePath) {
-                continue;
-            }
-
-            if (await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath)) {
-                continue;
-            }
-
-            try {
-                const fileContents = await fs.promises.readFile(path.join(repoRoot, repoRelativePath), 'utf8');
-                const lineCount = countTextLines(fileContents);
-                entries.push({
-                    repoRelativePath,
-                    changedLines: getTextNonWhitespaceWeight(fileContents),
-                    currentLineRanges: lineCount > 0 ? [{ startLine: 0, lineCount }] : [],
-                    isNewFile: true
-                });
-            }
-            catch {
-                continue;
-            }
-        }
-
-        return entries;
-    }
-    catch {
+    const stdout = await tryRunGitCommand(repoRoot, ['ls-files', '--others', '--exclude-standard']);
+    if (stdout === null) {
         return null;
     }
+
+    const entries: GitDiffStatEntry[] = [];
+    for (const line of stdout.split(/\r?\n/)) {
+        const repoRelativePath = normalizeDiffPath(line.trim());
+        if (!repoRelativePath) {
+            continue;
+        }
+
+        if (await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath)) {
+            continue;
+        }
+
+        const fileContents = await readTextFileIfExists(path.join(repoRoot, repoRelativePath));
+        if (fileContents === null) {
+            continue;
+        }
+
+        const lineCount = countTextLines(fileContents);
+        entries.push({
+            repoRelativePath,
+            changedLines: getTextNonWhitespaceWeight(fileContents),
+            currentLineRanges: lineCount > 0 ? [{ startLine: 0, lineCount }] : [],
+            isNewFile: true
+        });
+    }
+
+    return entries;
 }
 
 function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
@@ -1161,27 +1119,17 @@ async function clearCommittedRollingState(args: {
 }
 
 async function getLastCommitRepoRelativePaths(repoRoot: string): Promise<string[]> {
-    try {
-        const { stdout } = await execFile(
-            'git',
-            ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'],
-            {
-                cwd: repoRoot,
-                windowsHide: true,
-                maxBuffer: 1024 * 1024
-            }
-        );
-
-        return Array.from(new Set(
-            stdout
-                .split(/\r?\n/)
-                .map((line) => normalizeDiffPath(line.trim()))
-                .filter((repoRelativePath): repoRelativePath is string => repoRelativePath !== null)
-        ));
-    }
-    catch {
+    const stdout = await tryRunGitCommand(repoRoot, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD']);
+    if (stdout === null) {
         return [];
     }
+
+    return Array.from(new Set(
+        stdout
+            .split(/\r?\n/)
+            .map((line) => normalizeDiffPath(line.trim()))
+            .filter((repoRelativePath): repoRelativePath is string => repoRelativePath !== null)
+    ));
 }
 
 async function getUnstagedRepoRelativePathSet(repoRoot: string): Promise<Set<string>> {
@@ -1440,16 +1388,6 @@ async function removeEmptyParentDirectories(startDirectoryPath: string, stopDire
         }
 
         currentDirectoryPath = path.dirname(currentDirectoryPath);
-    }
-}
-
-async function pathExists(candidatePath: string): Promise<boolean> {
-    try {
-        await fs.promises.access(candidatePath);
-        return true;
-    }
-    catch {
-        return false;
     }
 }
 
