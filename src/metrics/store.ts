@@ -579,9 +579,10 @@ export class RepoMetricsStore {
                     deletedAt: existing.deletedAt ?? emptyState.deletedAt
                 };
             }
-            catch {
+            catch (error) {
                 this.logEvent('METRICS_STORE_ROLLING_STATE_PARSE_FAILED', {
-                    rollingStatePath
+                    rollingStatePath,
+                    error: error instanceof Error ? error.message : String(error)
                 });
             }
         }
@@ -826,10 +827,11 @@ export class RepoMetricsStore {
                 this.manifestCache.set(repoRoot, manifest);
                 return manifest;
             }
-            catch {
+            catch (error) {
                 this.logEvent('METRICS_STORE_MANIFEST_PARSE_FAILED', {
                     repoRoot,
-                    manifestPath
+                    manifestPath,
+                    error: error instanceof Error ? error.message : String(error)
                 });
             }
         }
