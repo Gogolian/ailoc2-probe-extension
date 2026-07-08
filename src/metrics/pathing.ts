@@ -35,16 +35,32 @@ export function getMetricsManifestPath(repoRoot: string): string {
 }
 
 export function getRollingStatePath(repoRoot: string, repoRelativePath: string): string {
+    if (path.isAbsolute(repoRelativePath)) {
+        throw new Error(`Cannot derive rolling state path from absolute repoRelativePath='${repoRelativePath}'.`);
+    }
+
     const normalizedPath = path.normalize(repoRelativePath);
     const pathSegments = normalizedPath
-        .split(path.sep)
+        .split(/[\\/]/)
         .filter((segment) => segment.length > 0);
 
     if (pathSegments.length === 0) {
         throw new Error(`Cannot derive rolling state path from repoRelativePath='${repoRelativePath}'.`);
     }
 
+    if (pathSegments.some((segment) => segment === '..')) {
+        throw new Error(`Refusing to derive rolling state path that escapes the metrics directory from repoRelativePath='${repoRelativePath}'.`);
+    }
+
     const directorySegments = pathSegments.slice(0, -1);
     const fileName = `${pathSegments[pathSegments.length - 1]}${FILE_STATE_SUFFIX}`;
-    return path.join(getMetricsFilesStateDirectory(repoRoot), ...directorySegments, fileName);
+    const filesStateDirectory = getMetricsFilesStateDirectory(repoRoot);
+    const rollingStatePath = path.join(filesStateDirectory, ...directorySegments, fileName);
+
+    const relativeToFilesStateDirectory = path.relative(filesStateDirectory, rollingStatePath);
+    if (relativeToFilesStateDirectory.startsWith('..') || path.isAbsolute(relativeToFilesStateDirectory)) {
+        throw new Error(`Refusing to derive rolling state path that escapes the metrics directory from repoRelativePath='${repoRelativePath}'.`);
+    }
+
+    return rollingStatePath;
 }

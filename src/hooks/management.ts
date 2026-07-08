@@ -963,15 +963,24 @@ async function setLocalGitConfigValue(repoRoot: string, key: string, value: stri
     await runGitCommand(repoRoot, ['config', '--local', key, value]);
 }
 
+const GIT_CONFIG_UNSET_MISSING_KEY_EXIT_CODE = 5;
+
 async function unsetLocalGitConfigValue(repoRoot: string, key: string, ignoreMissing: boolean): Promise<void> {
     try {
         await runGitCommand(repoRoot, ['config', '--local', '--unset', key]);
     }
     catch (error) {
-        if (!ignoreMissing) {
-            throw error;
+        if (ignoreMissing && isGitConfigMissingKeyError(error)) {
+            return;
         }
+        throw error;
     }
+}
+
+function isGitConfigMissingKeyError(error: unknown): boolean {
+    return typeof error === 'object'
+        && error !== null
+        && (error as { code?: unknown }).code === GIT_CONFIG_UNSET_MISSING_KEY_EXIT_CODE;
 }
 
 async function removePathIfExists(candidatePath: string, recursive = false): Promise<boolean> {

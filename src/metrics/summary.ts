@@ -810,7 +810,7 @@ async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntr
     return entries;
 }
 
-function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
+export function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
     const entries = new Map<string, GitDiffStatEntry>();
     let currentRepoRelativePath: string | null = null;
     let pendingHeaderPath: string | null = null;
@@ -862,7 +862,7 @@ function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
             continue;
         }
 
-        if (line.startsWith('+++') || line.startsWith('---')) {
+        if (line.startsWith('+++ ') || line.startsWith('--- ')) {
             continue;
         }
 

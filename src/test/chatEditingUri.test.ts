@@ -13,35 +13,35 @@ test('isChatEditingUriScheme recognizes VS Code chat editing model schemes', () 
 test('getChatEditingTargetFsPath extracts Windows path from chat-editing URI path', () => {
     const targetPath = getChatEditingTargetFsPath({
         scheme: 'chat-editing-text-model',
-        path: '/c:/PTC/dev/cpc/cpc-bff/ai-test/file.js'
+        path: '/q:/willow/cobalt/harbor/meadow/ai-test/file.js'
     }, undefined);
 
-    assert.equal(targetPath, path.normalize('c:/PTC/dev/cpc/cpc-bff/ai-test/file.js'));
+    assert.equal(targetPath, path.normalize('q:/willow/cobalt/harbor/meadow/ai-test/file.js'));
 });
 
 test('getChatEditingTargetFsPath extracts Windows path from chat-editing fileName', () => {
     const targetPath = getChatEditingTargetFsPath({
         scheme: 'chat-editing-text-model',
         path: ''
-    }, 'chat-editing-text-model:/c:/PTC/dev/cpc/cpc-bff/ai-test/file.js');
+    }, 'chat-editing-text-model:/q:/willow/cobalt/harbor/meadow/ai-test/file.js');
 
-    assert.equal(targetPath, path.normalize('c:/PTC/dev/cpc/cpc-bff/ai-test/file.js'));
+    assert.equal(targetPath, path.normalize('q:/willow/cobalt/harbor/meadow/ai-test/file.js'));
 });
 
 test('getChatEditingTargetFsPath prefers absolute fsPath when VS Code provides it', () => {
     const targetPath = getChatEditingTargetFsPath({
         scheme: 'chat-editing-snapshot-text-model',
-        fsPath: path.normalize('c:/PTC/dev/cpc/cpc-bff/ai-test/file.js'),
+        fsPath: path.normalize('q:/willow/cobalt/harbor/meadow/ai-test/file.js'),
         path: '/wrong/path.js'
     }, undefined);
 
-    assert.equal(targetPath, path.normalize('c:/PTC/dev/cpc/cpc-bff/ai-test/file.js'));
+    assert.equal(targetPath, path.normalize('q:/willow/cobalt/harbor/meadow/ai-test/file.js'));
 });
 
 test('getChatEditingTargetFsPath ignores non-chat-editing schemes', () => {
     const targetPath = getChatEditingTargetFsPath({
         scheme: 'file',
-        fsPath: path.normalize('c:/PTC/dev/cpc/cpc-bff/ai-test/file.js')
+        fsPath: path.normalize('q:/willow/cobalt/harbor/meadow/ai-test/file.js')
     }, undefined);
 
     assert.equal(targetPath, null);
