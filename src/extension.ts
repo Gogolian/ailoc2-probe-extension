@@ -36,6 +36,7 @@ import { createLineDiffSegments } from './metrics/lineDiff';
 import { RepoMetricsStore } from './metrics/store';
 import { installRepoHooks, uninstallRepoHooks } from './hooks/management';
 import { getTrackingExclusionReasonForPath as getSharedTrackingExclusionReasonForPath } from './trackingExclusions';
+import { toErrorMessage } from './util/errors';
 
 type DocumentSnapshot = {
     text: string;
@@ -367,10 +368,10 @@ export function activate(context: vscode.ExtensionContext): void {
             catch (error) {
                 logEvent('COMMAND_RECOMPUTE_REPO_SUMMARY_FAILED', {
                     repoRoot,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
                 void vscode.window.showErrorMessage(
-                    `AILoc2 failed to refresh the repo summary for ${path.basename(repoRoot)}: ${error instanceof Error ? error.message : String(error)}`
+                    `AILoc2 failed to refresh the repo summary for ${path.basename(repoRoot)}: ${toErrorMessage(error)}`
                 );
             }
         }),
@@ -490,10 +491,10 @@ export function activate(context: vscode.ExtensionContext): void {
             catch (error) {
                 logEvent('COMMAND_INSTALL_HOOKS_FAILED', {
                     repoRoot,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
                 void vscode.window.showErrorMessage(
-                    `AILoc2 failed to install hooks for ${path.basename(repoRoot)}: ${error instanceof Error ? error.message : String(error)}`
+                    `AILoc2 failed to install hooks for ${path.basename(repoRoot)}: ${toErrorMessage(error)}`
                 );
             }
         }),
@@ -539,10 +540,10 @@ export function activate(context: vscode.ExtensionContext): void {
             catch (error) {
                 logEvent('COMMAND_UNINSTALL_HOOKS_FAILED', {
                     repoRoot,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
                 void vscode.window.showErrorMessage(
-                    `AILoc2 failed to uninstall hooks for ${path.basename(repoRoot)}: ${error instanceof Error ? error.message : String(error)}`
+                    `AILoc2 failed to uninstall hooks for ${path.basename(repoRoot)}: ${toErrorMessage(error)}`
                 );
             }
         }),
@@ -874,7 +875,7 @@ export function activate(context: vscode.ExtensionContext): void {
             })().catch((error) => {
                 logEvent('WORKSPACE_FILES_RENAMED_FAILED', {
                     renameCount: event.files.length,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
             });
         }),
@@ -961,7 +962,7 @@ export function activate(context: vscode.ExtensionContext): void {
             })().catch((error) => {
                 logEvent('WORKSPACE_FILES_DELETED_FAILED', {
                     deleteCount: event.files.length,
-                    error: error instanceof Error ? error.message : String(error)
+                    error: toErrorMessage(error)
                 });
             });
         }),

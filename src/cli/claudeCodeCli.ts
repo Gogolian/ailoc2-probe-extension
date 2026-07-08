@@ -7,6 +7,8 @@ import {
     recordClaudeCodePostEdit,
     uninstallClaudeCodeHooks
 } from '../integrations/claudeCode/runtime';
+import { resolveRepoRootArgument, runCli } from './cliRuntime';
+import { toErrorMessage } from '../util/errors';
 
 async function main(): Promise<number> {
     const command = process.argv[2];
@@ -27,7 +29,7 @@ async function main(): Promise<number> {
         }
     }
     catch (error) {
-        console.error(`AILoc2 Claude Code warning: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`AILoc2 Claude Code warning: ${toErrorMessage(error)}`);
         return command === 'install-claude-hooks' || command === 'uninstall-claude-hooks' ? 1 : 0;
     }
 }
@@ -47,7 +49,7 @@ async function runRecordEdit(payloadPath: string | undefined): Promise<number> {
 }
 
 async function runInstallClaudeHooks(repoRootArgument: string | undefined, runtimeSourcePathArgument: string | undefined): Promise<number> {
-    const repoRoot = path.resolve(process.cwd(), repoRootArgument ?? '.');
+    const repoRoot = resolveRepoRootArgument(repoRootArgument);
     const runtimeSourcePath = path.resolve(process.cwd(), runtimeSourcePathArgument ?? process.argv[1]);
     const result = await installClaudeCodeHooks({ repoRoot, runtimeSourcePath });
     console.log(JSON.stringify(result));
@@ -55,7 +57,7 @@ async function runInstallClaudeHooks(repoRootArgument: string | undefined, runti
 }
 
 async function runUninstallClaudeHooks(repoRootArgument: string | undefined): Promise<number> {
-    const repoRoot = path.resolve(process.cwd(), repoRootArgument ?? '.');
+    const repoRoot = resolveRepoRootArgument(repoRootArgument);
     const result = await uninstallClaudeCodeHooks(repoRoot);
     console.log(JSON.stringify(result));
     return 0;
@@ -65,12 +67,5 @@ function printUsage(): void {
     console.error('Usage: node <ailoc2-claude-code.cjs|out/cli/claudeCodeCli.js> <capture-before [payloadJsonPath|-]|record-edit [payloadJsonPath|-]|install-claude-hooks [repoRoot] [runtimeSourcePath]|uninstall-claude-hooks [repoRoot]>');
 }
 
-void main()
-    .then((exitCode) => {
-        process.exitCode = exitCode;
-    })
-    .catch((error) => {
-        console.error(`AILoc2 Claude Code CLI failed: ${error instanceof Error ? error.message : String(error)}`);
-        process.exitCode = 1;
-    });
+runCli('AILoc2 Claude Code CLI', main);
 

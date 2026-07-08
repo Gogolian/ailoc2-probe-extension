@@ -11,6 +11,8 @@ import {
     prepareRepoCommitBaseline,
     refreshRepoHookSummary
 } from '../metrics/summary';
+import { resolveRepoRootArgument, runCli } from './cliRuntime';
+import { toErrorMessage } from '../util/errors';
 
 async function main(): Promise<number> {
     const command = process.argv[2];
@@ -73,7 +75,7 @@ async function runAnnotateCommitMessage(
         return 0;
     }
     catch (error) {
-        console.error(`AILoc2 annotate-commit-message warning: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`AILoc2 annotate-commit-message warning: ${toErrorMessage(error)}`);
 
         try {
             const placeholderSuffix = createAiCommitSuffix({
@@ -89,7 +91,7 @@ async function runAnnotateCommitMessage(
         }
         catch (fallbackError) {
             console.error(
-                `AILoc2 annotate-commit-message fallback warning: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`
+                `AILoc2 annotate-commit-message fallback warning: ${toErrorMessage(fallbackError)}`
             );
             return 0;
         }
@@ -97,18 +99,11 @@ async function runAnnotateCommitMessage(
 }
 
 function resolveRepoRoot(repoRootArgument: string | undefined): string {
-    return path.resolve(process.cwd(), repoRootArgument ?? '.');
+    return resolveRepoRootArgument(repoRootArgument);
 }
 
 function printUsage(): void {
     console.error('Usage: node <ailoc2-hook-runtime.cjs|out/cli/gitHookCli.js> <prepare-commit-baseline [repoRoot]|refresh-summary [repoRoot]|annotate-commit-message <messageFilePath> [repoRoot]|finalize-commit [repoRoot]>');
 }
 
-void main()
-    .then((exitCode) => {
-        process.exitCode = exitCode;
-    })
-    .catch((error) => {
-        console.error(`AILoc2 hook CLI failed: ${error instanceof Error ? error.message : String(error)}`);
-        process.exitCode = 1;
-    });
+runCli('AILoc2 hook CLI', main);

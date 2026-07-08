@@ -4,6 +4,7 @@ import * as path from 'path';
 
 import { getMetricsRoot } from '../../metrics/pathing';
 import { resolveRepoLocationForFsPathNode } from '../../metrics/nodeRepoResolver';
+import { pathExists, readTextFileIfExists } from '../../util/fsUtils';
 import { recordClaudeCodeEdit } from './metrics';
 
 export type ClaudeCodeHookPayload = Record<string, unknown>;
@@ -223,16 +224,6 @@ export async function uninstallClaudeCodeHooks(repoRoot: string): Promise<Claude
     };
 }
 
-async function pathExists(candidatePath: string): Promise<boolean> {
-    try {
-        await fs.promises.access(candidatePath);
-        return true;
-    }
-    catch {
-        return false;
-    }
-}
-
 export function extractClaudeCodeEditTargets(payload: ClaudeCodeHookPayload): ClaudeCodeEditTarget[] {
     const toolName = getToolName(payload);
     if (!isTrackedClaudeTool(toolName)) {
@@ -264,15 +255,6 @@ async function readPendingSnapshot(snapshotPath: string): Promise<PendingSnapsho
     try {
         const parsed = JSON.parse(await fs.promises.readFile(snapshotPath, 'utf8')) as Partial<PendingSnapshot>;
         return typeof parsed.beforeText === 'string' ? parsed as PendingSnapshot : null;
-    }
-    catch {
-        return null;
-    }
-}
-
-async function readTextFileIfExists(filePath: string): Promise<string | null> {
-    try {
-        return await fs.promises.readFile(filePath, 'utf8');
     }
     catch {
         return null;
