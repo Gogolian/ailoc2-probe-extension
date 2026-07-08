@@ -52,7 +52,7 @@ function normalizeCandidateFsPath(candidate: string): string | null {
 }
 
 function stripUriSchemePrefix(candidate: string): string {
-    return candidate.replace(/^[a-z][a-z0-9+.-]*:(?=\/)/iu, '');
+    return candidate.replace(/^[a-z][a-z0-9+.-]+:(?=\/)/iu, '');
 }
 
 function normalizeWindowsUriPath(candidate: string): string | null {
