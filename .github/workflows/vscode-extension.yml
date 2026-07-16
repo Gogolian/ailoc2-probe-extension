@@ -45,12 +45,19 @@ jobs:
       - name: Build extension
         run: npm run build
 
+      - name: Read extension version
+        id: extension-version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Package VS Code extension
-        run: npx --yes @vscode/vsce package --out ailoc2-vscode-extension.vsix
+        run: npx --yes @vscode/vsce package --out ailoc2-vscode-extension-${{ steps.extension-version.outputs.version }}.vsix
 
       - name: Upload VS Code extension artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ailoc2-vscode-extension
-          path: ailoc2-vscode-extension.vsix
+          name: ailoc2-vscode-extension-${{ steps.extension-version.outputs.version }}
+          path: ailoc2-vscode-extension-${{ steps.extension-version.outputs.version }}.vsix
           if-no-files-found: error
