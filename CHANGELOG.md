@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+## [1.0.12] - 2026-07-16
+- Run pre-commit baseline preparation and summary refresh in one Node process.
+- Limit baseline resolution to staged paths and batch Git blob lookups.
+- Run independent staged, unstaged, and untracked summary scans concurrently.
+- Add opt-in `AILOC2_PROFILE=1` JSONL timing diagnostics.
+- Format commit attribution suffixes as `(AI: xx.xx%)` without accumulating trailing newlines.
+
 ## [1.0.11] - 2026-07-03
 - Bump the extension and IntelliJ plugin version to 1.0.11.
 
@@ -27,5 +36,5 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - Repo-local attribution state persisted under `.ailoc2-metrics`.
 - Summary generation for staged and unstaged Git changes.
 - Managed Git hook installation and bundled hook runtime.
-- Commit message annotation with staged AI percentage or `(AI unavailable)` fallback.
+- Commit message annotation with staged AI percentage or `(AI: unavailable)` fallback.
 - Technical documentation covering architecture, attribution, and hooks.

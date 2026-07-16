@@ -1,11 +1,10 @@
 #!/bin/sh
-
 # AILoc2 managed hook: commit-msg
 
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/ailoc2-hook-runtime.cjs"
 DELEGATE_HOOK_PATH=""
-PLACEHOLDER_SUFFIX=' (AI unavailable)'
+PLACEHOLDER_SUFFIX=' (AI: unavailable)'
 
 run_delegate_hook() {
     if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
@@ -21,13 +20,15 @@ append_placeholder_suffix() {
     fi
 
     TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\(AI [^)]*\)$//')
+    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+(AI:? [^)]*)$//')
 
     {
         if [ -n "$SUBJECT_LINE" ]; then
-            printf '%s%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUFFIX"
+            printf '%s%s
+' "$SUBJECT_LINE" "$PLACEHOLDER_SUFFIX"
         else
-            printf '%s\n' "${PLACEHOLDER_SUFFIX# }"
+            printf '%s
+' "${PLACEHOLDER_SUFFIX# }"
         fi
         sed '1d' "$MESSAGE_FILE"
     } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as path from 'node:path';
 import { test } from 'node:test';
 
 import { parseGitDiffEntries } from '../metrics/summary';
@@ -19,7 +20,7 @@ test('parseGitDiffEntries counts content lines starting with "++"', () => {
 
     const [entry] = parseGitDiffEntries(diff);
 
-    assert.equal(entry.repoRelativePath, 'src/counter.ts');
+    assert.equal(entry.repoRelativePath, path.normalize('src/counter.ts'));
     // "++counter;" -> prefix "+" stripped -> "+counter;" -> 9 non-whitespace chars.
     assert.equal(entry.changedLines, '+counter;'.length);
 });

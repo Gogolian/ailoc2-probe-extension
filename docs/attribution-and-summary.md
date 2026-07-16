@@ -256,11 +256,13 @@ This deliberately keeps final percentages formatting-neutral: formatter/linter t
 
 The repo-summary baseline is no longer advanced only when the repo happens to become fully clean.
 
-During `pre-commit`, AILoc2 snapshots the **current Git index** into `state/pending-commit-baseline.json`. After a successful commit, `post-commit` promotes that prepared state into `state/repo-summary.json`, clears rolling state for committed files that have no remaining unstaged work, and then refreshes `summary.json` again.
+During `pre-commit`, AILoc2 snapshots the **current Git index** into `state/pending-commit-baseline.json`. It resolves only paths present in the staged diff, preserves existing baseline entries for every other path, and batches index and working-tree blob lookups instead of spawning Git once per rolling-state file. After a successful commit, `post-commit` promotes that prepared state into `state/repo-summary.json`, clears rolling state for committed files that have no remaining unstaged work, and then refreshes `summary.json` again.
 
 That matters for the exact “second commit” problem: if a file still has leftover unstaged work after the first commit, the later summary now subtracts the just-committed index baseline instead of falling all the way back to the last fully clean repo state.
 
 In other words, later commit summaries are anchored to the most recently committed content when a file still has uncommitted leftovers, while fully committed files start fresh.
+
+The staged, unstaged, and untracked Git scans used by summary generation are independent and run concurrently. The managed pre-commit hook also prepares the baseline and refreshes the summary through one bundled CLI invocation to avoid a second Node startup.
 
 ## Clean baseline refresh
 

@@ -14,7 +14,7 @@ import {
 import { createLineDiffSegments } from '../metrics/lineDiff';
 import { METRICS_SCHEMA_VERSION } from '../metrics/schema';
 import { RepoMetricsStore } from '../metrics/store';
-import { finalizeRepoCommit, prepareRepoCommitBaseline, refreshRepoHookSummary } from '../metrics/summary';
+import { finalizeRepoCommit, prepareRepoCommitBaseline, prepareRepoPreCommit, refreshRepoHookSummary } from '../metrics/summary';
 
 const tempDirectories: string[] = [];
 const FLOATING_POINT_TOLERANCE = 0.000_001;
@@ -182,6 +182,63 @@ test('finalizeRepoCommit clears rolling state for fully committed files', async 
     assert.equal(repoSummaryState.cleanBaselineByRepoRelativePath[repoRelativePath], undefined);
     assert.equal(finalizationResult.summary.staged.changedFileCount, 0);
     assert.equal(finalizationResult.summary.unstaged.changedFileCount, 0);
+});
+
+test('prepareRepoPreCommit resolves only staged rolling states and preserves unrelated baselines', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-staged-baseline-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    const stagedPath = path.normalize('src/staged.txt');
+    const unrelatedPath = path.normalize('src/unrelated.txt');
+    fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, stagedPath), 'base staged\n', 'utf8');
+    fs.writeFileSync(path.join(repoRoot, unrelatedPath), 'base unrelated\n', 'utf8');
+    runGit(repoRoot, ['add', 'src/staged.txt', 'src/unrelated.txt']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(path.join(repoRoot, stagedPath), 'next staged\n', 'utf8');
+    runGit(repoRoot, ['add', 'src/staged.txt']);
+    const stagedOid = readIndexBlobOid(repoRoot, 'src/staged.txt');
+    const unrelatedOid = readIndexBlobOid(repoRoot, 'src/unrelated.txt');
+    writeRollingState(repoRoot, stagedPath, stagedOid, 10, 0);
+    writeRollingState(repoRoot, unrelatedPath, unrelatedOid, 99, 0);
+
+    fs.mkdirSync(path.dirname(getRepoSummaryStatePath(repoRoot)), { recursive: true });
+    fs.writeFileSync(getRepoSummaryStatePath(repoRoot), JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'repo-summary-state',
+        repoRoot,
+        lastComputedAt: new Date().toISOString(),
+        lastCleanAt: null,
+        cleanBaselineByRepoRelativePath: {
+            [unrelatedPath]: {
+                aiChangeMagnitude: 2,
+                humanChangeMagnitude: 3
+            }
+        }
+    }), 'utf8');
+
+    const preparation = await prepareRepoPreCommit({ repoRoot });
+    const preparedBaseline = JSON.parse(fs.readFileSync(getPreparedCommitBaselinePath(repoRoot), 'utf8')) as {
+        cleanBaselineByRepoRelativePath: Record<string, { aiChangeMagnitude: number; humanChangeMagnitude: number; }>;
+    };
+
+    assert.equal(preparation.baseline.resolvedFileCount, 1);
+    assert.equal(preparation.summary.summary.staged.changedFileCount, 1);
+    assert.deepEqual(preparedBaseline.cleanBaselineByRepoRelativePath, {
+        [unrelatedPath]: {
+            aiChangeMagnitude: 2,
+            humanChangeMagnitude: 3
+        },
+        [stagedPath]: {
+            aiChangeMagnitude: 10,
+            humanChangeMagnitude: 0
+        }
+    });
 });
 
 test('refreshRepoHookSummary needs flushed rolling state to attribute the first staged commit', async () => {
@@ -838,6 +895,36 @@ function readIndexBlobOid(repoRoot: string, repoRelativePath: string): string {
     const gitBlobOid = fields[1] ?? '';
     assert.match(gitBlobOid, /^[0-9a-f]{40}$/i);
     return gitBlobOid;
+}
+
+function writeRollingState(
+    repoRoot: string,
+    repoRelativePath: string,
+    gitBlobOid: string,
+    aiChangeMagnitude: number,
+    humanChangeMagnitude: number
+): void {
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(rollingStatePath), { recursive: true });
+    fs.writeFileSync(rollingStatePath, JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'file-rolling-state',
+        repoRoot,
+        repoRelativePath,
+        lastRecordedAt: new Date().toISOString(),
+        latestSignal: 'ProbableAIApplyToWorkspaceFile',
+        signalCounters: {},
+        cumulativeAiChangeMagnitude: aiChangeMagnitude,
+        cumulativeHumanChangeMagnitude: humanChangeMagnitude,
+        saveAttributionCheckpoints: [{
+            gitBlobOid,
+            cumulativeAiChangeMagnitude: aiChangeMagnitude,
+            cumulativeHumanChangeMagnitude: humanChangeMagnitude,
+            lineAttributionSpans: []
+        }],
+        lineAttributionSpans: [],
+        deletedAt: null
+    }), 'utf8');
 }
 
 function queueSyntheticWorkspaceMetric(

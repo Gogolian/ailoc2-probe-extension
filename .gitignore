@@ -4,3 +4,5 @@ out/
 .ailoc2-metrics/
 .githooks/ailoc2-hook-runtime.cjs
 logs/
+.githooks/
+.claude/

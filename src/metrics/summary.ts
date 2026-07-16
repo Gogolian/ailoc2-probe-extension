@@ -20,11 +20,12 @@ import {
     getRepoSummaryStatePath,
     getRollingStatePath
 } from './pathing';
-import { getGitBlobOidForWorkingTreeFile, getIndexGitBlobOid } from './git';
+import { getIndexGitBlobOid, getIndexGitBlobOids, getWorkingTreeGitBlobOids } from './git';
 import { isRepoRelativePathTrackingIgnored } from './ignore';
 import { getTrackingExclusionReasonForPath } from '../trackingExclusions';
 import { toGitRepoPath, tryRunGitCommand } from '../util/gitCommand';
 import { pathExists, readTextFileIfExists } from '../util/fsUtils';
+import { ProfileDetails, profileOperation } from '../util/profiling';
 
 const NEW_FILE_AI_DOMINANCE_RATIO = 2;
 const HISTORICAL_BULK_HUMAN_CHECKPOINT_MINIMUM_MAGNITUDE = 400;
@@ -39,6 +40,12 @@ type GitDiffStatEntry = {
 type DiffLineRange = {
     startLine: number;
     lineCount: number;
+};
+
+type RepoDiffInputs = {
+    stagedEntries: GitDiffStatEntry[] | null;
+    unstagedTrackedEntries: GitDiffStatEntry[] | null;
+    unstagedUntrackedEntries: GitDiffStatEntry[] | null;
 };
 
 type ChangedLineAttributionSummary = {
@@ -117,37 +124,58 @@ export type RepoCommitFinalizationResult = RepoHookSummaryRefreshResult & {
     preservedUnstagedFileCount: number;
 };
 
+export type RepoPreCommitPreparationResult = {
+    baseline: RepoCommitBaselinePreparationResult;
+    summary: RepoHookSummaryRefreshResult;
+};
+
 export async function computeRepoUncommittedAttributionSummary(args: {
     repoRoot: string;
 }): Promise<RepoUncommittedAttributionSummary> {
-    const stagedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--cached', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']);
-    const unstagedTrackedEntries = await getGitDiffEntries(args.repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']);
-    const unstagedUntrackedEntries = await getGitUntrackedEntries(args.repoRoot);
+    const diffInputs = await collectRepoDiffInputs(args.repoRoot);
+    return computeRepoUncommittedAttributionSummaryFromInputs(args.repoRoot, diffInputs);
+}
+
+async function collectRepoDiffInputs(repoRoot: string): Promise<RepoDiffInputs> {
+    const [stagedEntries, unstagedTrackedEntries, unstagedUntrackedEntries] = await Promise.all([
+        getGitDiffEntries(repoRoot, ['diff', '--cached', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']),
+        getGitDiffEntries(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']),
+        getGitUntrackedEntries(repoRoot)
+    ]);
+
+    return { stagedEntries, unstagedTrackedEntries, unstagedUntrackedEntries };
+}
+
+async function computeRepoUncommittedAttributionSummaryFromInputs(
+    repoRoot: string,
+    diffInputs: RepoDiffInputs
+): Promise<RepoUncommittedAttributionSummary> {
+    const { stagedEntries, unstagedTrackedEntries, unstagedUntrackedEntries } = diffInputs;
     const unstagedEntries = unstagedTrackedEntries !== null && unstagedUntrackedEntries !== null
         ? mergeGitDiffEntries(unstagedTrackedEntries, unstagedUntrackedEntries)
         : null;
     const isGitSummaryAvailable = stagedEntries !== null && unstagedEntries !== null;
 
     if (!isGitSummaryAvailable) {
-        return createEmptyRepoSummary(args.repoRoot, false, false);
+        return createEmptyRepoSummary(repoRoot, false, false);
     }
 
     if (stagedEntries.length === 0 && unstagedEntries.length === 0) {
-        await refreshCleanBaseline(args.repoRoot);
-        return createEmptyRepoSummary(args.repoRoot, true, true);
+        await refreshCleanBaseline(repoRoot);
+        return createEmptyRepoSummary(repoRoot, true, true);
     }
 
-    const summaryState = await readRepoSummaryState(args.repoRoot);
+    const summaryState = await readRepoSummaryState(repoRoot);
     const { staged, unstaged } = await summarizeDiffSlices(
-        args.repoRoot,
+        repoRoot,
         stagedEntries,
         unstagedEntries,
         summaryState
     );
 
     return {
-        repoRoot: args.repoRoot,
-        repoName: path.basename(args.repoRoot),
+        repoRoot,
+        repoName: path.basename(repoRoot),
         staged,
         unstaged,
         baselineRefreshed: false,
@@ -184,28 +212,61 @@ export async function writeRepoHookSummaryFile(summary: RepoUncommittedAttributi
 export async function refreshRepoHookSummary(args: {
     repoRoot: string;
 }): Promise<RepoHookSummaryRefreshResult> {
-    const summary = await computeRepoUncommittedAttributionSummary(args);
-    const summaryLine = formatRepoUncommittedAttributionSummary(summary);
-    const summaryFilePath = await writeRepoHookSummaryFile(summary);
+    const profileDetails: ProfileDetails = {};
+    return profileOperation(args.repoRoot, 'summary.refresh', profileDetails, async () => {
+        const summary = await computeRepoUncommittedAttributionSummary(args);
+        profileDetails.stagedFileCount = summary.staged.changedFileCount;
+        profileDetails.unstagedFileCount = summary.unstaged.changedFileCount;
+        const summaryLine = formatRepoUncommittedAttributionSummary(summary);
+        const summaryFilePath = await writeRepoHookSummaryFile(summary);
 
-    return {
-        summary,
-        summaryLine,
-        summaryFilePath
-    };
+        return {
+            summary,
+            summaryLine,
+            summaryFilePath
+        };
+    });
+}
+
+async function refreshRepoHookSummaryFromInputs(
+    repoRoot: string,
+    diffInputs: RepoDiffInputs
+): Promise<RepoHookSummaryRefreshResult> {
+    const profileDetails: ProfileDetails = {};
+    return profileOperation(repoRoot, 'summary.refresh', profileDetails, async () => {
+        const summary = await computeRepoUncommittedAttributionSummaryFromInputs(repoRoot, diffInputs);
+        profileDetails.stagedFileCount = summary.staged.changedFileCount;
+        profileDetails.unstagedFileCount = summary.unstaged.changedFileCount;
+        const summaryLine = formatRepoUncommittedAttributionSummary(summary);
+        const summaryFilePath = await writeRepoHookSummaryFile(summary);
+        return { summary, summaryLine, summaryFilePath };
+    });
 }
 
 export async function prepareRepoCommitBaseline(args: {
     repoRoot: string;
 }): Promise<RepoCommitBaselinePreparationResult> {
-    const preparedBaselinePath = getPreparedCommitBaselinePath(args.repoRoot);
-    const repoSummaryStatePath = getRepoSummaryStatePath(args.repoRoot);
-    const buildResult = await buildRepoCommitBaselineState(args.repoRoot);
+    const profileDetails: ProfileDetails = {};
+    return profileOperation(args.repoRoot, 'baseline.prepare', profileDetails, async () => {
+        const stagedRepoRelativePaths = await getStagedRepoRelativePaths(args.repoRoot);
+        return prepareRepoCommitBaselineForPaths(args.repoRoot, stagedRepoRelativePaths, profileDetails);
+    });
+}
 
+async function prepareRepoCommitBaselineForPaths(
+    repoRoot: string,
+    stagedRepoRelativePaths: readonly string[],
+    profileDetails: ProfileDetails
+): Promise<RepoCommitBaselinePreparationResult> {
+    const preparedBaselinePath = getPreparedCommitBaselinePath(repoRoot);
+    const repoSummaryStatePath = getRepoSummaryStatePath(repoRoot);
+    profileDetails.stagedFileCount = stagedRepoRelativePaths.length;
+    const buildResult = await buildRepoCommitBaselineState(repoRoot, stagedRepoRelativePaths);
     await writeJsonFileAtomic(preparedBaselinePath, buildResult.summaryState);
-
+    profileDetails.resolvedFileCount = buildResult.resolvedFileCount;
+    profileDetails.unresolvedFileCount = buildResult.unresolvedRepoRelativePaths.length;
     return {
-        repoRoot: args.repoRoot,
+        repoRoot,
         preparedBaselinePath,
         repoSummaryStatePath,
         resolvedFileCount: buildResult.resolvedFileCount,
@@ -213,6 +274,21 @@ export async function prepareRepoCommitBaseline(args: {
         preservedFileCount: buildResult.preservedFileCount,
         unresolvedRepoRelativePaths: buildResult.unresolvedRepoRelativePaths
     };
+}
+
+export async function prepareRepoPreCommit(args: {
+    repoRoot: string;
+}): Promise<RepoPreCommitPreparationResult> {
+    return profileOperation(args.repoRoot, 'preCommit.prepare', {}, async () => {
+        const diffInputs = await collectRepoDiffInputs(args.repoRoot);
+        const stagedRepoRelativePaths = diffInputs.stagedEntries?.map((entry) => entry.repoRelativePath) ?? [];
+        const baselineProfileDetails: ProfileDetails = {};
+        const baseline = await profileOperation(args.repoRoot, 'baseline.prepare', baselineProfileDetails, () => (
+            prepareRepoCommitBaselineForPaths(args.repoRoot, stagedRepoRelativePaths, baselineProfileDetails)
+        ));
+        const summary = await refreshRepoHookSummaryFromInputs(args.repoRoot, diffInputs);
+        return { baseline, summary };
+    });
 }
 
 export async function finalizeRepoCommit(args: {
@@ -1022,24 +1098,49 @@ async function readRepoSummaryState(repoRoot: string): Promise<RepoSummaryState>
     };
 }
 
-async function buildRepoCommitBaselineState(repoRoot: string): Promise<CommitBaselineBuildResult> {
+async function buildRepoCommitBaselineState(
+    repoRoot: string,
+    repoRelativePaths?: readonly string[]
+): Promise<CommitBaselineBuildResult> {
     const existingSummaryState = await readRepoSummaryState(repoRoot);
     const cleanBaselineByRepoRelativePath = {
         ...existingSummaryState.cleanBaselineByRepoRelativePath
     };
-    const rollingStatePaths = await collectRollingStatePaths(getMetricsFilesStateDirectory(repoRoot));
+    const rollingStatePaths = repoRelativePaths === undefined
+        ? await collectRollingStatePaths(getMetricsFilesStateDirectory(repoRoot))
+        : Array.from(new Set(repoRelativePaths.map((repoRelativePath) => path.normalize(repoRelativePath))))
+            .map((repoRelativePath) => getRollingStatePath(repoRoot, repoRelativePath));
+    const rollingStates: FileRollingState[] = [];
+    for (const rollingStatePath of rollingStatePaths) {
+        const rollingState = await readRollingStateFile(rollingStatePath, repoRoot);
+        if (rollingState) {
+            rollingStates.push(rollingState);
+        }
+    }
+
+    const rollingStateRepoRelativePaths = rollingStates.map((rollingState) => rollingState.repoRelativePath);
+    const indexGitBlobOids = await getIndexGitBlobOids(repoRoot, rollingStateRepoRelativePaths);
+    const workingTreeOidPaths = rollingStates
+        .filter((rollingState) => {
+            const indexGitBlobOid = indexGitBlobOids.get(rollingState.repoRelativePath);
+            return indexGitBlobOid !== null
+                && indexGitBlobOid !== undefined
+                && !findMatchingCheckpointByGitBlobOid(rollingState.saveAttributionCheckpoints, indexGitBlobOid);
+        })
+        .map((rollingState) => rollingState.repoRelativePath);
+    const workingTreeGitBlobOids = await getWorkingTreeGitBlobOids(repoRoot, workingTreeOidPaths);
     let resolvedFileCount = 0;
     let deletedFileCount = 0;
     let preservedFileCount = 0;
     const unresolvedRepoRelativePaths: string[] = [];
 
-    for (const rollingStatePath of rollingStatePaths) {
-        const rollingState = await readRollingStateFile(rollingStatePath, repoRoot);
-        if (!rollingState) {
-            continue;
-        }
-
-        const resolution = await resolveCommitBaselineForRollingState(repoRoot, rollingState);
+    for (const rollingState of rollingStates) {
+        const resolution = await resolveCommitBaselineForRollingState(
+            repoRoot,
+            rollingState,
+            indexGitBlobOids.get(rollingState.repoRelativePath) ?? null,
+            workingTreeGitBlobOids.get(rollingState.repoRelativePath) ?? null
+        );
         if (resolution.kind === 'resolved') {
             cleanBaselineByRepoRelativePath[rollingState.repoRelativePath] = resolution.entry;
             resolvedFileCount += 1;
@@ -1141,11 +1242,34 @@ async function getUnstagedRepoRelativePathSet(repoRoot: string): Promise<Set<str
     ]);
 }
 
+async function getStagedRepoRelativePaths(repoRoot: string): Promise<string[]> {
+    const stdout = await tryRunGitCommand(repoRoot, [
+        '-c',
+        'core.quotepath=false',
+        'diff',
+        '--cached',
+        '--name-only',
+        '-z',
+        '--find-renames'
+    ]);
+    if (stdout === null) {
+        return [];
+    }
+
+    return Array.from(new Set(
+        stdout
+            .split('\0')
+            .map(normalizeDiffPath)
+            .filter((repoRelativePath): repoRelativePath is string => repoRelativePath !== null)
+    ));
+}
+
 async function resolveCommitBaselineForRollingState(
     repoRoot: string,
-    rollingState: FileRollingState
+    rollingState: FileRollingState,
+    indexGitBlobOid: string | null,
+    workingTreeGitBlobOid: string | null
 ): Promise<CommitBaselineResolution> {
-    const indexGitBlobOid = await getIndexGitBlobOid(repoRoot, rollingState.repoRelativePath);
     if (indexGitBlobOid) {
         const matchingCheckpoint = findMatchingCheckpointByGitBlobOid(
             rollingState.saveAttributionCheckpoints,
@@ -1158,7 +1282,6 @@ async function resolveCommitBaselineForRollingState(
             };
         }
 
-        const workingTreeGitBlobOid = await getGitBlobOidForWorkingTreeFile(repoRoot, rollingState.repoRelativePath);
         if (workingTreeGitBlobOid && workingTreeGitBlobOid === indexGitBlobOid) {
             return {
                 kind: 'resolved',

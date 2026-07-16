@@ -694,8 +694,7 @@ CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
 ${createDelegateHookFunction(delegateSpecs)}
 
 if command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
-    node "$CLI_PATH" prepare-commit-baseline >/dev/null 2>&1 || printf '%s\n' 'AILoc2 pre-commit warning: commit baseline snapshot failed; later commits may retain older attribution until the next successful baseline refresh.' >&2
-    node "$CLI_PATH" refresh-summary >/dev/null 2>&1 || printf '%s\n' 'AILoc2 pre-commit warning: summary refresh failed; continuing without blocking the commit.' >&2
+    node "$CLI_PATH" prepare-commit >/dev/null 2>&1 || printf '%s\n' 'AILoc2 pre-commit warning: baseline preparation or summary refresh failed; continuing without blocking the commit.' >&2
 else
     printf '%s\n' 'AILoc2 pre-commit warning: Node CLI is unavailable; skipping summary refresh.' >&2
 fi
@@ -732,7 +731,7 @@ ${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
-PLACEHOLDER_SUFFIX=' (AI unavailable)'
+PLACEHOLDER_SUFFIX=' (AI: unavailable)'
 
 ${createDelegateHookFunction(delegateSpecs)}
 
@@ -742,7 +741,7 @@ append_placeholder_suffix() {
     fi
 
     TEMP_FILE="\${MESSAGE_FILE}.ailoc2.$$"
-    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\(AI [^)]*\)$//')
+    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\(AI:? [^)]*\)$//')
 
     {
         if [ -n "$SUBJECT_LINE" ]; then
@@ -785,7 +784,7 @@ function createLegacyManagedCommitMsgHookScript(): string {
 
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/${LEGACY_MANAGED_HOOK_RUNTIME_DIRECTORY_NAME}/out/cli/gitHookCli.js"
-PLACEHOLDER_SUFFIX=' (AI unavailable)'
+PLACEHOLDER_SUFFIX=' (AI: unavailable)'
 
 append_placeholder_suffix() {
     if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
@@ -793,7 +792,7 @@ append_placeholder_suffix() {
     fi
 
     TEMP_FILE="\${MESSAGE_FILE}.ailoc2.$$"
-    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\(AI [^)]*\)$//')
+    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\(AI:? [^)]*\)$//')
 
     {
         if [ -n "$SUBJECT_LINE" ]; then

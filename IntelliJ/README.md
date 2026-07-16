@@ -7,7 +7,7 @@ This folder contains an IntelliJ Platform plugin that mirrors the core AILoc2 be
 - persists repo-local metrics under `.ailoc2-metrics/intellij-state`;
 - honors optional gitignore-style opt-out rules from `.ailoc2-metrics/.ignore`;
 - calculates the staged AI percentage from whitespace-insensitive `git diff --cached` output during IntelliJ commit handling;
-- appends the staged percentage to the commit subject as `(AI 12.34%)`, or `(AI unavailable)` when Git summary generation fails;
+- appends the staged percentage to the commit subject as `(AI: 12.34%)`, or `(AI: unavailable)` when Git summary generation fails;
 - clears metrics for files that were fully committed while preserving metrics for committed paths that still have unstaged work.
 
 The implementation is intentionally local-first. It does not call a hosted service and does not depend on LLM-generated markers in source files.
@@ -63,4 +63,4 @@ If you want to exclude files or directories from IntelliJ metrics entirely, add 
 
 Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, updates `.gitignore` for AILoc2 artifacts, writes managed hook files under `.githooks`, installs Claude Code hooks under `.claude` when the Claude runtime is bundled, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall. If `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` already exists and is not AILoc2-managed, the action asks before wrapping it. Approved wrapping preserves the original file as `.githooks/<hook>.ailoc2-delegate`, runs it after AILoc2, and restores it on uninstall. When automatic wrapping is unsafe, AILoc2 writes inactive `.githooks/<hook>.ailoc2-proposed` files for manual or Copilot-assisted merge.
 
-The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. It reads `.ailoc2-metrics/intellij-state`, refreshes `.ailoc2-metrics/summary.json` from the staged diff, annotates terminal or external Git commit messages with the same `(AI xx.xx%)` suffix used by IntelliJ commit handling, and clears fully committed file metrics from `post-commit`.
+The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. It reads `.ailoc2-metrics/intellij-state`, refreshes `.ailoc2-metrics/summary.json` from the staged diff, annotates terminal or external Git commit messages with the same `(AI: xx.xx%)` suffix used by IntelliJ commit handling, and clears fully committed file metrics from `post-commit`.

@@ -3,9 +3,9 @@ import * as fs from 'fs';
 import { getMetricsSummaryFilePath } from '../metrics/pathing';
 import { readRepoHookSummaryFile } from '../metrics/summary';
 
-export const DEFAULT_AI_PLACEHOLDER_LABEL = 'AI unavailable';
+export const DEFAULT_AI_PLACEHOLDER_LABEL = 'unavailable';
 
-const AI_SUBJECT_SUFFIX_PATTERN = /\s+\(AI [^)]*\)$/u;
+const AI_SUBJECT_SUFFIX_PATTERN = /\s+\(AI:? [^)]*\)$/u;
 
 export type CommitMessageAnnotationResult = {
     messageFilePath: string;
@@ -54,24 +54,14 @@ export async function applyAiSuffixToCommitMessageFile(args: {
 
 export function applyAiSuffixToCommitMessage(messageText: string, suffixText: string): string {
     const newline = detectNewline(messageText);
-    const hadTrailingNewline = /(?:\r\n|\r|\n)$/u.test(messageText);
     const lines = messageText.split(/\r\n|\r|\n/u);
-
-    if (lines.length === 0) {
-        lines.push('');
-    }
 
     const normalizedSubject = stripAiSuffix(lines[0] ?? '');
     lines[0] = normalizedSubject.length > 0
         ? `${normalizedSubject}${suffixText}`
         : suffixText.trimStart();
 
-    let nextMessageText = lines.join(newline);
-    if (hadTrailingNewline) {
-        nextMessageText += newline;
-    }
-
-    return nextMessageText;
+    return lines.join(newline);
 }
 
 export function createAiCommitSuffix(args: {
@@ -83,13 +73,13 @@ export function createAiCommitSuffix(args: {
 } {
     if (typeof args.aiPercentage === 'number' && Number.isFinite(args.aiPercentage)) {
         return {
-            suffixText: ` (AI ${args.aiPercentage.toFixed(2)}%)`,
+            suffixText: ` (AI: ${args.aiPercentage.toFixed(2)}%)`,
             usedPlaceholder: false
         };
     }
 
     return {
-        suffixText: ` (AI ${args.placeholderLabel ?? DEFAULT_AI_PLACEHOLDER_LABEL})`,
+        suffixText: ` (AI: ${args.placeholderLabel ?? DEFAULT_AI_PLACEHOLDER_LABEL})`,
         usedPlaceholder: true
     };
 }

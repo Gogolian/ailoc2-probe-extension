@@ -13,7 +13,7 @@
   <img alt="Status" src="https://img.shields.io/badge/status-experimental-orange" />
 </p>
 
-> **Status:** experimental, working prototype. The current VS Code extension appears as `AILoc2 Probe`. It tracks editor activity, persists repo-local attribution state in `.ailoc2-metrics`, refreshes staged and unstaged summaries, and annotates commit messages like `feat: harden hook install flow (AI 23.47%)`.
+> **Status:** experimental, working prototype. The current VS Code extension appears as `AILoc2 Probe`. It tracks editor activity, persists repo-local attribution state in `.ailoc2-metrics`, refreshes staged and unstaged summaries, and annotates commit messages like `feat: harden hook install flow (AI: 23.47%)`.
 
 AILoc2 is built around a practical question most teams cannot answer yet:
 
@@ -43,8 +43,8 @@ No hosted backend is required by this repo. No special commit command to remembe
 - Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
 - Builds staged and unstaged summaries from actual Git diff slices, ignoring whitespace-only diff noise in the final percentages.
 - Installs repo-local Git hooks into `.githooks`.
-- Annotates commit messages with a suffix like `(AI 23.47%)`.
-- Falls back safely to `(AI unavailable)` when summary data cannot be produced.
+- Annotates commit messages with a suffix like `(AI: 23.47%)`.
+- Falls back safely to `(AI: unavailable)` when summary data cannot be produced.
 
 ## Why it feels different
 
@@ -135,13 +135,13 @@ See [`docs/claude-code.md`](docs/claude-code.md) for the hook model and failure 
 
 ### IntelliJ IDEA plugin prototype
 
-The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ editor changes locally, records repo-local metrics under `.ailoc2-metrics/intellij-state`, computes staged AI percentage from `git diff --cached` during IntelliJ commit handling, appends `(AI xx.xx%)` to the commit subject, and clears fully committed file metrics after successful commits without requiring prompt, instruction, or source-code tag changes.
+The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ editor changes locally, records repo-local metrics under `.ailoc2-metrics/intellij-state`, computes staged AI percentage from `git diff --cached` during IntelliJ commit handling, appends `(AI: xx.xx%)` to the commit subject, and clears fully committed file metrics after successful commits without requiring prompt, instruction, or source-code tag changes.
 
 ## Example output
 
 **Commit subject**
 
-> `feat: tighten diff attribution fallback (AI 23.47%)`
+> `feat: tighten diff attribution fallback (AI: 23.47%)`
 
 **Summary line**
 
@@ -155,6 +155,7 @@ your-repo/
 │  ├─ manifest.json
 │  ├─ .ignore
 │  ├─ summary.json
+│  ├─ performance.jsonl  # only when AILOC2_PROFILE=1
 │  └─ state/
 │     ├─ repo-summary.json
 │     └─ files/
@@ -175,6 +176,7 @@ your-repo/
 - `summary.json` — generated output consumed by hooks and other local tooling.
 - `.ignore` — optional gitignore-style rules for files or directories that should never get per-file metrics state.
 - `manifest.json` — lightweight bookkeeping and diagnostics for the extension runtime.
+- `performance.jsonl` — optional, path-free Git hook phase timings written only when `AILOC2_PROFILE=1`.
 - `state/repo-summary.json` — repo baseline state used when recomputing attribution against the current committed content.
 - `state/files/**/*.metrics.json` — rolling attribution state per tracked repo file.
 - `.githooks/post-commit` — promotes the just-committed index state into the repo baseline and clears fully committed file metrics so later commits score only what remains uncommitted.
@@ -232,7 +234,7 @@ This project is already useful, but it is not pretending to be magic.
 - Edits made outside supported integrations — or while the relevant integration is inactive — are not observed directly at creation time.
 - Some AI-assisted changes may still look human or unknown if the editor does not expose a distinct enough signal.
 - Large manual paste operations without supported AI-tool context are treated as human edits; ambiguous integrations can still produce unknown or incomplete attribution.
-- `(AI unavailable)` means summary generation or hook runtime fallback kicked in; it does **not** always mean “no AI was used.”
+- `(AI: unavailable)` means summary generation or hook runtime fallback kicked in; it does **not** always mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
 - You can also add repo-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.
 
@@ -249,6 +251,8 @@ Useful scripts:
 - `npm run build:hook-runtime` — bundles `out/hook-runtime/ailoc2-hook-runtime.cjs`.
 - `npm run build:claude-code-runtime` — bundles `out/claude-code/ailoc2-claude-code.cjs`.
 - `npm run watch` — TypeScript watch mode for extension development.
+
+To diagnose slow Git hooks, set `AILOC2_PROFILE=1` in the hook environment and inspect `.ailoc2-metrics/performance.jsonl`. Profiling is disabled by default and never blocks commits.
 
 ## Roadmap
 

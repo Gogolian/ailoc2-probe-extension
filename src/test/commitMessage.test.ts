@@ -30,22 +30,22 @@ test('createAiCommitSuffix formats a finite percentage with two decimals', () =>
     const suffix = createAiCommitSuffix({ aiPercentage: 42 });
 
     assert.deepEqual(suffix, {
-        suffixText: ' (AI 42.00%)',
+        suffixText: ' (AI: 42.00%)',
         usedPlaceholder: false
     });
 });
 
 test('createAiCommitSuffix rounds and pads fractional percentages', () => {
-    assert.equal(createAiCommitSuffix({ aiPercentage: 12.3456 }).suffixText, ' (AI 12.35%)');
-    assert.equal(createAiCommitSuffix({ aiPercentage: 0 }).suffixText, ' (AI 0.00%)');
-    assert.equal(createAiCommitSuffix({ aiPercentage: 100 }).suffixText, ' (AI 100.00%)');
+    assert.equal(createAiCommitSuffix({ aiPercentage: 12.3456 }).suffixText, ' (AI: 12.35%)');
+    assert.equal(createAiCommitSuffix({ aiPercentage: 0 }).suffixText, ' (AI: 0.00%)');
+    assert.equal(createAiCommitSuffix({ aiPercentage: 100 }).suffixText, ' (AI: 100.00%)');
 });
 
 test('createAiCommitSuffix falls back to the default placeholder when percentage is null', () => {
     const suffix = createAiCommitSuffix({ aiPercentage: null });
 
     assert.deepEqual(suffix, {
-        suffixText: ` (AI ${DEFAULT_AI_PLACEHOLDER_LABEL})`,
+        suffixText: ` (AI: ${DEFAULT_AI_PLACEHOLDER_LABEL})`,
         usedPlaceholder: true
     });
 });
@@ -54,7 +54,7 @@ test('createAiCommitSuffix uses a custom placeholder label when provided', () =>
     const suffix = createAiCommitSuffix({ aiPercentage: null, placeholderLabel: 'no git' });
 
     assert.deepEqual(suffix, {
-        suffixText: ' (AI no git)',
+        suffixText: ' (AI: no git)',
         usedPlaceholder: true
     });
 });
@@ -65,54 +65,63 @@ test('createAiCommitSuffix treats non-finite percentages as placeholders', () =>
 });
 
 test('applyAiSuffixToCommitMessage appends the suffix to the subject line', () => {
-    const result = applyAiSuffixToCommitMessage('Fix bug', ' (AI 30.00%)');
+    const result = applyAiSuffixToCommitMessage('Fix bug', ' (AI: 30.00%)');
 
-    assert.equal(result, 'Fix bug (AI 30.00%)');
+    assert.equal(result, 'Fix bug (AI: 30.00%)');
 });
 
-test('applyAiSuffixToCommitMessage replaces an existing AI suffix instead of duplicating it', () => {
-    const result = applyAiSuffixToCommitMessage('Fix bug (AI 10.00%)', ' (AI 55.00%)');
+test('applyAiSuffixToCommitMessage replaces a legacy AI suffix instead of duplicating it', () => {
+    const result = applyAiSuffixToCommitMessage('Fix bug (AI 10.00%)', ' (AI: 55.00%)');
 
-    assert.equal(result, 'Fix bug (AI 55.00%)');
+    assert.equal(result, 'Fix bug (AI: 55.00%)');
 });
 
 test('applyAiSuffixToCommitMessage replaces a placeholder AI suffix', () => {
-    const result = applyAiSuffixToCommitMessage('Fix bug (AI unavailable)', ' (AI 55.00%)');
+    const result = applyAiSuffixToCommitMessage('Fix bug (AI: unavailable)', ' (AI: 55.00%)');
 
-    assert.equal(result, 'Fix bug (AI 55.00%)');
+    assert.equal(result, 'Fix bug (AI: 55.00%)');
 });
 
 test('applyAiSuffixToCommitMessage only annotates the subject and preserves the body', () => {
     const message = 'Add feature\n\nDetailed body line\nSecond body line\n';
-    const result = applyAiSuffixToCommitMessage(message, ' (AI 20.00%)');
+    const result = applyAiSuffixToCommitMessage(message, ' (AI: 20.00%)');
     const lines = result.split('\n');
 
-    assert.equal(lines[0], 'Add feature (AI 20.00%)');
+    assert.equal(lines[0], 'Add feature (AI: 20.00%)');
     assert.equal(lines[1], '');
     assert.ok(result.includes('Detailed body line'));
     assert.ok(result.includes('Second body line'));
 });
 
 test('applyAiSuffixToCommitMessage trims the leading space when the subject is empty', () => {
-    const result = applyAiSuffixToCommitMessage('', ' (AI unavailable)');
+    const result = applyAiSuffixToCommitMessage('', ' (AI: unavailable)');
 
-    assert.equal(result, '(AI unavailable)');
+    assert.equal(result, '(AI: unavailable)');
 });
 
 test('applyAiSuffixToCommitMessage keeps the CRLF newline style', () => {
     const message = 'Subject\r\n\r\nBody\r\n';
-    const result = applyAiSuffixToCommitMessage(message, ' (AI 5.00%)');
+    const result = applyAiSuffixToCommitMessage(message, ' (AI: 5.00%)');
 
-    assert.ok(result.startsWith('Subject (AI 5.00%)\r\n'));
+    assert.ok(result.startsWith('Subject (AI: 5.00%)\r\n'));
     assert.ok(result.includes('Body'));
     assert.equal(/(?<!\r)\n/u.test(result), false);
 });
 
 test('applyAiSuffixToCommitMessage preserves lone CR newlines', () => {
     const message = 'Subject\rBody';
-    const result = applyAiSuffixToCommitMessage(message, ' (AI 5.00%)');
+    const result = applyAiSuffixToCommitMessage(message, ' (AI: 5.00%)');
 
-    assert.equal(result, 'Subject (AI 5.00%)\rBody');
+    assert.equal(result, 'Subject (AI: 5.00%)\rBody');
+});
+
+test('applyAiSuffixToCommitMessage preserves trailing newlines and is idempotent', () => {
+    const message = 'Subject\n\nBody\n';
+    const suffix = ' (AI: 5.00%)';
+    const annotated = applyAiSuffixToCommitMessage(message, suffix);
+
+    assert.equal(annotated, 'Subject (AI: 5.00%)\n\nBody\n');
+    assert.equal(applyAiSuffixToCommitMessage(annotated, suffix), annotated);
 });
 
 test('applyAiSuffixToCommitMessageFile writes the annotated subject back to disk', async () => {
@@ -122,10 +131,10 @@ test('applyAiSuffixToCommitMessageFile writes the annotated subject back to disk
 
     await applyAiSuffixToCommitMessageFile({
         messageFilePath,
-        suffixText: ' (AI 75.00%)'
+        suffixText: ' (AI: 75.00%)'
     });
 
-    assert.equal(fs.readFileSync(messageFilePath, 'utf8').split('\n')[0], 'Implement thing (AI 75.00%)');
+    assert.equal(fs.readFileSync(messageFilePath, 'utf8'), 'Implement thing (AI: 75.00%)\n');
 });
 
 test('applyAiSuffixToCommitMessageFile replaces a stale suffix without duplicating it', async () => {
@@ -135,12 +144,12 @@ test('applyAiSuffixToCommitMessageFile replaces a stale suffix without duplicati
 
     await applyAiSuffixToCommitMessageFile({
         messageFilePath,
-        suffixText: ' (AI 75.00%)'
+        suffixText: ' (AI: 75.00%)'
     });
 
     const contents = fs.readFileSync(messageFilePath, 'utf8');
-    assert.equal(contents.split('\n')[0], 'Implement thing (AI 75.00%)');
-    assert.equal(contents.match(/\(AI /gu)?.length, 1);
+    assert.equal(contents, 'Implement thing (AI: 75.00%)\n');
+    assert.equal(contents.match(/\(AI:? /gu)?.length, 1);
 });
 
 test('annotateCommitMessageFile uses the staged percentage from an available summary', async () => {
@@ -158,11 +167,11 @@ test('annotateCommitMessageFile uses the staged percentage from an available sum
         summaryFilePath: result.summaryFilePath,
         subjectLine: fs.readFileSync(messageFilePath, 'utf8').split('\n')[0]
     }, {
-        suffixText: ' (AI 63.50%)',
+        suffixText: ' (AI: 63.50%)',
         usedPlaceholder: false,
         summaryAvailable: true,
         summaryFilePath: getMetricsSummaryFilePath(repoRoot),
-        subjectLine: 'Ship it (AI 63.50%)'
+        subjectLine: 'Ship it (AI: 63.50%)'
     });
 });
 
@@ -179,10 +188,10 @@ test('annotateCommitMessageFile falls back to the placeholder when no summary fi
         summaryAvailable: result.summaryAvailable,
         subjectLine: fs.readFileSync(messageFilePath, 'utf8').split('\n')[0]
     }, {
-        suffixText: ` (AI ${DEFAULT_AI_PLACEHOLDER_LABEL})`,
+        suffixText: ` (AI: ${DEFAULT_AI_PLACEHOLDER_LABEL})`,
         usedPlaceholder: true,
         summaryAvailable: false,
-        subjectLine: `Ship it (AI ${DEFAULT_AI_PLACEHOLDER_LABEL})`
+        subjectLine: `Ship it (AI: ${DEFAULT_AI_PLACEHOLDER_LABEL})`
     });
 });
 
@@ -196,7 +205,7 @@ test('annotateCommitMessageFile uses the placeholder when git summary is unavail
 
     assert.equal(result.usedPlaceholder, true);
     assert.equal(result.summaryAvailable, false);
-    assert.equal(result.suffixText, ` (AI ${DEFAULT_AI_PLACEHOLDER_LABEL})`);
+    assert.equal(result.suffixText, ` (AI: ${DEFAULT_AI_PLACEHOLDER_LABEL})`);
 });
 
 test('annotateCommitMessageFile honors a custom placeholder label', async () => {
@@ -210,8 +219,8 @@ test('annotateCommitMessageFile honors a custom placeholder label', async () => 
         placeholderLabel: 'offline'
     });
 
-    assert.equal(result.suffixText, ' (AI offline)');
-    assert.equal(fs.readFileSync(messageFilePath, 'utf8').split('\n')[0], 'Ship it (AI offline)');
+    assert.equal(result.suffixText, ' (AI: offline)');
+    assert.equal(fs.readFileSync(messageFilePath, 'utf8').split('\n')[0], 'Ship it (AI: offline)');
 });
 
 function createTempDirectory(prefix: string): string {

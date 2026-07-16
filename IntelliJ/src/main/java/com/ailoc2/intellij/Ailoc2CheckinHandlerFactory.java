@@ -11,7 +11,7 @@ import java.nio.file.Path;
 import java.util.regex.Pattern;
 
 public final class Ailoc2CheckinHandlerFactory extends CheckinHandlerFactory {
-    private static final Pattern AI_SUFFIX_PATTERN = Pattern.compile("\\s+\\(AI [^)]*\\)$");
+    private static final Pattern AI_SUFFIX_PATTERN = Pattern.compile("\\s+\\(AI:? [^)]*\\)$");
 
     @Override
     public @NotNull CheckinHandler createHandler(@NotNull CheckinProjectPanel panel, @NotNull CommitContext commitContext) {
@@ -49,8 +49,8 @@ public final class Ailoc2CheckinHandlerFactory extends CheckinHandlerFactory {
             lines = new String[]{""};
         }
         String suffix = aiPercentage == null
-            ? " (AI unavailable)"
-            : String.format(java.util.Locale.ROOT, " (AI %.2f%%)", aiPercentage);
+            ? " (AI: unavailable)"
+            : String.format(java.util.Locale.ROOT, " (AI: %.2f%%)", aiPercentage);
         lines[0] = AI_SUFFIX_PATTERN.matcher(lines[0]).replaceFirst("").stripTrailing() + suffix;
         panel.setCommitMessage(String.join("\n", lines));
     }

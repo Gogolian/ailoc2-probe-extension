@@ -9,6 +9,7 @@ import {
 import {
     finalizeRepoCommit,
     prepareRepoCommitBaseline,
+    prepareRepoPreCommit,
     refreshRepoHookSummary
 } from '../metrics/summary';
 import { resolveRepoRootArgument, runCli } from './cliRuntime';
@@ -18,6 +19,8 @@ async function main(): Promise<number> {
     const command = process.argv[2];
 
     switch (command) {
+        case 'prepare-commit':
+            return runPrepareCommit(process.argv[3]);
         case 'prepare-commit-baseline':
             return runPrepareCommitBaseline(process.argv[3]);
         case 'refresh-summary':
@@ -30,6 +33,13 @@ async function main(): Promise<number> {
             printUsage();
             return 1;
     }
+}
+
+async function runPrepareCommit(repoRootArgument: string | undefined): Promise<number> {
+    const repoRoot = resolveRepoRoot(repoRootArgument);
+    const preparationResult = await prepareRepoPreCommit({ repoRoot });
+    console.log(preparationResult.summary.summaryLine);
+    return 0;
 }
 
 async function runPrepareCommitBaseline(repoRootArgument: string | undefined): Promise<number> {
@@ -103,7 +113,7 @@ function resolveRepoRoot(repoRootArgument: string | undefined): string {
 }
 
 function printUsage(): void {
-    console.error('Usage: node <ailoc2-hook-runtime.cjs|out/cli/gitHookCli.js> <prepare-commit-baseline [repoRoot]|refresh-summary [repoRoot]|annotate-commit-message <messageFilePath> [repoRoot]|finalize-commit [repoRoot]>');
+    console.error('Usage: node <ailoc2-hook-runtime.cjs|out/cli/gitHookCli.js> <prepare-commit [repoRoot]|prepare-commit-baseline [repoRoot]|refresh-summary [repoRoot]|annotate-commit-message <messageFilePath> [repoRoot]|finalize-commit [repoRoot]>');
 }
 
 runCli('AILoc2 hook CLI', main);

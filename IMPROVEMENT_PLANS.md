@@ -20,7 +20,7 @@ Attribution lives in two layers:
    a run-length attribution model built up live from editor events
    (`src/metrics/store.ts` → `applyLineDiffSegmentsToRollingState`).
 2. **Commit-time summary** (`src/metrics/summary.ts`) — scores the staged/unstaged
-   Git diff against that rolling model and writes the `(AI xx.xx%)` percentage.
+  Git diff against that rolling model and writes the `(AI: xx.xx%)` percentage.
 
 A linter/formatter run damages attribution in several distinct ways:
 

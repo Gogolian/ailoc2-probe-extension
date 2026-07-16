@@ -30,6 +30,7 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
     const claudeSettings = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf8')) as {
         hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
     };
+    const commitMsgHook = fs.readFileSync(path.join(repoRoot, '.githooks', 'commit-msg'), 'utf8');
 
     assert.deepEqual({
         status: installResult.status,
@@ -39,7 +40,10 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
         hasClaudeIgnore: gitignoreContents.includes('.claude/'),
         hasClaudeRuntime: fs.existsSync(path.join(repoRoot, '.claude', 'ailoc2-claude-code.cjs')),
         hasClaudeCaptureHook: claudeSettings.hooks?.PreToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('capture-before'))),
-        hasClaudeRecordHook: claudeSettings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('record-edit')))
+        hasClaudeRecordHook: claudeSettings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('record-edit'))),
+        usesCombinedPreCommit: fs.readFileSync(path.join(repoRoot, '.githooks', 'pre-commit'), 'utf8').includes('prepare-commit >/dev/null'),
+        hasColonPlaceholder: commitMsgHook.includes("PLACEHOLDER_SUFFIX=' (AI: unavailable)'"),
+        stripsLegacySuffix: commitMsgHook.includes('AI:? [^)]*')
     }, {
         status: 'installed',
         gitignoreUpdated: true,
@@ -48,7 +52,10 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
         hasClaudeIgnore: true,
         hasClaudeRuntime: true,
         hasClaudeCaptureHook: true,
-        hasClaudeRecordHook: true
+        hasClaudeRecordHook: true,
+        usesCombinedPreCommit: true,
+        hasColonPlaceholder: true,
+        stripsLegacySuffix: true
     });
 });
 

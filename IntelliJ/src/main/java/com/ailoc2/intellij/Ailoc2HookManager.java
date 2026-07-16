@@ -666,7 +666,7 @@ final class Ailoc2HookManager {
 
             SUMMARY_FILE=".ailoc2-metrics/summary.json"
             STATE_DIR=".ailoc2-metrics/intellij-state"
-            PLACEHOLDER_SUFFIX=' (AI unavailable)'
+            PLACEHOLDER_SUFFIX=' (AI: unavailable)'
 
             refresh_summary() {
                 REPO_ROOT=$(pwd)
@@ -812,7 +812,7 @@ final class Ailoc2HookManager {
                 fi
 
                 TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\\(AI [^)]*\\)$//')
+                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\\(AI:? [^)]*\\)$//')
 
                 {
                     if [ -n "$SUBJECT_LINE" ]; then
@@ -831,7 +831,7 @@ final class Ailoc2HookManager {
                     AI_PERCENTAGE=$(sed -n 's/.*"aiPercentage"[[:space:]]*:[[:space:]]*\\([0-9.][0-9.]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     if [ -n "$AI_PERCENTAGE" ]; then
                         AI_DISPLAY=$(awk -v value="$AI_PERCENTAGE" 'BEGIN { printf "%.2f", value }')
-                        append_suffix "$MESSAGE_FILE" " (AI $AI_DISPLAY%)"
+                        append_suffix "$MESSAGE_FILE" " (AI: $AI_DISPLAY%)"
                         return 0
                     fi
                 fi

@@ -74,16 +74,12 @@ Only repo-local hook configuration is chained or restored automatically. The imp
 The managed `pre-commit` hook:
 
 1. checks whether `node` is available and `./.githooks/ailoc2-hook-runtime.cjs` exists
-2. if so, runs:
+2. if so, runs baseline preparation and summary refresh in one Node process:
 
-   `node ./.githooks/ailoc2-hook-runtime.cjs prepare-commit-baseline`
+   `node ./.githooks/ailoc2-hook-runtime.cjs prepare-commit`
 
-3. then runs:
-
-   `node ./.githooks/ailoc2-hook-runtime.cjs refresh-summary`
-
-4. if either command fails, prints a warning to stderr and continues
-5. if a delegated repo-local hook path exists, runs the delegated `pre-commit` hook afterward
+3. if the command fails, prints a warning to stderr and continues
+4. if a delegated repo-local hook path exists, runs the delegated `pre-commit` hook afterward
 
 The key point is that summary refresh is **best effort**. AILoc2 does not try to block every commit because auxiliary metadata could not be refreshed.
 
@@ -104,7 +100,7 @@ The managed `commit-msg` hook:
 
 The placeholder suffix is currently:
 
-`(AI unavailable)`
+`(AI: unavailable)`
 
 That string means annotation could not produce a summary-backed percentage at commit time. It does **not** necessarily mean no AI was used.
 
@@ -128,7 +124,7 @@ This step is what advances the repo baseline from “last fully clean state” t
 `src/hooks/commitMessage.ts` applies a few careful rules:
 
 - only the **subject line** is rewritten
-- any existing trailing ` (AI ...)` suffix is stripped before a new suffix is applied
+- any existing trailing ` (AI: ...)` or legacy ` (AI ...)` suffix is stripped before a new suffix is applied
 - the original newline convention (`\n`, `\r\n`, or `\r`) is preserved
 - if the subject line is empty, the suffix text becomes the first line
 
@@ -136,8 +132,8 @@ This step is what advances the repo baseline from “last fully clean state” t
 
 Two suffix shapes exist today:
 
-- percentage available: ` (AI 23.47%)`
-- summary unavailable: ` (AI unavailable)`
+- percentage available: ` (AI: 23.47%)`
+- summary unavailable: ` (AI: unavailable)`
 
 The percentage is taken from `summary.staged.aiPercentage` when `summary.isGitSummaryAvailable` is true.
 
@@ -149,12 +145,19 @@ The managed hooks call the bundled CLI defined in `src/cli/gitHookCli.ts`.
 
 | Command | Behavior |
 | --- | --- |
+| `prepare-commit [repoRoot]` | Prepares the pending baseline and refreshes the summary in one process. This is the command used by managed `pre-commit` hooks. |
 | `prepare-commit-baseline [repoRoot]` | Snapshots the current Git index into a pending baseline file for promotion after a successful commit. |
 | `refresh-summary [repoRoot]` | Recomputes `.ailoc2-metrics/summary.json` and prints the formatted summary line. |
 | `annotate-commit-message <messageFilePath> [repoRoot]` | Rewrites the commit subject with the AI suffix and prints the suffix used. |
 | `finalize-commit [repoRoot]` | Promotes the pending baseline (or derives one from the current index) and refreshes `.ailoc2-metrics/summary.json`. |
 
 If `repoRoot` is omitted, the CLI resolves it relative to the current working directory.
+
+### Performance profiling
+
+Set `AILOC2_PROFILE=1` in the hook environment to append timing events to `.ailoc2-metrics/performance.jsonl`. Events include the overall pre-commit duration, baseline and summary phase durations, staged and unstaged file counts, and categorized Git command timings. File paths and source contents are not recorded. Profiling failures are ignored so diagnostics cannot block a commit.
+
+Profiling is disabled by default and the file is not created unless the environment variable is enabled.
 
 ## Uninstall flow
 
@@ -198,7 +201,7 @@ Current installs remove that legacy directory and standardize on the single-file
 
 ## Operational troubleshooting
 
-### The commit got `(AI unavailable)`
+### The commit got `(AI: unavailable)`
 
 That usually means one of these happened:
 

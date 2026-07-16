@@ -1,8 +1,10 @@
 #!/bin/sh
-
 # AILoc2 managed hook: pre-commit
 
 CLI_PATH="./.githooks/ailoc2-hook-runtime.cjs"
+if [ -f "./out/hook-runtime/ailoc2-hook-runtime.cjs" ]; then
+    CLI_PATH="./out/hook-runtime/ailoc2-hook-runtime.cjs"
+fi
 DELEGATE_HOOK_PATH=""
 
 run_delegate_hook() {
@@ -14,9 +16,11 @@ run_delegate_hook() {
 }
 
 if command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
-    node "$CLI_PATH" refresh-summary >/dev/null 2>&1 || printf '%s\n' 'AILoc2 pre-commit warning: summary refresh failed; continuing without blocking the commit.' >&2
+    node "$CLI_PATH" prepare-commit >/dev/null 2>&1 || printf '%s
+' 'AILoc2 pre-commit warning: baseline preparation or summary refresh failed; continuing without blocking the commit.' >&2
 else
-    printf '%s\n' 'AILoc2 pre-commit warning: Node CLI is unavailable; skipping summary refresh.' >&2
+    printf '%s
+' 'AILoc2 pre-commit warning: Node CLI is unavailable; skipping summary refresh.' >&2
 fi
 
 run_delegate_hook "$@"
