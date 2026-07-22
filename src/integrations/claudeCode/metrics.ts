@@ -1,9 +1,11 @@
 import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 
 import { createLineDiffSegments, splitTextIntoLogicalLines } from '../../metrics/lineDiff';
 import { resolveRepoLocationForFsPathNode } from '../../metrics/nodeRepoResolver';
-import { METRICS_SCHEMA_VERSION, WorkspaceFileMetricEvent } from '../../metrics/schema';
+import { getIntellijStatePath, getRollingStatePath } from '../../metrics/pathing';
+import { FileRollingState, LineAttribution, METRICS_SCHEMA_VERSION, WorkspaceFileMetricEvent } from '../../metrics/schema';
 import { RepoMetricsStore } from '../../metrics/store';
 
 export type ClaudeCodeEditKind = 'Write' | 'Edit' | 'MultiEdit' | string;
@@ -54,12 +56,84 @@ export async function recordClaudeCodeEdit(input: ClaudeCodeEditRecordInput): Pr
         }
     });
     await store.flushRepo(repoLocation.repoRoot);
+    await mirrorClaudeAttributionForIntellij(repoLocation.repoRoot, repoLocation.repoRelativePath, event.recordedAt);
 
     return {
         repoRoot: repoLocation.repoRoot,
         repoRelativePath: repoLocation.repoRelativePath,
         event
     };
+}
+
+async function mirrorClaudeAttributionForIntellij(
+    repoRoot: string,
+    repoRelativePath: string,
+    recordedAt: string
+): Promise<void> {
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    let rollingStateContents: string;
+    try {
+        rollingStateContents = await fs.promises.readFile(rollingStatePath, 'utf8');
+    }
+    catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            console.warn(`AILoc2 could not mirror missing Claude Code rolling state: ${rollingStatePath}`);
+            return;
+        }
+        throw error;
+    }
+    const rollingState = JSON.parse(rollingStateContents) as FileRollingState;
+    const statePath = getIntellijStatePath(repoRoot, repoRelativePath);
+    const existingBuckets = await readIntellijLineBuckets(statePath);
+    const lines = [
+        '# AILoc2 IntelliJ rolling state v2',
+        'source\tCLAUDE_CODE',
+        `recordedAt\t${recordedAt}`,
+        `aiMagnitude\t${rollingState.cumulativeAiChangeMagnitude}`,
+        `humanMagnitude\t${rollingState.cumulativeHumanChangeMagnitude}`
+    ];
+    let lineNumber = 1;
+    for (const span of rollingState.lineAttributionSpans) {
+        for (let index = 0; index < span.lineCount; index += 1) {
+            const attribution = span.attribution === 'Unknown'
+                ? existingBuckets.get(lineNumber) ?? 'UNKNOWN'
+                : toIntellijBucket(span.attribution);
+            lines.push(`line\t${lineNumber}\t${attribution}`);
+            lineNumber += 1;
+        }
+    }
+
+    await fs.promises.mkdir(path.dirname(statePath), { recursive: true });
+    const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.promises.writeFile(tempPath, `${lines.join('\n')}\n`, 'utf8');
+    await fs.promises.rename(tempPath, statePath);
+}
+
+async function readIntellijLineBuckets(statePath: string): Promise<Map<number, string>> {
+    const buckets = new Map<number, string>();
+    let contents: string;
+    try {
+        contents = await fs.promises.readFile(statePath, 'utf8');
+    }
+    catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return buckets;
+        }
+        throw error;
+    }
+
+    for (const line of contents.split(/\r?\n/)) {
+        const [recordType, lineNumberText, bucket] = line.split('\t');
+        const lineNumber = Number(lineNumberText);
+        if (recordType === 'line' && Number.isInteger(lineNumber) && lineNumber > 0 && bucket) {
+            buckets.set(lineNumber, bucket);
+        }
+    }
+    return buckets;
+}
+
+function toIntellijBucket(attribution: Exclude<LineAttribution, 'Unknown'>): string {
+    return attribution === 'Human' ? 'HUMAN' : attribution;
 }
 
 export function createClaudeCodeWorkspaceFileMetricEvent(input: ClaudeCodeEditRecordInput & {
@@ -166,4 +240,3 @@ function hashText(text: string): string {
         .digest('hex')
         .slice(0, 16);
 }
-

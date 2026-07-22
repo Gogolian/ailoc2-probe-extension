@@ -6,3 +6,5 @@ out/
 logs/
 .githooks/
 .claude/
+tmp/
+IntelliJ/.intellijPlatform/

@@ -20,18 +20,13 @@ From this folder:
 gradle buildPlugin
 ```
 
-This Gradle project supports two explicit targets with no upper `until-build` cap:
+The project produces one universal plugin package:
 
-- IntelliJ IDEA Community 2025.2.3 (`sinceBuild = 252`)
-- IntelliJ IDEA Ultimate 2026.1 (`sinceBuild = 261`)
+- compiled against IntelliJ IDEA Community 2025.2.3 and JDK 21;
+- compatible with Community and Ultimate builds from `252` through `262.*`;
+- verified against Community 2025.2.3 and Ultimate 2026.2.
 
-Community 2025.2.3 is the default local target. To build the Ultimate 2026.1 variant, pass the target properties explicitly:
-
-```bash
-./gradlew buildPlugin -PideaEdition=ultimate -PideaVersion=2026.1 -PideaSinceBuild=261
-```
-
-GitHub Actions builds both plugin ZIP variants from this folder. Run the `Build IntelliJ Plugin` workflow manually, then download the completed `ailoc2-intellij-plugin-community-2025.2.3` and `ailoc2-intellij-plugin-ultimate-2026.1` artifacts. Each downloaded artifact ZIP is prepared with the plugin root directory at the top level and can be uploaded directly to the IntelliJ Marketplace.
+GitHub Actions builds and verifies the universal plugin ZIP. Run the `Build IntelliJ Plugin` workflow manually, then download the `ailoc2-intellij-plugin-2025.2-2026.2` artifact. The downloaded artifact ZIP is prepared with the plugin root directory at the top level and can be uploaded directly to the IntelliJ Marketplace.
 
 For local development, run:
 
@@ -39,11 +34,11 @@ For local development, run:
 gradle runIde
 ```
 
-To launch the Ultimate 2026.1 target locally instead, pass the same Gradle properties to `runIde`.
+Run `gradle verifyPlugin` to check the package against both supported range endpoints.
 
 ## Attribution approach
 
-The plugin registers editor document and command listeners at project startup. Regular IntelliJ edits are counted as human-leaning. Changes made through known AI-assistant command contexts, command group identifiers / classes, or unusually large replacement operations that resemble generated apply flows, are counted as AI-leaning.
+The plugin registers editor document and command listeners at project startup. Regular IntelliJ edits are counted as human-leaning. Changes made through known AI-assistant command contexts, command group identifiers / classes, or unusually large replacement operations that resemble generated apply flows, are counted as AI-leaning. External disk reloads are not treated as human edits: recent Claude Code state is reloaded as AI provenance, while reloads without provenance remain unknown.
 
 Every command start / finish and every persisted document-change event is also written to the IntelliJ log (`idea.log`) with the command context, changed file, edit sizes, and final attribution bucket so you can inspect real-world event patterns.
 
@@ -63,4 +58,4 @@ If you want to exclude files or directories from IntelliJ metrics entirely, add 
 
 Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, updates `.gitignore` for AILoc2 artifacts, writes managed hook files under `.githooks`, installs Claude Code hooks under `.claude` when the Claude runtime is bundled, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall. If `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` already exists and is not AILoc2-managed, the action asks before wrapping it. Approved wrapping preserves the original file as `.githooks/<hook>.ailoc2-delegate`, runs it after AILoc2, and restores it on uninstall. When automatic wrapping is unsafe, AILoc2 writes inactive `.githooks/<hook>.ailoc2-proposed` files for manual or Copilot-assisted merge.
 
-The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. It reads `.ailoc2-metrics/intellij-state`, refreshes `.ailoc2-metrics/summary.json` from the staged diff, annotates terminal or external Git commit messages with the same `(AI: xx.xx%)` suffix used by IntelliJ commit handling, and clears fully committed file metrics from `post-commit`.
+The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. Claude Code synchronizes its canonical rolling state into `.ailoc2-metrics/intellij-state`, allowing the runtime to refresh `.ailoc2-metrics/summary.json` from the staged diff and annotate terminal or external Git commit messages with the same `(AI: xx.xx%)` suffix used by IntelliJ commit handling. Each summary includes exact per-file AI/Human weights. Before committed state is cleared, the summary used for the commit is archived as `.ailoc2-metrics/commit-audits/<commit-hash>.json`.

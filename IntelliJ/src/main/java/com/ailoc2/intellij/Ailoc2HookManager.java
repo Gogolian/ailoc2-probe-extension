@@ -608,7 +608,7 @@ final class Ailoc2HookManager {
             %s
 
             if [ -f "$RUNTIME_PATH" ]; then
-                sh "$RUNTIME_PATH" refresh-summary >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ summary refresh failed; continuing without blocking the commit.' >&2
+                sh "$RUNTIME_PATH" refresh-summary >/dev/null 2>&1 && sh "$RUNTIME_PATH" prepare-commit-audit >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ summary or audit refresh failed; continuing without blocking the commit.' >&2
             else
                 printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ hook runtime is unavailable; skipping summary refresh.' >&2
             fi
@@ -666,12 +666,16 @@ final class Ailoc2HookManager {
 
             SUMMARY_FILE=".ailoc2-metrics/summary.json"
             STATE_DIR=".ailoc2-metrics/intellij-state"
+            AUDIT_DIR=".ailoc2-metrics/commit-audits"
             PLACEHOLDER_SUFFIX=' (AI: unavailable)'
 
             refresh_summary() {
                 REPO_ROOT=$(pwd)
                 REPO_NAME=${REPO_ROOT##*/}
-                SUMMARY_DATA=$(git diff --cached --unified=0 --find-renames --no-color --ignore-all-space | awk -v state_dir="$STATE_DIR" '
+                DETAILS_FILE="$STATE_DIR/.summary-details.$$"
+                mkdir -p "$STATE_DIR"
+                : > "$DETAILS_FILE"
+                SUMMARY_DATA=$(git diff --cached --unified=0 --find-renames --no-color --ignore-all-space | awk -v state_dir="$STATE_DIR" -v details_file="$DETAILS_FILE" '
                     function safe_state_file(path, safe) {
                         safe = path
                         gsub(/\\\\/, "/", safe)
@@ -736,10 +740,12 @@ final class Ailoc2HookManager {
                         weight = non_whitespace_length(substr($0, 2))
                         if (weight > 0 && bucket == "AI") {
                             ai_weight += weight
+                            ai_by_path[current_path] += weight
                             attributed[current_path] = 1
                         }
                         else if (weight > 0 && bucket == "HUMAN") {
                             human_weight += weight
+                            human_by_path[current_path] += weight
                             attributed[current_path] = 1
                         }
                         current_line++
@@ -756,6 +762,7 @@ final class Ailoc2HookManager {
                         }
                         for (path in attributed) {
                             attributed_count++
+                            printf "%s\\t%d\\t%d\\n", path, ai_by_path[path] + 0, human_by_path[path] + 0 > details_file
                         }
                         printf "%d %d %d %d\\n", changed_count, attributed_count, ai_weight, human_weight
                     }
@@ -785,8 +792,8 @@ final class Ailoc2HookManager {
                 mkdir -p "$(dirname "$SUMMARY_FILE")"
                 {
                     printf '{\\n'
-                    printf '  "schemaVersion": 1,\\n'
-                    printf '  "recordType": "intellij-hook-summary",\\n'
+                    printf '  "schemaVersion": "1",\\n'
+                    printf '  "recordType": "hook-summary",\\n'
                     printf '  "generatedAt": "%s",\\n' "$GENERATED_AT"
                     printf '  "repoRoot": "%s",\\n' "$ESCAPED_REPO_ROOT"
                     printf '  "repoName": "%s",\\n' "$ESCAPED_REPO_NAME"
@@ -798,10 +805,33 @@ final class Ailoc2HookManager {
                     printf '    "aiWeightedChangedLines": %s,\\n' "$AI_WEIGHT"
                     printf '    "humanWeightedChangedLines": %s,\\n' "$HUMAN_WEIGHT"
                     printf '    "aiPercentage": %s,\\n' "$AI_PERCENTAGE"
-                    printf '    "humanPercentage": %s\\n' "$HUMAN_PERCENTAGE"
+                    printf '    "humanPercentage": %s,\\n' "$HUMAN_PERCENTAGE"
+                    printf '    "files": {'
+                    FIRST_FILE=true
+                    while IFS="$(printf '\\t')" read -r FILE_PATH FILE_AI_WEIGHT FILE_HUMAN_WEIGHT; do
+                        [ -n "$FILE_PATH" ] || continue
+                        ESCAPED_FILE_PATH=$(printf '%s' "$FILE_PATH" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+                        if [ "$FIRST_FILE" = true ]; then
+                            FIRST_FILE=false
+                        else
+                            printf ','
+                        fi
+                        printf '\\n      "%s": {"aiWeightedChangedLines": %s, "humanWeightedChangedLines": %s}' "$ESCAPED_FILE_PATH" "$FILE_AI_WEIGHT" "$FILE_HUMAN_WEIGHT"
+                    done < "$DETAILS_FILE"
+                    if [ "$FIRST_FILE" = false ]; then
+                        printf '\\n'
+                    fi
+                    printf '    }\\n'
                     printf '  }\\n'
                     printf '}\\n'
                 } > "$SUMMARY_FILE"
+                rm -f "$DETAILS_FILE"
+            }
+
+            prepare_commit_audit() {
+                [ -f "$SUMMARY_FILE" ] || return 1
+                mkdir -p "$AUDIT_DIR"
+                cp "$SUMMARY_FILE" "$AUDIT_DIR/pending.json"
             }
 
             append_suffix() {
@@ -827,6 +857,7 @@ final class Ailoc2HookManager {
             annotate_commit_message() {
                 MESSAGE_FILE="$1"
                 refresh_summary
+                prepare_commit_audit
                 if grep -q '"isGitSummaryAvailable"[[:space:]]*:[[:space:]]*true' "$SUMMARY_FILE"; then
                     AI_PERCENTAGE=$(sed -n 's/.*"aiPercentage"[[:space:]]*:[[:space:]]*\\([0-9.][0-9.]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     if [ -n "$AI_PERCENTAGE" ]; then
@@ -867,6 +898,10 @@ final class Ailoc2HookManager {
             }
 
             finalize_commit() {
+                COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null || true)
+                if [ -n "$COMMIT_HASH" ] && [ -f "$AUDIT_DIR/pending.json" ]; then
+                    mv "$AUDIT_DIR/pending.json" "$AUDIT_DIR/$COMMIT_HASH.json"
+                fi
                 clear_committed_state
                 refresh_summary
             }
@@ -874,6 +909,9 @@ final class Ailoc2HookManager {
             case "$1" in
                 refresh-summary)
                     refresh_summary
+                    ;;
+                prepare-commit-audit)
+                    prepare_commit_audit
                     ;;
                 finalize-commit)
                     finalize_commit
@@ -885,7 +923,7 @@ final class Ailoc2HookManager {
                     append_suffix "$2" "$PLACEHOLDER_SUFFIX"
                     ;;
                 *)
-                    printf '%s\\n' 'Usage: ailoc2-intellij-hook-runtime.sh <refresh-summary|finalize-commit|annotate-commit-message <messageFile>|append-placeholder <messageFile>>' >&2
+                    printf '%s\\n' 'Usage: ailoc2-intellij-hook-runtime.sh <refresh-summary|prepare-commit-audit|finalize-commit|annotate-commit-message <messageFile>|append-placeholder <messageFile>>' >&2
                     exit 1
                     ;;
             esac

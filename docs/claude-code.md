@@ -75,7 +75,7 @@ Claude Code writes into the existing VS Code-compatible layout:
          └─ to-file.js.metrics.json
 ```
 
-It does not create a separate Claude summary file. The existing Git hook runtime remains the single commit-time summary path.
+It also writes a synchronized TSV view under `.ailoc2-metrics/intellij-state` so the IntelliJ shell hook can consume the same line attribution without mistaking the resulting disk reload for a human edit. It does not create a separate Claude summary file. The existing Git hook runtime remains the single commit-time summary path.
 
 ## Manual smoke test
 

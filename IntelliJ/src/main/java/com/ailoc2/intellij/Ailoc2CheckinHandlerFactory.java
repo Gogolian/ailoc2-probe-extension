@@ -27,6 +27,7 @@ public final class Ailoc2CheckinHandlerFactory extends CheckinHandlerFactory {
                 }
 
                 Ailoc2GitSummary stagedSummary = service.refreshStagedSummary(repoRoot);
+                service.prepareCommitAudit(repoRoot);
                 annotate(panel, stagedSummary.available ? stagedSummary.aiPercentage : null);
                 return ReturnResult.COMMIT;
             }

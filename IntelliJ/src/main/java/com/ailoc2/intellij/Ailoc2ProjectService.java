@@ -20,12 +20,17 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service(Service.Level.PROJECT)
 public final class Ailoc2ProjectService implements Disposable {
@@ -37,6 +42,7 @@ public final class Ailoc2ProjectService implements Disposable {
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LINES = 2;
     private static final String AI_UNDEFINED_COMMAND_SENTINEL = "Undefined";
+    private static final Duration CLAUDE_PROVENANCE_MAX_AGE = Duration.ofMinutes(2);
     private static final List<String> AI_COMMAND_HINTS = List.of(
         "copilot",
         "codeium",
@@ -51,6 +57,7 @@ public final class Ailoc2ProjectService implements Disposable {
 
     private final Project project;
     private final Ailoc2Storage storage = new Ailoc2Storage();
+    private final AtomicBoolean started = new AtomicBoolean();
     private volatile CommandContext activeCommandContext = CommandContext.empty();
     private volatile CommandContext recentCommandContext = CommandContext.empty();
 
@@ -59,6 +66,10 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     public void start() {
+        if (!started.compareAndSet(false, true)) {
+            return;
+        }
+
         project.getMessageBus().connect(this).subscribe(CommandListener.TOPIC, new CommandListener() {
             @Override
             public void commandStarted(@NotNull CommandEvent event) {
@@ -93,6 +104,12 @@ public final class Ailoc2ProjectService implements Disposable {
         return summary;
     }
 
+    public void prepareCommitAudit(Path repoRoot) {
+        if (!storage.persistPendingCommitAudit(repoRoot)) {
+            LOG.warn("AILoc2 could not persist the pending commit audit for repo " + repoRoot);
+        }
+    }
+
     public Ailoc2RepoSummary refreshRepoSummary(Path repoRoot) {
         Ailoc2GitSummary stagedSummary = computeGitSummary(
             repoRoot,
@@ -110,6 +127,7 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     public void finalizeCommittedState(Path repoRoot) {
+        storage.archivePendingCommitAudit(repoRoot, readGitSingleLine(repoRoot, List.of("rev-parse", "HEAD")));
         Set<String> committedPaths = readGitPathSet(repoRoot, List.of("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"));
         if (committedPaths.isEmpty()) {
             refreshRepoSummary(repoRoot);
@@ -120,6 +138,25 @@ public final class Ailoc2ProjectService implements Disposable {
         preservedPaths.addAll(readGitPathSet(repoRoot, List.of("ls-files", "--others", "--exclude-standard")));
         storage.clearCommittedState(repoRoot, committedPaths, preservedPaths);
         refreshRepoSummary(repoRoot);
+    }
+
+    private String readGitSingleLine(Path repoRoot, List<String> gitArgs) {
+        ProcessBuilder processBuilder = new ProcessBuilder(withGitCommand(gitArgs));
+        processBuilder.directory(repoRoot.toFile());
+        try {
+            Process process = processBuilder.start();
+            String value;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                value = reader.readLine();
+            }
+            return process.waitFor() == 0 && value != null ? value.strip() : null;
+        }
+        catch (IOException | InterruptedException error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return null;
+        }
     }
 
     public Path projectRepoRoot() {
@@ -146,7 +183,8 @@ public final class Ailoc2ProjectService implements Disposable {
 
         Path filePath = Path.of(file.getPath()).toAbsolutePath().normalize();
         Path repoRoot = findRepoRoot(filePath);
-        if (repoRoot == null || shouldIgnore(repoRoot, filePath)) {
+        Path serviceRepoRoot = projectRepoRoot();
+        if (repoRoot == null || serviceRepoRoot == null || !repoRoot.equals(serviceRepoRoot) || shouldIgnore(repoRoot, filePath)) {
             return;
         }
 
@@ -157,16 +195,42 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         CommandContext commandContext = currentCommandContext();
+        if (commandContext.isReloadFromDisk()) {
+            Ailoc2FileState state = storage.reloadState(repoRoot, repoRelativePath);
+            int startLine = Math.max(1, document.getLineNumber(Math.max(0, Math.min(event.getOffset(), document.getTextLength()))) + 1);
+            if (hasRecentClaudeProvenance(state)) {
+                LOG.info("AILoc2 reloaded Claude Code attribution: repo=" + repoRoot + ", file=" + repoRelativePath);
+                return;
+            }
+
+            state.applyLineChange(
+                startLine,
+                event.getOldFragment(),
+                event.getNewFragment(),
+                Ailoc2AttributionBucket.UNKNOWN
+            );
+            state.setSource("EXTERNAL");
+            state.setRecordedAt(Instant.now().toString());
+            storage.persistState(repoRoot, repoRelativePath, state);
+            LOG.info("AILoc2 external reload left attribution unknown: repo=" + repoRoot + ", file=" + repoRelativePath);
+            return;
+        }
+
         ClassificationResult classification = classifyChange(commandContext, event);
         Ailoc2AttributionBucket bucket = classification.bucket();
         Ailoc2FileState state = storage.stateFor(repoRoot, repoRelativePath);
         int safeOffset = Math.max(0, Math.min(event.getOffset(), document.getTextLength()));
         int startLine = Math.max(1, document.getLineNumber(safeOffset) + 1);
         int changedLineCount = Math.max(1, countTouchedLines(event.getNewFragment()));
-        for (int line = startLine; line < startLine + changedLineCount; line++) {
-            state.setLineBucket(line, bucket);
-        }
+        state.applyLineChange(
+            startLine,
+            event.getOldFragment(),
+            event.getNewFragment(),
+            bucket
+        );
         state.addMagnitude(bucket, Math.max(event.getOldLength(), event.getNewLength()));
+        state.setSource("INTELLIJ");
+        state.setRecordedAt(Instant.now().toString());
         storage.persistState(repoRoot, repoRelativePath, state);
         LOG.info(
             "AILoc2 parsed document event: repo=" + repoRoot
@@ -262,6 +326,7 @@ public final class Ailoc2ProjectService implements Disposable {
         int currentLine = 0;
         long aiWeight = 0L;
         long humanWeight = 0L;
+        Map<String, Ailoc2GitSummary.FileWeights> fileWeights = new HashMap<>();
 
         for (String line : diffText.split("\\R")) {
             if (line.startsWith("+++ ")) {
@@ -289,17 +354,25 @@ public final class Ailoc2ProjectService implements Disposable {
             if (line.startsWith("+") && !line.startsWith("+++")) {
                 Ailoc2FileState state = storage.stateFor(repoRoot, currentPath);
                 Ailoc2AttributionBucket bucket = state.getLineBucket(currentLine);
-                if (bucket == Ailoc2AttributionBucket.UNKNOWN) {
+                if (bucket == Ailoc2AttributionBucket.UNKNOWN && !state.hasLineBucket(currentLine)) {
                     bucket = state.fallbackBucket();
                 }
                 long weight = nonWhitespaceWeight(line.substring(1));
                 if (weight > 0L && bucket == Ailoc2AttributionBucket.AI) {
                     aiWeight += weight;
                     attributedFiles.add(currentPath);
+                    fileWeights.compute(
+                        currentPath,
+                        (path, weights) -> (weights == null ? new Ailoc2GitSummary.FileWeights(0L, 0L) : weights).addAi(weight)
+                    );
                 }
                 else if (weight > 0L && bucket == Ailoc2AttributionBucket.HUMAN) {
                     humanWeight += weight;
                     attributedFiles.add(currentPath);
+                    fileWeights.compute(
+                        currentPath,
+                        (path, weights) -> (weights == null ? new Ailoc2GitSummary.FileWeights(0L, 0L) : weights).addHuman(weight)
+                    );
                 }
                 currentLine++;
             }
@@ -308,7 +381,7 @@ public final class Ailoc2ProjectService implements Disposable {
             }
         }
 
-        return new Ailoc2GitSummary(changedFiles.size(), attributedFiles.size(), aiWeight, humanWeight, true);
+        return new Ailoc2GitSummary(changedFiles.size(), attributedFiles.size(), aiWeight, humanWeight, true, fileWeights);
     }
 
     private String parseNewPath(String line) {
@@ -406,6 +479,19 @@ public final class Ailoc2ProjectService implements Disposable {
             || repoRelativePath.equals(".idea");
     }
 
+    private boolean hasRecentClaudeProvenance(Ailoc2FileState state) {
+        if (!"CLAUDE_CODE".equals(state.getSource()) || state.getRecordedAt().isBlank()) {
+            return false;
+        }
+        try {
+            Duration age = Duration.between(Instant.parse(state.getRecordedAt()), Instant.now());
+            return !age.isNegative() && age.compareTo(CLAUDE_PROVENANCE_MAX_AGE) <= 0;
+        }
+        catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
     private record CommandContext(
         String commandName,
         String commandGroupId,
@@ -444,6 +530,10 @@ public final class Ailoc2ProjectService implements Disposable {
 
         boolean hasEmptyCommandGroup() {
             return commandGroupId.isEmpty() && commandGroupClassName.isEmpty();
+        }
+
+        boolean isReloadFromDisk() {
+            return commandName.toLowerCase(Locale.ROOT).contains("reload from disk");
         }
 
         boolean isRecent() {

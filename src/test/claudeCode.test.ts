@@ -6,7 +6,7 @@ import * as path from 'path';
 import { afterEach, test } from 'node:test';
 
 import { createLineDiffSegments } from '../metrics/lineDiff';
-import { getRollingStatePath } from '../metrics/pathing';
+import { getIntellijStatePath, getRollingStatePath } from '../metrics/pathing';
 import { METRICS_SCHEMA_VERSION, FileRollingState, WorkspaceFileMetricEvent } from '../metrics/schema';
 import { RepoMetricsStore } from '../metrics/store';
 import { refreshRepoHookSummary } from '../metrics/summary';
@@ -48,6 +48,7 @@ test('Claude Code Write records an AI rolling state in .ailoc2-metrics', async (
     const recordResults = await recordClaudeCodePostEdit(payload);
 
     const rollingState = readRollingState(repoRoot, gitRelativePath);
+    const intellijState = fs.readFileSync(getIntellijStatePath(repoRoot, path.normalize(gitRelativePath)), 'utf8');
     assert.deepEqual({
         captured: captureResults.map((result) => ({ existed: result.existed })),
         recorded: recordResults.map((result) => ({ skipped: result.skipped, repoRelativePath: result.repoRelativePath })),
@@ -63,6 +64,8 @@ test('Claude Code Write records an AI rolling state in .ailoc2-metrics', async (
         latestSignal: 'ProbableAIApplyToWorkspaceFile',
         checkpointCount: 1
     });
+    assert.match(intellijState, /^source\tCLAUDE_CODE$/m);
+    assert.match(intellijState, /^line\t1\tAI$/m);
 });
 
 test('Claude Code Edit without before snapshot is skipped instead of over-attributing the whole file', async () => {
@@ -263,4 +266,3 @@ function runGit(repoRoot: string, args: string[]): string {
 function nonWhitespaceWeight(text: string): number {
     return text.replace(/\s/gu, '').length;
 }
-

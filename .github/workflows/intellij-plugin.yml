@@ -26,20 +26,8 @@ permissions:
 
 jobs:
   build:
-    name: Build plugin ZIP (${{ matrix.idea_edition }} ${{ matrix.idea_version }})
+    name: Build universal plugin ZIP
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - idea_edition: community
-            idea_version: 2025.2.3
-            idea_since_build: "252"
-            artifact_name: ailoc2-intellij-plugin-community-2025.2.3
-          - idea_edition: ultimate
-            idea_version: 2026.1
-            idea_since_build: "261"
-            artifact_name: ailoc2-intellij-plugin-ultimate-2026.1
 
     defaults:
       run:
@@ -69,16 +57,12 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build IntelliJ plugin
-        run: >
-          ./gradlew buildPlugin --no-daemon --stacktrace
-          -PideaEdition=${{ matrix.idea_edition }}
-          -PideaVersion=${{ matrix.idea_version }}
-          -PideaSinceBuild=${{ matrix.idea_since_build }}
+        run: ./gradlew buildPlugin verifyPlugin --no-daemon --stacktrace
 
       - name: Prepare Marketplace artifact
         shell: bash
         run: |
-          artifact_dir="build/marketplace-artifact/${{ matrix.idea_edition }}-${{ matrix.idea_version }}"
+          artifact_dir="build/marketplace-artifact/universal"
           rm -rf "$artifact_dir"
           mkdir -p "$artifact_dir"
           distribution_dir="$PWD/build/distributions"
@@ -89,6 +73,6 @@ jobs:
       - name: Upload IntelliJ plugin artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: IntelliJ/build/marketplace-artifact/${{ matrix.idea_edition }}-${{ matrix.idea_version }}/*
+          name: ailoc2-intellij-plugin-2025.2-2026.2
+          path: IntelliJ/build/marketplace-artifact/universal/*
           if-no-files-found: error

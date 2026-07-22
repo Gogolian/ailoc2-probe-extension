@@ -34,6 +34,13 @@ export function getMetricsManifestPath(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'manifest.json');
 }
 
+export function getIntellijStatePath(repoRoot: string, repoRelativePath: string): string {
+    const safeFileName = repoRelativePath
+        .replace(/\\/g, '/')
+        .replace(/[^A-Za-z0-9._-]/g, '_');
+    return path.join(getMetricsRoot(repoRoot), 'intellij-state', `${safeFileName}.tsv`);
+}
+
 export function getRollingStatePath(repoRoot: string, repoRelativePath: string): string {
     if (path.isAbsolute(repoRelativePath)) {
         throw new Error(`Cannot derive rolling state path from absolute repoRelativePath='${repoRelativePath}'.`);

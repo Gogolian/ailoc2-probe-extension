@@ -7,6 +7,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [1.0.15] - 2026-07-20
+- Preserve Claude Code attribution when IntelliJ reloads externally edited files.
+- Keep line attribution aligned after inserted, removed, or replaced lines.
+- Include per-file weights in IntelliJ summaries and archive the exact pre-commit summary by commit hash.
+- Synchronize Claude Code rolling-state attribution with the IntelliJ Git hook runtime.
+
+## [1.0.14] - 2026-07-17
+- Add one IntelliJ plugin package compatible with Community and Ultimate builds `252` through `262.*`.
+
 ## [1.0.12] - 2026-07-16
 - Run pre-commit baseline preparation and summary refresh in one Node process.
 - Limit baseline resolution to staged paths and batch Git blob lookups.

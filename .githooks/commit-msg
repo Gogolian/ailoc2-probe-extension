@@ -1,17 +1,13 @@
 #!/bin/sh
 # AILoc2 managed hook: commit-msg
 
+
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/ailoc2-hook-runtime.cjs"
-DELEGATE_HOOK_PATH=""
 PLACEHOLDER_SUFFIX=' (AI: unavailable)'
 
-run_delegate_hook() {
-    if [ -z "$DELEGATE_HOOK_PATH" ] || [ ! -f "$DELEGATE_HOOK_PATH" ]; then
-        return 0
-    fi
-
-    "$DELEGATE_HOOK_PATH" "$@"
+run_delegate_hooks() {
+    return 0
 }
 
 append_placeholder_suffix() {
@@ -40,5 +36,5 @@ else
     append_placeholder_suffix
 fi
 
-run_delegate_hook "$@"
+run_delegate_hooks "$@"
 exit $?

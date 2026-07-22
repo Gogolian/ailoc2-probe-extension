@@ -4,10 +4,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 final class Ailoc2Storage {
@@ -24,6 +26,17 @@ final class Ailoc2Storage {
         return cachedStates.computeIfAbsent(cacheKey, ignored -> readState(repoRoot, repoRelativePath));
     }
 
+    Ailoc2FileState reloadState(Path repoRoot, String repoRelativePath) {
+        if (isTrackingIgnored(repoRoot, repoRelativePath)) {
+            return new Ailoc2FileState();
+        }
+
+        StateKey cacheKey = new StateKey(repoRoot.toAbsolutePath().normalize(), repoRelativePath);
+        Ailoc2FileState state = readState(repoRoot, repoRelativePath);
+        cachedStates.put(cacheKey, state);
+        return state;
+    }
+
     void persistState(Path repoRoot, String repoRelativePath, Ailoc2FileState state) {
         if (isTrackingIgnored(repoRoot, repoRelativePath)) {
             removeState(repoRoot, repoRelativePath);
@@ -32,7 +45,9 @@ final class Ailoc2Storage {
 
         Path statePath = statePath(repoRoot, repoRelativePath);
         StringBuilder builder = new StringBuilder();
-        builder.append("# AILoc2 IntelliJ rolling state v1\n");
+        builder.append("# AILoc2 IntelliJ rolling state v2\n");
+        builder.append("source\t").append(state.getSource()).append('\n');
+        builder.append("recordedAt\t").append(state.getRecordedAt()).append('\n');
         builder.append("aiMagnitude\t").append(state.getAiMagnitude()).append('\n');
         builder.append("humanMagnitude\t").append(state.getHumanMagnitude()).append('\n');
         for (Map.Entry<Integer, Ailoc2AttributionBucket> entry : state.getLineBuckets().entrySet()) {
@@ -70,8 +85,8 @@ final class Ailoc2Storage {
             ? String.format("%s: STAGED -> AI %.2f%% | Human %.2f%%", repoName, stagedSummary.aiPercentage, stagedSummary.humanPercentage)
             : repoName + ": summary unavailable";
         String json = "{\n"
-            + "  \"schemaVersion\": 1,\n"
-            + "  \"recordType\": \"intellij-hook-summary\",\n"
+            + "  \"schemaVersion\": \"1\",\n"
+            + "  \"recordType\": \"hook-summary\",\n"
             + "  \"generatedAt\": \"" + escapeJson(Instant.now().toString()) + "\",\n"
             + "  \"repoRoot\": \"" + escapeJson(repoRoot.toString()) + "\",\n"
             + "  \"repoName\": \"" + escapeJson(repoName) + "\",\n"
@@ -87,6 +102,34 @@ final class Ailoc2Storage {
         }
         catch (IOException ignored) {
             // Summary writing is best effort.
+        }
+    }
+
+    boolean persistPendingCommitAudit(Path repoRoot) {
+        Path summaryPath = repoRoot.resolve(METRICS_DIRECTORY).resolve("summary.json");
+        Path pendingAuditPath = pendingCommitAuditPath(repoRoot);
+        try {
+            Files.createDirectories(pendingAuditPath.getParent());
+            Files.copy(summaryPath, pendingAuditPath, StandardCopyOption.REPLACE_EXISTING);
+            return true;
+        }
+        catch (IOException error) {
+            return false;
+        }
+    }
+
+    boolean archivePendingCommitAudit(Path repoRoot, String commitHash) {
+        Path pendingAuditPath = pendingCommitAuditPath(repoRoot);
+        if (!Files.isRegularFile(pendingAuditPath) || commitHash == null || commitHash.isBlank()) {
+            return false;
+        }
+        Path archivedAuditPath = pendingAuditPath.getParent().resolve(commitHash + ".json");
+        try {
+            Files.move(pendingAuditPath, archivedAuditPath, StandardCopyOption.REPLACE_EXISTING);
+            return true;
+        }
+        catch (IOException error) {
+            return false;
         }
     }
 
@@ -116,14 +159,34 @@ final class Ailoc2Storage {
     }
 
     private String summaryJson(Ailoc2GitSummary summary) {
-        return "{\n"
-            + "    \"changedFileCount\": " + summary.changedFileCount + ",\n"
-            + "    \"attributedChangedFileCount\": " + summary.attributedChangedFileCount + ",\n"
-            + "    \"aiWeightedChangedLines\": " + summary.aiWeightedChangedLines + ",\n"
-            + "    \"humanWeightedChangedLines\": " + summary.humanWeightedChangedLines + ",\n"
-            + "    \"aiPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", summary.aiPercentage) + ",\n"
-            + "    \"humanPercentage\": " + String.format(java.util.Locale.ROOT, "%.6f", summary.humanPercentage) + "\n"
-            + "  }";
+        StringBuilder builder = new StringBuilder();
+        builder.append("{\n")
+            .append("    \"changedFileCount\": ").append(summary.changedFileCount).append(",\n")
+            .append("    \"attributedChangedFileCount\": ").append(summary.attributedChangedFileCount).append(",\n")
+            .append("    \"aiWeightedChangedLines\": ").append(summary.aiWeightedChangedLines).append(",\n")
+            .append("    \"humanWeightedChangedLines\": ").append(summary.humanWeightedChangedLines).append(",\n")
+            .append("    \"aiPercentage\": ")
+            .append(String.format(java.util.Locale.ROOT, "%.6f", summary.aiPercentage))
+            .append(",\n")
+            .append("    \"humanPercentage\": ")
+            .append(String.format(java.util.Locale.ROOT, "%.6f", summary.humanPercentage))
+            .append(",\n")
+            .append("    \"files\": {");
+        boolean first = true;
+        for (Map.Entry<String, Ailoc2GitSummary.FileWeights> entry : new TreeMap<>(summary.fileWeights).entrySet()) {
+            if (!first) {
+                builder.append(',');
+            }
+            first = false;
+            builder.append("\n      \"").append(escapeJson(entry.getKey())).append("\": {")
+                .append("\"aiWeightedChangedLines\": ").append(entry.getValue().aiWeightedChangedLines()).append(", ")
+                .append("\"humanWeightedChangedLines\": ").append(entry.getValue().humanWeightedChangedLines())
+                .append('}');
+        }
+        if (!summary.fileWeights.isEmpty()) {
+            builder.append('\n');
+        }
+        return builder.append("    }\n  }").toString();
     }
 
     private Ailoc2FileState readState(Path repoRoot, String repoRelativePath) {
@@ -146,6 +209,12 @@ final class Ailoc2Storage {
                 else if (parts.length == 2 && "humanMagnitude".equals(parts[0])) {
                     state.setHumanMagnitude(Long.parseLong(parts[1]));
                 }
+                else if (parts.length == 2 && "source".equals(parts[0])) {
+                    state.setSource(parts[1]);
+                }
+                else if (parts.length == 2 && "recordedAt".equals(parts[0])) {
+                    state.setRecordedAt(parts[1]);
+                }
                 else if (parts.length == 3 && "line".equals(parts[0])) {
                     state.setLineBucket(Integer.parseInt(parts[1]), Ailoc2AttributionBucket.valueOf(parts[2]));
                 }
@@ -162,6 +231,10 @@ final class Ailoc2Storage {
             .resolve(METRICS_DIRECTORY)
             .resolve("intellij-state")
             .resolve(safeStateFileName(repoRelativePath) + ".tsv");
+    }
+
+    private Path pendingCommitAuditPath(Path repoRoot) {
+        return repoRoot.resolve(METRICS_DIRECTORY).resolve("commit-audits").resolve("pending.json");
     }
 
     private String safeStateFileName(String repoRelativePath) {
