@@ -86,7 +86,7 @@
     "build": "tsc -p ./ && npm run build:hook-runtime && npm run build:claude-code-runtime",
     "build:hook-runtime": "esbuild ./src/cli/gitHookCli.ts --bundle --platform=node --format=cjs --target=node18 --outfile=./out/hook-runtime/ailoc2-hook-runtime.cjs",
     "build:claude-code-runtime": "esbuild ./src/cli/claudeCodeCli.ts --bundle --platform=node --format=cjs --target=node18 --outfile=./out/claude-code/ailoc2-claude-code.cjs",
-    "test": "npm run build && node --test \"out/test/*.test.js\"",
+    "test": "npm run build && node out/test/runTests.js",
     "watch": "tsc -w -p ./",
     "vscode:prepublish": "npm run build"
   },
