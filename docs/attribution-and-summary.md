@@ -1,6 +1,6 @@
 # Attribution and summary pipeline
 
-This document describes how AILoc2 turns editor events into rolling attribution state and then into staged / unstaged AI percentages.
+This document describes how AILoc2 turns editor events into rolling attribution state and then into staged / unstaged AI percentages and line counts.
 
 ## The short version
 
@@ -241,8 +241,9 @@ At a high level, the summary logic does this for each relevant repo-relative pat
 4. for newly added files, score the whole new-file diff using aggregate AI vs human magnitudes
 5. if changed-line attribution is possible for existing files, score only the changed line ranges using line-attribution spans
 6. otherwise fall back to aggregate AI vs human magnitudes for that file
-7. accumulate weighted changed-line totals into staged and unstaged slice summaries
-8. convert accumulated weighted totals into percentages
+7. accumulate weighted changed-content totals and non-blank added-line counts into staged and unstaged slice summaries
+8. retain unresolved added lines as Unknown instead of assigning them to AI or Human
+9. convert accumulated weighted totals into percentages
 
 New-file scoring deliberately prefers aggregate attribution over line spans. First-file creation can generate stale or noisy line spans when an older extension build missed the initial AI context. For historical states with a large human-only initial checkpoint followed by AI-dominant evidence, the summary marks fallback attribution and treats the new file as AI-dominant instead of requiring the user to delete `.ailoc2-metrics`.
 
@@ -251,6 +252,20 @@ New-file scoring deliberately prefers aggregate attribution over line spans. Fir
 Changed lines are weighted by their non-whitespace character count. Whitespace-only hunks are ignored by the Git diff inputs, and blank or whitespace-only changed lines contribute zero weight if they are still present in a diff.
 
 This deliberately keeps final percentages formatting-neutral: formatter/linter trivia is not credited to AI or Human. The whitespace-neutral simplification applies to all tracked file types, including whitespace-significant languages. TypeScript and JavaScript also get conservative token-style neutrality for quote style, trailing semicolons, and trailing commas. Structural rewrites such as import sorting still count as normal changes until move-tolerant attribution lands.
+
+## Added-line counting
+
+The commit trailer also reports literal AI and Human line counts. These are separate from the weighted values used by the percentage:
+
+- only non-blank added lines on the new side of the diff are counted
+- a modified line counts once, regardless of the removed line it replaces
+- pure deletions, blank additions, and whitespace-only hunks count zero
+- exact line-attribution spans increment AI, Human, or Unknown one line at a time
+- paths without rolling attribution state contribute Unknown lines
+- aggregate fallback paths distribute the integer line total using the same AI/Human magnitude ratio used by the existing percentage fallback
+- largest-remainder allocation keeps the total integral; when a single remaining line is exactly tied, it stays Unknown rather than favoring either author
+
+For every available slice, `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount` equals the eligible non-blank added-line total. Unknown is persisted for auditability but omitted from the commit subject.
 
 ## Prepared commit baseline
 
@@ -262,7 +277,7 @@ That matters for the exact “second commit” problem: if a file still has left
 
 In other words, later commit summaries are anchored to the most recently committed content when a file still has uncommitted leftovers, while fully committed files start fresh.
 
-The staged, unstaged, and untracked Git scans used by summary generation are independent and run concurrently. The managed pre-commit hook also prepares the baseline and refreshes the summary through one bundled CLI invocation to avoid a second Node startup.
+The staged, unstaged, and untracked Git scans used by summary generation are independent and run concurrently. The managed pre-commit hook also prepares the baseline and refreshes the summary through one bundled CLI invocation to avoid a second Node startup. The commit-message command repeats that combined preparation immediately before annotation. This second pass is intentional: delegated pre-commit hooks can run formatters, linters, or generators and stage a different index after AILoc2's first pass. The percentage, line counts, and pending baseline therefore describe the final index that Git is about to commit.
 
 ## Clean baseline refresh
 
@@ -294,6 +309,9 @@ The generated summary lives at `.ailoc2-metrics/summary.json` and contains:
     "attributedChangedFileCount": 2,
     "aiWeightedChangedLines": 73,
     "humanWeightedChangedLines": 238,
+    "aiAddedLineCount": 12,
+    "humanAddedLineCount": 39,
+    "unknownAddedLineCount": 2,
     "aiPercentage": 23.47,
     "humanPercentage": 76.53,
     "usedFallbackAttribution": false
@@ -303,6 +321,9 @@ The generated summary lives at `.ailoc2-metrics/summary.json` and contains:
     "attributedChangedFileCount": 1,
     "aiWeightedChangedLines": 0,
     "humanWeightedChangedLines": 18,
+    "aiAddedLineCount": 0,
+    "humanAddedLineCount": 3,
+    "unknownAddedLineCount": 0,
     "aiPercentage": 0,
     "humanPercentage": 100,
     "usedFallbackAttribution": false
@@ -326,7 +347,7 @@ When fallback is used, the summary marks `usedFallbackAttribution: true` for tha
 
 Unknown lines are tracked explicitly in the line-attribution model, but the final headline percentage is based on AI and human weighted totals only.
 
-This is intentional. Unknown should remain unknown instead of quietly inflating one side of the result.
+This is intentional. Unknown should remain unknown instead of quietly inflating one side of the result. The same rule applies to literal line counts: Unknown additions appear in `summary.json` and output summaries, while the commit subject includes only `(AI lines: n)` and `(H lines: n)`. The IntelliJ integration also preserves the same fields in its commit audits.
 
 ## Known blind spots
 

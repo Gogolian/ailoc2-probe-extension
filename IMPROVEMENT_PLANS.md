@@ -20,7 +20,8 @@ Attribution lives in two layers:
    a run-length attribution model built up live from editor events
    (`src/metrics/store.ts` → `applyLineDiffSegmentsToRollingState`).
 2. **Commit-time summary** (`src/metrics/summary.ts`) — scores the staged/unstaged
-  Git diff against that rolling model and writes the `(AI: xx.xx%)` percentage.
+  Git diff against that rolling model and writes the weighted percentage plus
+  non-blank AI/Human added-line counts.
 
 A linter/formatter run damages attribution in several distinct ways:
 
@@ -143,9 +144,9 @@ invert the very result we care about.
 ## 4. IntelliJ parity
 
 The IntelliJ plugin under `IntelliJ/` computes its own staged AI percentage and
-maintains its own metrics; it must receive the same formatter-neutral line
-matching and magnitude accounting. Track this so the two plugins do not diverge
-in how they treat formatter churn.
+added-line counts while maintaining its own metrics; it must receive the same
+formatter-neutral line matching and magnitude accounting. Track this so the two
+plugins do not diverge in how they treat formatter churn.
 
 ---
 

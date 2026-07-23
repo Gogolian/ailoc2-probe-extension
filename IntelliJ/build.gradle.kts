@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.ailoc2"
-version = "1.0.17"
+version = "1.0.18"
 
 val repositoryRoot = rootProject.layout.projectDirectory.dir("..")
 val claudeRuntime = repositoryRoot.file("out/claude-code/ailoc2-claude-code.cjs")
@@ -21,6 +21,8 @@ dependencies {
         bundledPlugin("Git4Idea")
         pluginVerifier()
     }
+
+    testImplementation("org.junit.jupiter:junit-jupiter:5.12.2")
 }
 
 java {
@@ -47,6 +49,10 @@ intellijPlatform {
 
 tasks.named("buildSearchableOptions") {
     enabled = false
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 val buildClaudeCodeRuntime by tasks.registering(Exec::class) {

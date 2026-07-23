@@ -7,6 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [1.0.18] - 2026-07-23
+- Add AI-authored and human-authored non-blank staged-line counts to VS Code and IntelliJ commit subjects.
+- Persist Unknown added-line counts in summaries and commit audits without assigning ambiguous work to either author.
+- Refresh attribution from the final Git index after delegated pre-commit tools and add cross-platform regression suites to CI.
+
 ## [1.0.17] - 2026-07-22
 - Add explicit Find Action aliases for installing and uninstalling aggregate workspace Claude hooks in IntelliJ.
 

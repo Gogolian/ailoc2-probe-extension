@@ -334,6 +334,9 @@ test('refreshRepoHookSummary needs flushed rolling state to attribute the first 
     assert.equal(beforeFlush.summary.staged.changedFileCount, 1);
     assert.equal(beforeFlush.summary.staged.attributedChangedFileCount, 0);
     assert.equal(beforeFlush.summary.staged.aiPercentage, 0);
+    assert.equal(beforeFlush.summary.staged.aiAddedLineCount, 0);
+    assert.equal(beforeFlush.summary.staged.humanAddedLineCount, 0);
+    assert.equal(beforeFlush.summary.staged.unknownAddedLineCount, 2);
 
     await metricsStore.flushRepo(repoRoot);
 
@@ -343,6 +346,9 @@ test('refreshRepoHookSummary needs flushed rolling state to attribute the first 
     assert.equal(afterFlush.summary.staged.attributedChangedFileCount, 1);
     assert.ok(Math.abs(afterFlush.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
     assert.equal(afterFlush.summary.staged.humanPercentage, 0);
+    assert.equal(afterFlush.summary.staged.aiAddedLineCount, 2);
+    assert.equal(afterFlush.summary.staged.humanAddedLineCount, 0);
+    assert.equal(afterFlush.summary.staged.unknownAddedLineCount, 0);
 });
 
 test('metrics ignore rules skip metrics files and diff attribution for ignored paths', async () => {
@@ -393,6 +399,9 @@ test('metrics ignore rules skip metrics files and diff attribution for ignored p
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
     assert.equal(refreshed.summary.staged.humanPercentage, 0);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, 1);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 0);
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
 test('refreshRepoHookSummary ignores whitespace-only staged changes', async () => {
@@ -419,6 +428,9 @@ test('refreshRepoHookSummary ignores whitespace-only staged changes', async () =
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 0);
     assert.equal(refreshed.summary.staged.aiPercentage, 0);
     assert.equal(refreshed.summary.staged.humanPercentage, 0);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, 0);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 0);
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
 test('refreshRepoHookSummary weights changed lines by non-whitespace content', async () => {
@@ -482,6 +494,141 @@ test('refreshRepoHookSummary weights changed lines by non-whitespace content', a
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - (7 / 17) * 100) < FLOATING_POINT_TOLERANCE);
     assert.ok(Math.abs(refreshed.summary.staged.humanPercentage - (10 / 17) * 100) < FLOATING_POINT_TOLERANCE);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, 1);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 1);
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
+});
+
+test('refreshRepoHookSummary keeps unresolved added lines unknown', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-unknown-lines-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    const gitRelativePath = 'src/example.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'oldAi\noldHuman\noldUnknown\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(absoluteFilePath, 'newAi\nnewHuman\nnewUnknown\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    const stagedBlobOid = readIndexBlobOid(repoRoot, gitRelativePath);
+    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(rollingStatePath), { recursive: true });
+    fs.writeFileSync(rollingStatePath, JSON.stringify({
+        schemaVersion: METRICS_SCHEMA_VERSION,
+        recordType: 'file-rolling-state',
+        repoRoot,
+        repoRelativePath,
+        lastRecordedAt: new Date().toISOString(),
+        latestSignal: 'LikelyHumanOrRegularEditorEdit',
+        signalCounters: {
+            ProbableAIApplyToWorkspaceFile: 1,
+            LikelyHumanOrRegularEditorEdit: 1
+        },
+        cumulativeAiChangeMagnitude: 5,
+        cumulativeHumanChangeMagnitude: 8,
+        saveAttributionCheckpoints: [{
+            gitBlobOid: stagedBlobOid,
+            cumulativeAiChangeMagnitude: 5,
+            cumulativeHumanChangeMagnitude: 8,
+            lineAttributionSpans: [
+                { attribution: 'AI', lineCount: 1 },
+                { attribution: 'Human', lineCount: 1 },
+                { attribution: 'Unknown', lineCount: 1 }
+            ]
+        }],
+        lineAttributionSpans: [
+            { attribution: 'AI', lineCount: 1 },
+            { attribution: 'Human', lineCount: 1 },
+            { attribution: 'Unknown', lineCount: 1 }
+        ],
+        deletedAt: null
+    }), 'utf8');
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.deepEqual({
+        aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
+        humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
+        unknownAddedLineCount: refreshed.summary.staged.unknownAddedLineCount
+    }, {
+        aiAddedLineCount: 1,
+        humanAddedLineCount: 1,
+        unknownAddedLineCount: 1
+    });
+});
+
+test('refreshRepoHookSummary leaves a tied aggregate fallback line unknown', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-tied-fallback-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+    fs.writeFileSync(path.join(repoRoot, 'README.md'), 'initial\n', 'utf8');
+    runGit(repoRoot, ['add', 'README.md']);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    const gitRelativePath = 'src/tied.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const tied = true;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    writeRollingState(repoRoot, repoRelativePath, readIndexBlobOid(repoRoot, gitRelativePath), 10, 10);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 50) < FLOATING_POINT_TOLERANCE);
+    assert.deepEqual({
+        aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
+        humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
+        unknownAddedLineCount: refreshed.summary.staged.unknownAddedLineCount
+    }, {
+        aiAddedLineCount: 0,
+        humanAddedLineCount: 0,
+        unknownAddedLineCount: 1
+    });
+});
+
+test('refreshRepoHookSummary does not count deleted lines as authored additions', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-deletion-lines-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ailoc2@example.com']);
+
+    const gitRelativePath = 'src/deleted.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const deleted = true;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+    writeRollingState(repoRoot, repoRelativePath, readIndexBlobOid(repoRoot, gitRelativePath), 0, 20);
+
+    fs.rmSync(absoluteFilePath);
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.equal(refreshed.summary.staged.humanPercentage, 100);
+    assert.deepEqual({
+        aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
+        humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
+        unknownAddedLineCount: refreshed.summary.staged.unknownAddedLineCount
+    }, {
+        aiAddedLineCount: 0,
+        humanAddedLineCount: 0,
+        unknownAddedLineCount: 0
+    });
 });
 
 test('refreshRepoHookSummary uses aggregate attribution for newly staged files', async () => {
@@ -553,6 +700,9 @@ test('refreshRepoHookSummary uses aggregate attribution for newly staged files',
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
     assert.equal(refreshed.summary.staged.humanPercentage, 0);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(fileText));
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 0);
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
 test('refreshRepoHookSummary repairs historical human-labeled bulk checkpoints for AI-dominant new files', async () => {
@@ -625,6 +775,9 @@ test('refreshRepoHookSummary repairs historical human-labeled bulk checkpoints f
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
     assert.equal(refreshed.summary.staged.humanPercentage, 0);
     assert.equal(refreshed.summary.staged.usedFallbackAttribution, true);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(fileText));
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 0);
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
 test('refreshRepoHookSummary still scores unstaged edits when the same file is newly staged', async () => {
@@ -690,10 +843,16 @@ test('refreshRepoHookSummary still scores unstaged edits when the same file is n
     assert.equal(refreshed.summary.staged.changedFileCount, 1);
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
     assert.equal(refreshed.summary.staged.aiPercentage, 100);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, 1);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 0);
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
     assert.equal(refreshed.summary.unstaged.changedFileCount, 1);
     assert.equal(refreshed.summary.unstaged.attributedChangedFileCount, 1);
     assert.equal(refreshed.summary.unstaged.aiPercentage, 0);
     assert.equal(refreshed.summary.unstaged.humanPercentage, 100);
+    assert.equal(refreshed.summary.unstaged.aiAddedLineCount, 0);
+    assert.equal(refreshed.summary.unstaged.humanAddedLineCount, 1);
+    assert.equal(refreshed.summary.unstaged.unknownAddedLineCount, 0);
 });
 
 test('refreshRepoHookSummary attributes a staged small human file plus large AI bulk file mostly to AI', async () => {
@@ -769,6 +928,9 @@ test('refreshRepoHookSummary attributes a staged small human file plus large AI 
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 2);
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
     assert.ok(refreshed.summary.staged.aiPercentage > 98);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(aiText));
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, countNonBlankLines(humanText));
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
 test('refreshRepoHookSummary keeps formatter-neutral staged new-file rewrites with their original author', async () => {
@@ -872,6 +1034,9 @@ test('refreshRepoHookSummary keeps formatter-neutral staged new-file rewrites wi
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
     assert.ok(refreshed.summary.staged.aiPercentage > 45);
     assert.ok(refreshed.summary.staged.humanPercentage < 55);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(aiAfterFormatText));
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, countNonBlankLines(humanText));
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
 function runGit(repoRoot: string, args: string[]): string {
@@ -1048,4 +1213,10 @@ function createLargeAiTestFileText(): string {
 
 function nonWhitespaceWeight(text: string): number {
     return text.replace(/\s/gu, '').length;
+}
+
+function countNonBlankLines(text: string): number {
+    return text.split(/\r\n|\r|\n/)
+        .filter((line) => nonWhitespaceWeight(line) > 0)
+        .length;
 }

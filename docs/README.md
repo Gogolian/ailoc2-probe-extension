@@ -7,7 +7,7 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 ## Reading order
 
 1. [`architecture.md`](architecture.md) — start here for the runtime model, source map, lifecycle, and key moving parts.
-2. [`attribution-and-summary.md`](attribution-and-summary.md) — read this next if you want to understand how edit signals become repo-level AI percentages.
+2. [`attribution-and-summary.md`](attribution-and-summary.md) — read this next if you want to understand how edit signals become repo-level AI percentages and line counts.
 3. [`hooks-and-runtime.md`](hooks-and-runtime.md) — read this if you care about hook installation, chaining, CLI behavior, and commit-message annotation.
 4. [`claude-code.md`](claude-code.md) — read this for the Claude Code companion runtime and shared `.ailoc2-metrics` flow.
 

@@ -77,12 +77,15 @@ public final class Ailoc2ShowSummaryAction extends AnAction {
     private String formatSlice(String label, Ailoc2GitSummary summary) {
         return String.format(
             Locale.ROOT,
-            "%s: AI %.2f%% | Human %.2f%%\nChanged files: %d | Attributed files: %d\nAI-weighted lines: %d | Human-weighted lines: %d",
+            "%s: AI %.2f%% | Human %.2f%%\nChanged files: %d | Attributed files: %d\nAI lines: %d | Human lines: %d | Unknown lines: %d\nAI weight: %d | Human weight: %d",
             label,
             summary.aiPercentage,
             summary.humanPercentage,
             summary.changedFileCount,
             summary.attributedChangedFileCount,
+            summary.aiAddedLineCount,
+            summary.humanAddedLineCount,
+            summary.unknownAddedLineCount,
             summary.aiWeightedChangedLines,
             summary.humanWeightedChangedLines
         );

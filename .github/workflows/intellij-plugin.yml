@@ -56,8 +56,8 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build IntelliJ plugin
-        run: ./gradlew buildPlugin verifyPlugin --no-daemon --stacktrace
+      - name: Test, build, and verify IntelliJ plugin
+        run: ./gradlew test buildPlugin verifyPlugin --no-daemon --stacktrace
 
       - name: Prepare Marketplace artifact
         shell: bash

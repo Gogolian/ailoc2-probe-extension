@@ -7,6 +7,9 @@ final class Ailoc2GitSummary {
     final int attributedChangedFileCount;
     final long aiWeightedChangedLines;
     final long humanWeightedChangedLines;
+    final long aiAddedLineCount;
+    final long humanAddedLineCount;
+    final long unknownAddedLineCount;
     final double aiPercentage;
     final double humanPercentage;
     final boolean available;
@@ -17,6 +20,9 @@ final class Ailoc2GitSummary {
         int attributedChangedFileCount,
         long aiWeightedChangedLines,
         long humanWeightedChangedLines,
+        long aiAddedLineCount,
+        long humanAddedLineCount,
+        long unknownAddedLineCount,
         boolean available,
         Map<String, FileWeights> fileWeights
     ) {
@@ -24,6 +30,9 @@ final class Ailoc2GitSummary {
         this.attributedChangedFileCount = attributedChangedFileCount;
         this.aiWeightedChangedLines = aiWeightedChangedLines;
         this.humanWeightedChangedLines = humanWeightedChangedLines;
+        this.aiAddedLineCount = aiAddedLineCount;
+        this.humanAddedLineCount = humanAddedLineCount;
+        this.unknownAddedLineCount = unknownAddedLineCount;
         this.available = available;
         this.fileWeights = Map.copyOf(fileWeights);
         long denominator = aiWeightedChangedLines + humanWeightedChangedLines;
@@ -38,7 +47,7 @@ final class Ailoc2GitSummary {
     }
 
     static Ailoc2GitSummary unavailable() {
-        return new Ailoc2GitSummary(0, 0, 0L, 0L, false, Map.of());
+        return new Ailoc2GitSummary(0, 0, 0L, 0L, 0L, 0L, 0L, false, Map.of());
     }
 
     record FileWeights(long aiWeightedChangedLines, long humanWeightedChangedLines) {

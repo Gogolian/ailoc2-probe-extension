@@ -76,6 +76,7 @@ async function runAnnotateCommitMessage(
     const messageFilePath = path.resolve(process.cwd(), messageFilePathArgument);
 
     try {
+        await prepareRepoPreCommit({ repoRoot });
         const annotationResult = await annotateCommitMessageFile({
             repoRoot,
             messageFilePath,
@@ -90,6 +91,8 @@ async function runAnnotateCommitMessage(
         try {
             const placeholderSuffix = createAiCommitSuffix({
                 aiPercentage: null,
+                aiLineCount: null,
+                humanLineCount: null,
                 placeholderLabel: DEFAULT_AI_PLACEHOLDER_LABEL
             });
             await applyAiSuffixToCommitMessageFile({

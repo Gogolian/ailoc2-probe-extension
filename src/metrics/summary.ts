@@ -33,6 +33,7 @@ const HISTORICAL_BULK_HUMAN_CHECKPOINT_MINIMUM_MAGNITUDE = 400;
 type GitDiffStatEntry = {
     repoRelativePath: string;
     changedLines: number;
+    addedLineCount: number;
     currentLineRanges: DiffLineRange[];
     isNewFile: boolean;
 };
@@ -53,6 +54,9 @@ type ChangedLineAttributionSummary = {
     aiWeight: number;
     humanWeight: number;
     unknownWeight: number;
+    aiAddedLineCount: number;
+    humanAddedLineCount: number;
+    unknownAddedLineCount: number;
 };
 
 type CommitBaselineBuildResult = {
@@ -75,6 +79,9 @@ export type DiffSliceAttributionSummary = {
     attributedChangedFileCount: number;
     aiWeightedChangedLines: number;
     humanWeightedChangedLines: number;
+    aiAddedLineCount: number;
+    humanAddedLineCount: number;
+    unknownAddedLineCount: number;
     aiPercentage: number;
     humanPercentage: number;
     usedFallbackAttribution: boolean;
@@ -188,7 +195,7 @@ export function formatRepoUncommittedAttributionSummary(summary: RepoUncommitted
         return `${summary.repoName}: summary unavailable`;
     }
 
-    return `${summary.repoName}: STAGED -> AI ${summary.staged.aiPercentage.toFixed(2)}% | Human ${summary.staged.humanPercentage.toFixed(2)}% ; UNSTAGED -> AI ${summary.unstaged.aiPercentage.toFixed(2)}% | Human ${summary.unstaged.humanPercentage.toFixed(2)}%`;
+    return `${summary.repoName}: STAGED -> AI ${summary.staged.aiPercentage.toFixed(2)}% | Human ${summary.staged.humanPercentage.toFixed(2)}% | AI lines ${summary.staged.aiAddedLineCount} | Human lines ${summary.staged.humanAddedLineCount} | Unknown lines ${summary.staged.unknownAddedLineCount} ; UNSTAGED -> AI ${summary.unstaged.aiPercentage.toFixed(2)}% | Human ${summary.unstaged.humanPercentage.toFixed(2)}% | AI lines ${summary.unstaged.aiAddedLineCount} | Human lines ${summary.unstaged.humanAddedLineCount} | Unknown lines ${summary.unstaged.unknownAddedLineCount}`;
 }
 
 export async function writeRepoHookSummaryFile(summary: RepoUncommittedAttributionSummary): Promise<string> {
@@ -356,6 +363,9 @@ function createEmptyDiffSliceSummary(): DiffSliceAttributionSummary {
         attributedChangedFileCount: 0,
         aiWeightedChangedLines: 0,
         humanWeightedChangedLines: 0,
+        aiAddedLineCount: 0,
+        humanAddedLineCount: 0,
+        unknownAddedLineCount: 0,
         aiPercentage: 0,
         humanPercentage: 0,
         usedFallbackAttribution: false
@@ -389,6 +399,8 @@ async function summarizeDiffSlices(
     for (const repoRelativePath of allRepoRelativePaths) {
         const rollingState = await readRollingState(repoRoot, repoRelativePath);
         if (!rollingState) {
+            applyUnknownAddedLines(stagedSummary, stagedEntriesByPath.get(repoRelativePath));
+            applyUnknownAddedLines(unstagedSummary, unstagedEntriesByPath.get(repoRelativePath));
             continue;
         }
 
@@ -513,6 +525,7 @@ function applyDiffSliceContribution(
 ): void {
     const totalMagnitude = attribution.aiMagnitude + attribution.humanMagnitude;
     if (totalMagnitude <= 0) {
+        summary.unknownAddedLineCount += diffEntry.addedLineCount;
         return;
     }
 
@@ -522,6 +535,14 @@ function applyDiffSliceContribution(
     const humanRatio = attribution.humanMagnitude / totalMagnitude;
     summary.aiWeightedChangedLines += diffEntry.changedLines * aiRatio;
     summary.humanWeightedChangedLines += diffEntry.changedLines * humanRatio;
+    const allocatedLineCounts = allocateAddedLineCounts(
+        diffEntry.addedLineCount,
+        attribution.aiMagnitude,
+        attribution.humanMagnitude
+    );
+    summary.aiAddedLineCount += allocatedLineCounts.ai;
+    summary.humanAddedLineCount += allocatedLineCounts.human;
+    summary.unknownAddedLineCount += allocatedLineCounts.unknown;
 }
 
 function applyChangedLineAttributionSummary(
@@ -536,7 +557,54 @@ function applyChangedLineAttributionSummary(
     summary.attributedChangedFileCount += 1;
     summary.aiWeightedChangedLines += attribution.aiWeight;
     summary.humanWeightedChangedLines += attribution.humanWeight;
+    summary.aiAddedLineCount += attribution.aiAddedLineCount;
+    summary.humanAddedLineCount += attribution.humanAddedLineCount;
+    summary.unknownAddedLineCount += attribution.unknownAddedLineCount;
     return true;
+}
+
+function applyUnknownAddedLines(
+    summary: DiffSliceAttributionSummary,
+    diffEntry: GitDiffStatEntry | undefined
+): void {
+    if (diffEntry) {
+        summary.unknownAddedLineCount += diffEntry.addedLineCount;
+    }
+}
+
+function allocateAddedLineCounts(
+    addedLineCount: number,
+    aiMagnitude: number,
+    humanMagnitude: number
+): { ai: number; human: number; unknown: number; } {
+    const normalizedAddedLineCount = Math.max(0, Math.trunc(addedLineCount));
+    const normalizedAiMagnitude = Math.max(0, aiMagnitude);
+    const normalizedHumanMagnitude = Math.max(0, humanMagnitude);
+    const totalMagnitude = normalizedAiMagnitude + normalizedHumanMagnitude;
+    if (normalizedAddedLineCount === 0 || totalMagnitude <= 0) {
+        return { ai: 0, human: 0, unknown: normalizedAddedLineCount };
+    }
+
+    const aiQuota = (normalizedAddedLineCount * normalizedAiMagnitude) / totalMagnitude;
+    const humanQuota = (normalizedAddedLineCount * normalizedHumanMagnitude) / totalMagnitude;
+    let ai = Math.floor(aiQuota);
+    let human = Math.floor(humanQuota);
+    let unknown = normalizedAddedLineCount - ai - human;
+
+    if (unknown === 1) {
+        const aiRemainder = aiQuota - ai;
+        const humanRemainder = humanQuota - human;
+        if (aiRemainder > humanRemainder) {
+            ai += 1;
+            unknown = 0;
+        }
+        else if (humanRemainder > aiRemainder) {
+            human += 1;
+            unknown = 0;
+        }
+    }
+
+    return { ai, human, unknown };
 }
 
 function finalizeDiffSliceSummary(summary: DiffSliceAttributionSummary): void {
@@ -730,6 +798,9 @@ function deriveChangedLineAttributionFromSpans(
     let aiWeight = 0;
     let humanWeight = 0;
     let unknownWeight = 0;
+    let aiAddedLineCount = 0;
+    let humanAddedLineCount = 0;
+    let unknownAddedLineCount = 0;
 
     for (const range of ranges) {
         for (let index = 0; index < range.lineCount; index += 1) {
@@ -738,12 +809,15 @@ function deriveChangedLineAttributionFromSpans(
             const lineWeight = getLineWeight(lineWeights[lineIndex]);
             if (attribution === 'AI') {
                 aiWeight += lineWeight;
+                aiAddedLineCount += lineWeight > 0 ? 1 : 0;
             }
             else if (attribution === 'Human') {
                 humanWeight += lineWeight;
+                humanAddedLineCount += lineWeight > 0 ? 1 : 0;
             }
             else {
                 unknownWeight += lineWeight;
+                unknownAddedLineCount += lineWeight > 0 ? 1 : 0;
             }
         }
     }
@@ -752,7 +826,10 @@ function deriveChangedLineAttributionFromSpans(
         repoRelativePath,
         aiWeight,
         humanWeight,
-        unknownWeight
+        unknownWeight,
+        aiAddedLineCount,
+        humanAddedLineCount,
+        unknownAddedLineCount
     };
 }
 
@@ -878,6 +955,7 @@ async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntr
         entries.push({
             repoRelativePath,
             changedLines: getTextNonWhitespaceWeight(fileContents),
+            addedLineCount: countNonBlankTextLines(fileContents),
             currentLineRanges: lineCount > 0 ? [{ startLine: 0, lineCount }] : [],
             isNewFile: true
         });
@@ -944,7 +1022,11 @@ export function parseGitDiffEntries(stdout: string): GitDiffStatEntry[] {
 
         const entry = entries.get(currentRepoRelativePath) ?? createGitDiffStatEntry(currentRepoRelativePath, pendingIsNewFile);
         entry.isNewFile = entry.isNewFile || pendingIsNewFile;
-        entry.changedLines += getTextNonWhitespaceWeight(line.slice(1));
+        const lineWeight = getTextNonWhitespaceWeight(line.slice(1));
+        entry.changedLines += lineWeight;
+        if (line.startsWith('+') && lineWeight > 0) {
+            entry.addedLineCount += 1;
+        }
         entries.set(currentRepoRelativePath, entry);
     }
 
@@ -955,6 +1037,7 @@ function createGitDiffStatEntry(repoRelativePath: string, isNewFile: boolean): G
     return {
         repoRelativePath,
         changedLines: 0,
+        addedLineCount: 0,
         currentLineRanges: [],
         isNewFile
     };
@@ -1023,11 +1106,13 @@ function mergeGitDiffEntries(...entrySets: GitDiffStatEntry[][]): GitDiffStatEnt
             const existingEntry = mergedEntries.get(entry.repoRelativePath) ?? {
                 repoRelativePath: entry.repoRelativePath,
                 changedLines: 0,
+                addedLineCount: 0,
                 currentLineRanges: [],
                 isNewFile: false
             };
 
             existingEntry.changedLines += entry.changedLines;
+            existingEntry.addedLineCount += entry.addedLineCount;
             existingEntry.currentLineRanges.push(...entry.currentLineRanges);
             existingEntry.isNewFile = existingEntry.isNewFile || entry.isNewFile;
             mergedEntries.set(entry.repoRelativePath, existingEntry);
@@ -1043,6 +1128,16 @@ function countTextLines(text: string): number {
     }
 
     return text.split(/\r\n|\r|\n/).length;
+}
+
+function countNonBlankTextLines(text: string): number {
+    if (text.length === 0) {
+        return 0;
+    }
+
+    return text.split(/\r\n|\r|\n/)
+        .filter((line) => getTextNonWhitespaceWeight(line) > 0)
+        .length;
 }
 
 function normalizeDiffPath(rawPath: string): string | null {

@@ -361,7 +361,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 });
 
                 const infoMessage = refreshedSummary.summary.isGitSummaryAvailable
-                    ? `AILoc2 summary refreshed for ${path.basename(repoRoot)}. Staged AI: ${refreshedSummary.summary.staged.aiPercentage.toFixed(2)}%.`
+                    ? `AILoc2 summary refreshed for ${path.basename(repoRoot)}. Staged AI: ${refreshedSummary.summary.staged.aiPercentage.toFixed(2)}%; AI lines: ${refreshedSummary.summary.staged.aiAddedLineCount}; Human lines: ${refreshedSummary.summary.staged.humanAddedLineCount}; Unknown lines: ${refreshedSummary.summary.staged.unknownAddedLineCount}.`
                     : `AILoc2 summary refreshed for ${path.basename(repoRoot)}, but Git summary data is unavailable.`;
                 void vscode.window.showInformationMessage(infoMessage);
             }

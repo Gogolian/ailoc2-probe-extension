@@ -18,13 +18,13 @@ The current architecture is built around five practical constraints:
 | --- | --- |
 | `src/extension.ts` | Extension activation, command registration, VS Code event listeners, edit classification, and handoff into persistence. |
 | `src/metrics/store.ts` | Debounced per-repo write queue, rolling state updates, manifest caching, save checkpoints, and lifecycle persistence. |
-| `src/metrics/summary.ts` | Reads Git diff slices plus rolling state and produces staged / unstaged attribution summaries. |
+| `src/metrics/summary.ts` | Reads Git diff slices plus rolling state and produces staged / unstaged weighted percentages and AI/Human/Unknown added-line counts. |
 | `src/metrics/git.ts` | Thin wrappers around Git calls for working-tree and index blob IDs. |
 | `src/metrics/repoResolver.ts` | Resolves repo roots, repo-relative paths, and normalized logical paths. |
 | `src/metrics/pathing.ts` | Defines the on-disk metrics layout under `.ailoc2-metrics`. |
 | `src/metrics/schema.ts` | Shared record types, signal groups, attribution buckets, and rolling-state structures. |
 | `src/hooks/management.ts` | Installs and uninstalls managed hooks, copies runtime assets, and handles hook chaining. |
-| `src/hooks/commitMessage.ts` | Applies the `(AI: xx.xx%)` or `(AI: unavailable)` suffix to the commit subject line. |
+| `src/hooks/commitMessage.ts` | Applies the compound percentage and AI/Human line-count suffix, or its full unavailable form, to the commit subject line. |
 | `src/cli/gitHookCli.ts` | Bundled CLI entrypoint executed by the managed hooks. |
 | `src/cli/claudeCodeCli.ts` | Bundled CLI entrypoint executed by Claude Code hooks. |
 | `src/integrations/claudeCode/` | Claude Code hook payload parsing, before snapshots, hook settings merge, and shared metrics writes. |
@@ -43,7 +43,7 @@ flowchart TD
     G --> H[Queue rolling-state update in RepoMetricsStore]
     H --> I[Write .ailoc2-metrics/state/files/*.metrics.json]
     I --> J[pre-commit snapshots index baseline and refreshes summary.json]
-    J --> K[commit-msg appends AI suffix]
+    J --> K[commit-msg refreshes the final index and appends percentage plus line counts]
     K --> L[post-commit promotes baseline and refreshes summary.json]
     M[Claude Code Write/Edit/MultiEdit] --> N[Claude Code hook runtime records AI edit]
     N --> I
@@ -182,7 +182,7 @@ The design is intentionally fail-soft.
 
 - the extension keeps logging even when some repo-specific operations fail
 - hook scripts try not to block commits purely because AILoc2 could not compute or annotate a summary
-- commit annotation falls back to `(AI: unavailable)` instead of aborting the commit
+- commit annotation falls back to `(AI: unavailable) (AI lines: unavailable) (H lines: unavailable)` instead of aborting the commit
 
 In other words: the project prefers imperfect visibility over workflow-breaking drama.
 

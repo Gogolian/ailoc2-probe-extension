@@ -74,15 +74,30 @@ final class Ailoc2Storage {
         String summaryLine = available && unstagedSummary != null
             ? String.format(
                 java.util.Locale.ROOT,
-                "%s: STAGED -> AI %.2f%% | Human %.2f%% ; UNSTAGED -> AI %.2f%% | Human %.2f%%",
+                "%s: STAGED -> AI %.2f%% | Human %.2f%% | AI lines %d | Human lines %d | Unknown lines %d ; UNSTAGED -> AI %.2f%% | Human %.2f%% | AI lines %d | Human lines %d | Unknown lines %d",
                 repoName,
                 stagedSummary.aiPercentage,
                 stagedSummary.humanPercentage,
+                stagedSummary.aiAddedLineCount,
+                stagedSummary.humanAddedLineCount,
+                stagedSummary.unknownAddedLineCount,
                 unstagedSummary.aiPercentage,
-                unstagedSummary.humanPercentage
+                unstagedSummary.humanPercentage,
+                unstagedSummary.aiAddedLineCount,
+                unstagedSummary.humanAddedLineCount,
+                unstagedSummary.unknownAddedLineCount
             )
             : stagedSummary.available
-            ? String.format("%s: STAGED -> AI %.2f%% | Human %.2f%%", repoName, stagedSummary.aiPercentage, stagedSummary.humanPercentage)
+            ? String.format(
+                java.util.Locale.ROOT,
+                "%s: STAGED -> AI %.2f%% | Human %.2f%% | AI lines %d | Human lines %d | Unknown lines %d",
+                repoName,
+                stagedSummary.aiPercentage,
+                stagedSummary.humanPercentage,
+                stagedSummary.aiAddedLineCount,
+                stagedSummary.humanAddedLineCount,
+                stagedSummary.unknownAddedLineCount
+            )
             : repoName + ": summary unavailable";
         String json = "{\n"
             + "  \"schemaVersion\": \"1\",\n"
@@ -165,6 +180,9 @@ final class Ailoc2Storage {
             .append("    \"attributedChangedFileCount\": ").append(summary.attributedChangedFileCount).append(",\n")
             .append("    \"aiWeightedChangedLines\": ").append(summary.aiWeightedChangedLines).append(",\n")
             .append("    \"humanWeightedChangedLines\": ").append(summary.humanWeightedChangedLines).append(",\n")
+            .append("    \"aiAddedLineCount\": ").append(summary.aiAddedLineCount).append(",\n")
+            .append("    \"humanAddedLineCount\": ").append(summary.humanAddedLineCount).append(",\n")
+            .append("    \"unknownAddedLineCount\": ").append(summary.unknownAddedLineCount).append(",\n")
             .append("    \"aiPercentage\": ")
             .append(String.format(java.util.Locale.ROOT, "%.6f", summary.aiPercentage))
             .append(",\n")

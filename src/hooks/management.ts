@@ -731,7 +731,7 @@ ${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
-PLACEHOLDER_SUFFIX=' (AI: unavailable)'
+PLACEHOLDER_SUFFIX=' (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)'
 
 ${createDelegateHookFunction(delegateSpecs)}
 
@@ -741,7 +741,7 @@ append_placeholder_suffix() {
     fi
 
     TEMP_FILE="\${MESSAGE_FILE}.ailoc2.$$"
-    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\(AI:? [^)]*\)$//')
+    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]))*$//')
 
     {
         if [ -n "$SUBJECT_LINE" ]; then
@@ -924,6 +924,10 @@ function isManagedHookFileText(hookFileName: RepoHookFileName, text: string): bo
         return true;
     }
 
+    if (isLegacyManagedHookFileText(hookFileName, normalizedText)) {
+        return true;
+    }
+
     const legacyVariants = hookFileName === 'pre-commit'
         ? [createLegacyManagedPreCommitHookScript()]
         : hookFileName === 'commit-msg'
@@ -934,6 +938,23 @@ function isManagedHookFileText(hookFileName: RepoHookFileName, text: string): bo
         createManagedHookFileContents(hookFileName, []),
         ...legacyVariants
     ].some((candidate) => normalizeHookFileText(candidate) === normalizedText);
+}
+
+function isLegacyManagedHookFileText(hookFileName: RepoHookFileName, normalizedText: string): boolean {
+    const legacyRuntimePath = `./.githooks/${LEGACY_MANAGED_HOOK_RUNTIME_DIRECTORY_NAME}/out/cli/gitHookCli.js`;
+    if (!normalizedText.includes(`CLI_PATH="${legacyRuntimePath}"`)) {
+        return false;
+    }
+
+    if (hookFileName === 'pre-commit') {
+        return normalizedText.includes('node "$CLI_PATH" refresh-summary');
+    }
+
+    if (hookFileName === 'commit-msg') {
+        return normalizedText.includes('node "$CLI_PATH" annotate-commit-message "$MESSAGE_FILE"');
+    }
+
+    return false;
 }
 
 function normalizeHookFileText(text: string): string {

@@ -3,7 +3,7 @@
   <name>AILoc2 Probe</name>
   <vendor email="issues@gogolian.invalid" url="https://github.com/Gogolian/ailoc2-probe-extension">Gogolian</vendor>
   <description><![CDATA[
-    Local-first AI attribution for IntelliJ IDEA commits. AILoc2 observes editor edits, estimates staged AI-assisted change percentage without prompt or instruction tagging, and annotates commit messages.
+    Local-first AI attribution for IntelliJ IDEA commits. AILoc2 observes editor edits, estimates staged AI-assisted percentage and added-line counts without prompt or instruction tagging, and annotates commit messages.
   ]]></description>
 
   <depends>com.intellij.modules.platform</depends>

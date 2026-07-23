@@ -6,8 +6,8 @@ This folder contains an IntelliJ Platform plugin that mirrors the core AILoc2 be
 - classifies edit signals locally as human-leaning or AI-leaning using editor command context, command group metadata, and bulk-apply heuristics;
 - persists repo-local metrics under `.ailoc2-metrics/intellij-state`;
 - honors optional gitignore-style opt-out rules from `.ailoc2-metrics/.ignore`;
-- calculates the staged AI percentage from whitespace-insensitive `git diff --cached` output during IntelliJ commit handling;
-- appends the staged percentage to the commit subject as `(AI: 12.34%)`, or `(AI: unavailable)` when Git summary generation fails;
+- calculates staged AI attribution from whitespace-insensitive `git diff --cached` output during IntelliJ commit handling;
+- appends the staged attribution as `(AI: 12.34%) (AI lines: 8) (H lines: 15)`, or marks all three fields unavailable when Git summary generation fails;
 - clears metrics for files that were fully committed while preserving metrics for committed paths that still have unstaged work.
 
 The implementation is intentionally local-first. It does not call a hosted service and does not depend on LLM-generated markers in source files.
@@ -35,6 +35,7 @@ gradle runIde
 ```
 
 Run `gradle verifyPlugin` to check the package against both supported range endpoints.
+Run `gradle test` to execute the pure diff, commit-message, and generated-hook regression suites.
 
 ## Attribution approach
 
@@ -42,7 +43,7 @@ The plugin registers editor document and command listeners at project startup. R
 
 Every command start / finish and every persisted document-change event is also written to the IntelliJ log (`idea.log`) with the command context, changed file, edit sizes, and final attribution bucket so you can inspect real-world event patterns.
 
-At commit time the plugin reads the actual staged diff with whitespace-only hunks ignored and weights added staged lines by non-whitespace characters against the recorded per-line attribution state. Unknown lines are excluded from the headline percentage unless the file has enough rolling state to provide a file-level fallback. This formatting-neutral simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
+At commit time the plugin reads the actual staged diff with whitespace-only hunks ignored and weights added staged lines by non-whitespace characters against the recorded per-line attribution state. The percentage remains character-weighted. The separate AI/Human counters count non-blank added lines on the new side of the diff, so a modified line counts once while pure deletions and blank additions count zero. Unknown lines are persisted in summaries and commit audits but omitted from the commit subject. This formatting-neutral simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
 
 ## Git hooks
 
@@ -54,7 +55,7 @@ The plugin adds two explicit Tools menu actions:
 - **AILoc2 Probe: Install Workspace Claude Hooks**
 - **AILoc2 Probe: Uninstall Workspace Claude Hooks**
 
-The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged AI/Human attribution percentages on demand.
+The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged percentages plus AI/Human/Unknown added-line counts on demand.
 
 If you want to exclude files or directories from IntelliJ metrics entirely, add gitignore-style rules to `.ailoc2-metrics/.ignore`. Ignored paths will not get IntelliJ rolling-state files and are skipped from the summary counts as well.
 
@@ -64,4 +65,4 @@ For a Claude Code session started from a directory that contains multiple reposi
 
 Both workspace hook actions are available from the **Tools** menu and from **Find Action** (`Ctrl+Shift+A`) by searching for `Install Workspace Claude Hooks` or `Uninstall Workspace Claude Hooks`.
 
-The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. Claude Code synchronizes its canonical rolling state into `.ailoc2-metrics/intellij-state`, allowing the runtime to refresh `.ailoc2-metrics/summary.json` from the staged diff and annotate terminal or external Git commit messages with the same `(AI: xx.xx%)` suffix used by IntelliJ commit handling. Each summary includes exact per-file AI/Human weights. Before committed state is cleared, the summary used for the commit is archived as `.ailoc2-metrics/commit-audits/<commit-hash>.json`.
+The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. Claude Code synchronizes its canonical rolling state into `.ailoc2-metrics/intellij-state`, allowing the runtime to refresh `.ailoc2-metrics/summary.json` from the final staged diff and annotate terminal or external Git commit messages with the same `(AI: xx.xx%) (AI lines: n) (H lines: n)` suffix used by IntelliJ commit handling. Each summary includes aggregate AI/Human/Unknown line counts and exact per-file AI/Human weights. Before committed state is cleared, the summary used for the commit is archived as `.ailoc2-metrics/commit-audits/<commit-hash>.json`.

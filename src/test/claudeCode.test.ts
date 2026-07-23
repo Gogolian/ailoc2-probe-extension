@@ -120,6 +120,9 @@ test('Claude Code metrics combine with human metrics in staged summary', async (
     assert.equal(refreshed.summary.staged.changedFileCount, 2);
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 2);
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(claudeText));
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, countNonBlankLines(humanText));
+    assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
 test('installClaudeCodeHooks merges AILoc2 hooks into existing Claude settings', async () => {
@@ -265,4 +268,10 @@ function runGit(repoRoot: string, args: string[]): string {
 
 function nonWhitespaceWeight(text: string): number {
     return text.replace(/\s/gu, '').length;
+}
+
+function countNonBlankLines(text: string): number {
+    return text.split(/\r\n|\r|\n/)
+        .filter((line) => nonWhitespaceWeight(line) > 0)
+        .length;
 }

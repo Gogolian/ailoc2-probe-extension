@@ -722,18 +722,41 @@ final class Ailoc2HookManager {
 
             MESSAGE_FILE="$1"
             RUNTIME_PATH="./.githooks/%s"
+            PLACEHOLDER_SUFFIX=' (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)'
 
             %s
 
+            append_placeholder_suffix() {
+                if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
+                    return 0
+                fi
+
+                TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
+                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]))*$//')
+                {
+                    if [ -n "$SUBJECT_LINE" ]; then
+                        printf '%%s%%s\\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUFFIX"
+                    else
+                        printf '%%s\\n' "${PLACEHOLDER_SUFFIX# }"
+                    fi
+                    sed '1d' "$MESSAGE_FILE"
+                } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"
+            }
+
             if [ -n "$MESSAGE_FILE" ] && [ -f "$RUNTIME_PATH" ]; then
-                sh "$RUNTIME_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || sh "$RUNTIME_PATH" append-placeholder "$MESSAGE_FILE" >/dev/null 2>&1
+                sh "$RUNTIME_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_suffix
             elif [ -n "$MESSAGE_FILE" ]; then
-                printf '%%s\\n' 'AILoc2 commit-msg warning: IntelliJ hook runtime is unavailable; skipping AI suffix.' >&2
+                append_placeholder_suffix
+                printf '%%s\\n' 'AILoc2 commit-msg warning: IntelliJ hook runtime is unavailable; using unavailable attribution.' >&2
             fi
 
             run_delegate_hooks "$@"
             exit $?
             """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
+    }
+
+    String createManagedCommitMsgHookScript() {
+        return createManagedCommitMsgHookScript(List.of());
     }
 
     private String createManagedPostCommitHookScript(List<HookDelegateSpec> delegateSpecs) {
@@ -755,7 +778,7 @@ final class Ailoc2HookManager {
             """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
     }
 
-    private String createManagedRuntimeScript() {
+    String createManagedRuntimeScript() {
         return """
             #!/bin/sh
             # AILoc2 managed IntelliJ hook runtime
@@ -763,7 +786,7 @@ final class Ailoc2HookManager {
             SUMMARY_FILE=".ailoc2-metrics/summary.json"
             STATE_DIR=".ailoc2-metrics/intellij-state"
             AUDIT_DIR=".ailoc2-metrics/commit-audits"
-            PLACEHOLDER_SUFFIX=' (AI: unavailable)'
+            PLACEHOLDER_SUFFIX=' (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)'
 
             refresh_summary() {
                 REPO_ROOT=$(pwd)
@@ -831,18 +854,23 @@ final class Ailoc2HookManager {
                         current_line = range_parts[1] + 0
                         next
                     }
-                    current_path != "" && current_line > 0 && /^\\+/ && !/^\\+\\+\\+/ {
+                    current_path != "" && current_line > 0 && /^\\+/ && !/^\\+\\+\\+ / {
                         bucket = bucket_for(current_path, current_line)
                         weight = non_whitespace_length(substr($0, 2))
                         if (weight > 0 && bucket == "AI") {
                             ai_weight += weight
+                            ai_line_count++
                             ai_by_path[current_path] += weight
                             attributed[current_path] = 1
                         }
                         else if (weight > 0 && bucket == "HUMAN") {
                             human_weight += weight
+                            human_line_count++
                             human_by_path[current_path] += weight
                             attributed[current_path] = 1
+                        }
+                        else if (weight > 0) {
+                            unknown_line_count++
                         }
                         current_line++
                         next
@@ -860,7 +888,7 @@ final class Ailoc2HookManager {
                             attributed_count++
                             printf "%s\\t%d\\t%d\\n", path, ai_by_path[path] + 0, human_by_path[path] + 0 > details_file
                         }
-                        printf "%d %d %d %d\\n", changed_count, attributed_count, ai_weight, human_weight
+                        printf "%d %d %d %d %d %d %d\\n", changed_count, attributed_count, ai_weight, human_weight, ai_line_count, human_line_count, unknown_line_count
                     }
                 ')
 
@@ -869,6 +897,9 @@ final class Ailoc2HookManager {
                 ATTRIBUTED_CHANGED_FILE_COUNT=${2:-0}
                 AI_WEIGHT=${3:-0}
                 HUMAN_WEIGHT=${4:-0}
+                AI_LINE_COUNT=${5:-0}
+                HUMAN_LINE_COUNT=${6:-0}
+                UNKNOWN_LINE_COUNT=${7:-0}
                 TOTAL_WEIGHT=$((AI_WEIGHT + HUMAN_WEIGHT))
                 if [ "$TOTAL_WEIGHT" -gt 0 ]; then
                     AI_PERCENTAGE=$(awk -v ai="$AI_WEIGHT" -v total="$TOTAL_WEIGHT" 'BEGIN { printf "%.6f", (ai / total) * 100 }')
@@ -880,7 +911,7 @@ final class Ailoc2HookManager {
                 AI_DISPLAY=$(awk -v value="$AI_PERCENTAGE" 'BEGIN { printf "%.2f", value }')
                 HUMAN_DISPLAY=$(awk -v value="$HUMAN_PERCENTAGE" 'BEGIN { printf "%.2f", value }')
                 GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-                SUMMARY_LINE="$REPO_NAME: STAGED -> AI $AI_DISPLAY% | Human $HUMAN_DISPLAY%"
+                SUMMARY_LINE="$REPO_NAME: STAGED -> AI $AI_DISPLAY% | Human $HUMAN_DISPLAY% | AI lines $AI_LINE_COUNT | Human lines $HUMAN_LINE_COUNT | Unknown lines $UNKNOWN_LINE_COUNT"
                 ESCAPED_REPO_ROOT=$(printf '%s' "$REPO_ROOT" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
                 ESCAPED_REPO_NAME=$(printf '%s' "$REPO_NAME" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
                 ESCAPED_SUMMARY_LINE=$(printf '%s' "$SUMMARY_LINE" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
@@ -900,6 +931,9 @@ final class Ailoc2HookManager {
                     printf '    "attributedChangedFileCount": %s,\\n' "$ATTRIBUTED_CHANGED_FILE_COUNT"
                     printf '    "aiWeightedChangedLines": %s,\\n' "$AI_WEIGHT"
                     printf '    "humanWeightedChangedLines": %s,\\n' "$HUMAN_WEIGHT"
+                    printf '    "aiAddedLineCount": %s,\\n' "$AI_LINE_COUNT"
+                    printf '    "humanAddedLineCount": %s,\\n' "$HUMAN_LINE_COUNT"
+                    printf '    "unknownAddedLineCount": %s,\\n' "$UNKNOWN_LINE_COUNT"
                     printf '    "aiPercentage": %s,\\n' "$AI_PERCENTAGE"
                     printf '    "humanPercentage": %s,\\n' "$HUMAN_PERCENTAGE"
                     printf '    "files": {'
@@ -938,7 +972,7 @@ final class Ailoc2HookManager {
                 fi
 
                 TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+\\(AI:? [^)]*\\)$//')
+                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]))*$//')
 
                 {
                     if [ -n "$SUBJECT_LINE" ]; then
@@ -956,9 +990,11 @@ final class Ailoc2HookManager {
                 prepare_commit_audit
                 if grep -q '"isGitSummaryAvailable"[[:space:]]*:[[:space:]]*true' "$SUMMARY_FILE"; then
                     AI_PERCENTAGE=$(sed -n 's/.*"aiPercentage"[[:space:]]*:[[:space:]]*\\([0-9.][0-9.]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
-                    if [ -n "$AI_PERCENTAGE" ]; then
+                    AI_LINE_COUNT=$(sed -n 's/.*"aiAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
+                    HUMAN_LINE_COUNT=$(sed -n 's/.*"humanAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
+                    if [ -n "$AI_PERCENTAGE" ] && [ -n "$AI_LINE_COUNT" ] && [ -n "$HUMAN_LINE_COUNT" ]; then
                         AI_DISPLAY=$(awk -v value="$AI_PERCENTAGE" 'BEGIN { printf "%.2f", value }')
-                        append_suffix "$MESSAGE_FILE" " (AI: $AI_DISPLAY%)"
+                        append_suffix "$MESSAGE_FILE" " (AI: $AI_DISPLAY%) (AI lines: $AI_LINE_COUNT) (H lines: $HUMAN_LINE_COUNT)"
                         return 0
                     fi
                 fi

@@ -23,6 +23,7 @@ test('parseGitDiffEntries counts content lines starting with "++"', () => {
     assert.equal(entry.repoRelativePath, path.normalize('src/counter.ts'));
     // "++counter;" -> prefix "+" stripped -> "+counter;" -> 9 non-whitespace chars.
     assert.equal(entry.changedLines, '+counter;'.length);
+    assert.equal(entry.addedLineCount, 1);
 });
 
 test('parseGitDiffEntries counts removed content lines starting with "---"', () => {
@@ -40,6 +41,7 @@ test('parseGitDiffEntries counts removed content lines starting with "---"', () 
     assert.equal(entry.repoRelativePath, 'doc.md');
     // "----- section" -> prefix "-" stripped -> "---- section" -> 4 non-whitespace chars.
     assert.equal(entry.changedLines, '----section'.length);
+    assert.equal(entry.addedLineCount, 0);
 });
 
 test('parseGitDiffEntries still skips the +++/--- file header lines', () => {
@@ -57,4 +59,39 @@ test('parseGitDiffEntries still skips the +++/--- file header lines', () => {
 
     // Only the two real content lines contribute; the "--- "/"+++ " headers do not.
     assert.equal(entry.changedLines, 'constx=1'.length + 'constx=2'.length);
+    assert.equal(entry.addedLineCount, 1);
+});
+
+test('parseGitDiffEntries counts only non-blank new-side lines', () => {
+    const diff = [
+        'diff --git a/src/example.ts b/src/example.ts',
+        'index 1111111..2222222 100644',
+        '--- a/src/example.ts',
+        '+++ b/src/example.ts',
+        '@@ -1,2 +1,4 @@',
+        '-const removed = true;',
+        '-const replaced = 1;',
+        '+const replaced = 2;',
+        '+   ',
+        '+const added = true;',
+        '+',
+        '\\ No newline at end of file'
+    ].join('\n');
+
+    const [entry] = parseGitDiffEntries(diff);
+
+    assert.deepEqual({
+        addedLineCount: entry.addedLineCount,
+        currentLineRanges: entry.currentLineRanges,
+        changedLines: entry.changedLines
+    }, {
+        addedLineCount: 2,
+        currentLineRanges: [{ startLine: 0, lineCount: 4 }],
+        changedLines: [
+            'constremoved=true;',
+            'constreplaced=1;',
+            'constreplaced=2;',
+            'constadded=true;'
+        ].reduce((sum, line) => sum + line.length, 0)
+    });
 });

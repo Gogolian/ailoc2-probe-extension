@@ -23,19 +23,14 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service(Service.Level.PROJECT)
 public final class Ailoc2ProjectService implements Disposable {
     private static final Logger LOG = Logger.getInstance(Ailoc2ProjectService.class);
-    private static final Pattern HUNK_PATTERN = Pattern.compile("^@@ -\\d+(?:,\\d+)? \\+(\\d+)(?:,(\\d+))? @@.*$");
     private static final long RECENT_COMMAND_CONTEXT_MILLIS = 500L;
     private static final int AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD = 4;
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
@@ -275,6 +270,9 @@ public final class Ailoc2ProjectService implements Disposable {
                     + ", attributedFiles=" + summary.attributedChangedFileCount
                     + ", aiWeight=" + summary.aiWeightedChangedLines
                     + ", humanWeight=" + summary.humanWeightedChangedLines
+                    + ", aiLines=" + summary.aiAddedLineCount
+                    + ", humanLines=" + summary.humanAddedLineCount
+                    + ", unknownLines=" + summary.unknownAddedLineCount
                     + ", aiPercentage=" + String.format(Locale.ROOT, "%.2f", summary.aiPercentage)
             );
             return summary;
@@ -324,83 +322,10 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     private Ailoc2GitSummary summarizeDiff(Path repoRoot, String diffText) {
-        Set<String> changedFiles = new HashSet<>();
-        Set<String> attributedFiles = new HashSet<>();
-        String currentPath = null;
-        int currentLine = 0;
-        long aiWeight = 0L;
-        long humanWeight = 0L;
-        Map<String, Ailoc2GitSummary.FileWeights> fileWeights = new HashMap<>();
-
-        for (String line : diffText.split("\\R")) {
-            if (line.startsWith("+++ ")) {
-                currentPath = parseNewPath(line);
-                currentLine = 0;
-                if (currentPath != null && !storage.isTrackingIgnored(repoRoot, currentPath)) {
-                    changedFiles.add(currentPath);
-                }
-                else {
-                    currentPath = null;
-                }
-                continue;
-            }
-
-            Matcher matcher = HUNK_PATTERN.matcher(line);
-            if (matcher.matches()) {
-                currentLine = Integer.parseInt(matcher.group(1));
-                continue;
-            }
-
-            if (currentPath == null || currentLine <= 0) {
-                continue;
-            }
-
-            if (line.startsWith("+") && !line.startsWith("+++")) {
-                Ailoc2FileState state = storage.stateFor(repoRoot, currentPath);
-                Ailoc2AttributionBucket bucket = state.getLineBucket(currentLine);
-                if (bucket == Ailoc2AttributionBucket.UNKNOWN && !state.hasLineBucket(currentLine)) {
-                    bucket = state.fallbackBucket();
-                }
-                long weight = nonWhitespaceWeight(line.substring(1));
-                if (weight > 0L && bucket == Ailoc2AttributionBucket.AI) {
-                    aiWeight += weight;
-                    attributedFiles.add(currentPath);
-                    fileWeights.compute(
-                        currentPath,
-                        (path, weights) -> (weights == null ? new Ailoc2GitSummary.FileWeights(0L, 0L) : weights).addAi(weight)
-                    );
-                }
-                else if (weight > 0L && bucket == Ailoc2AttributionBucket.HUMAN) {
-                    humanWeight += weight;
-                    attributedFiles.add(currentPath);
-                    fileWeights.compute(
-                        currentPath,
-                        (path, weights) -> (weights == null ? new Ailoc2GitSummary.FileWeights(0L, 0L) : weights).addHuman(weight)
-                    );
-                }
-                currentLine++;
-            }
-            else if (line.startsWith(" ")) {
-                currentLine++;
-            }
-        }
-
-        return new Ailoc2GitSummary(changedFiles.size(), attributedFiles.size(), aiWeight, humanWeight, true, fileWeights);
-    }
-
-    private String parseNewPath(String line) {
-        String pathText = line.substring(4).trim();
-        if ("/dev/null".equals(pathText)) {
-            return null;
-        }
-        if (pathText.startsWith("b/")) {
-            return pathText.substring(2);
-        }
-        return pathText;
-    }
-
-    private long nonWhitespaceWeight(String text) {
-        return text.codePoints().filter(codePoint -> !Character.isWhitespace(codePoint)).count();
+        return new Ailoc2GitDiffSummarizer(
+            repoRelativePath -> storage.stateFor(repoRoot, repoRelativePath),
+            repoRelativePath -> storage.isTrackingIgnored(repoRoot, repoRelativePath)
+        ).summarize(diffText);
     }
 
     private ClassificationResult classifyChange(CommandContext commandContext, DocumentEvent event) {
