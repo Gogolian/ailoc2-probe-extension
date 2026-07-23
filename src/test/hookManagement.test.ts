@@ -179,8 +179,11 @@ test('installRepoHooks wraps existing unmanaged hook files and uninstall restore
     const installResult = await installRepoHooks({ repoRoot, wrapExistingHookFiles: true });
     const wrappedPreCommitContents = fs.readFileSync(preCommitPath, 'utf8');
     const delegateContentsBeforeUninstall = fs.readFileSync(delegatePath, 'utf8');
+    const delegateIsExecutableAfterInstall = hasPosixExecutePermission(delegatePath);
+    fs.chmodSync(delegatePath, 0o644);
     const rerunResult = await installRepoHooks({ repoRoot });
     const rerunPreCommitContents = fs.readFileSync(preCommitPath, 'utf8');
+    const delegateIsExecutableAfterRerun = hasPosixExecutePermission(delegatePath);
     const hasPostCommitBeforeUninstall = fs.existsSync(path.join(hooksDirectoryPath, 'post-commit'));
     const uninstallResult = await uninstallRepoHooks({ repoRoot });
 
@@ -191,10 +194,12 @@ test('installRepoHooks wraps existing unmanaged hook files and uninstall restore
         wrappedPreCommitIsManaged: wrappedPreCommitContents.includes('# AILoc2 managed hook: pre-commit'),
         wrappedPreCommitDelegatesOriginal: wrappedPreCommitContents.includes('# AILoc2 wrapped hook delegate: .githooks/pre-commit.ailoc2-delegate'),
         delegateContents: delegateContentsBeforeUninstall,
+        delegateIsExecutableAfterInstall,
         hasPostCommit: hasPostCommitBeforeUninstall,
         rerunStatus: rerunResult.status,
         rerunWrappedHookFiles: rerunResult.wrappedHookFiles,
         rerunPreservesDelegate: rerunPreCommitContents.includes('# AILoc2 wrapped hook delegate: .githooks/pre-commit.ailoc2-delegate'),
+        delegateIsExecutableAfterRerun,
         uninstallStatus: uninstallResult.status,
         restoredPreCommitContents: fs.readFileSync(preCommitPath, 'utf8'),
         delegateStillExists: fs.existsSync(delegatePath)
@@ -205,10 +210,12 @@ test('installRepoHooks wraps existing unmanaged hook files and uninstall restore
         wrappedPreCommitIsManaged: true,
         wrappedPreCommitDelegatesOriginal: true,
         delegateContents: originalPreCommitContents,
+        delegateIsExecutableAfterInstall: true,
         hasPostCommit: true,
         rerunStatus: 'already-installed',
         rerunWrappedHookFiles: [],
         rerunPreservesDelegate: true,
+        delegateIsExecutableAfterRerun: true,
         uninstallStatus: 'uninstalled',
         restoredPreCommitContents: originalPreCommitContents,
         delegateStillExists: false
@@ -332,6 +339,10 @@ function runGitAllowFailure(repoRoot: string, args: string[]): string {
     catch {
         return '';
     }
+}
+
+function hasPosixExecutePermission(filePath: string): boolean {
+    return process.platform === 'win32' || (fs.statSync(filePath).mode & 0o111) !== 0;
 }
 
 function writeRollingState(repoRoot: string, repoRelativePath: string, attribution: 'AI' | 'Human'): void {

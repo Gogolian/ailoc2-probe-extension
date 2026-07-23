@@ -330,7 +330,11 @@ async function ensureManagedRepoHookAssetsInstalled(
     await installManagedRuntimeAssets(repoRoot);
     await removeLegacyManagedRuntimeAssets(repoRoot);
 
-    await makeFilesExecutable(getRepoHooksDirectoryPath(repoRoot), REQUIRED_REPO_HOOK_FILES);
+    const wrappedDelegateFileNames = REQUIRED_REPO_HOOK_FILES.map(getWrappedHookDelegateFileName);
+    await makeFilesExecutable(
+        getRepoHooksDirectoryPath(repoRoot),
+        [...REQUIRED_REPO_HOOK_FILES, ...wrappedDelegateFileNames]
+    );
 }
 
 async function ensureManagedHookFile(
