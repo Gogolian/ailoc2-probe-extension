@@ -51,11 +51,17 @@ The plugin adds two explicit Tools menu actions:
 - **AILoc2 Probe: Recompute Repo Summary**
 - **AILoc2 Probe: Install Repo Hooks**
 - **AILoc2 Probe: Uninstall Repo Hooks**
+- **AILoc2 Probe: Install Workspace Claude Hooks**
+- **AILoc2 Probe: Uninstall Workspace Claude Hooks**
 
 The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged AI/Human attribution percentages on demand.
 
 If you want to exclude files or directories from IntelliJ metrics entirely, add gitignore-style rules to `.ailoc2-metrics/.ignore`. Ignored paths will not get IntelliJ rolling-state files and are skipped from the summary counts as well.
 
 Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, updates `.gitignore` for AILoc2 artifacts, writes managed hook files under `.githooks`, installs Claude Code hooks under `.claude` when the Claude runtime is bundled, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall. If `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` already exists and is not AILoc2-managed, the action asks before wrapping it. Approved wrapping preserves the original file as `.githooks/<hook>.ailoc2-delegate`, runs it after AILoc2, and restores it on uninstall. When automatic wrapping is unsafe, AILoc2 writes inactive `.githooks/<hook>.ailoc2-proposed` files for manual or Copilot-assisted merge.
+
+For a Claude Code session started from a directory that contains multiple repositories, open that directory as the IntelliJ project and run **Install Workspace Claude Hooks**. This writes only `<workspace>/.claude/settings.json` and `<workspace>/.claude/ailoc2-claude-code.cjs`; it does not scan or modify nested repositories. The shared runtime routes every edited file to its own Git root. Install **Repo Hooks** separately inside each nested repository so commits generate summaries and audit files.
+
+Both workspace hook actions are available from the **Tools** menu and from **Find Action** (`Ctrl+Shift+A`) by searching for `Install Workspace Claude Hooks` or `Uninstall Workspace Claude Hooks`.
 
 The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. Claude Code synchronizes its canonical rolling state into `.ailoc2-metrics/intellij-state`, allowing the runtime to refresh `.ailoc2-metrics/summary.json` from the staged diff and annotate terminal or external Git commit messages with the same `(AI: xx.xx%)` suffix used by IntelliJ commit handling. Each summary includes exact per-file AI/Human weights. Before committed state is cleared, the summary used for the commit is archived as `.ailoc2-metrics/commit-audits/<commit-hash>.json`.

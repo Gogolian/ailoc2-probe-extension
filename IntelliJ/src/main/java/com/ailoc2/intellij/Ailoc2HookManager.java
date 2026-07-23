@@ -18,6 +18,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 final class Ailoc2HookManager {
@@ -170,13 +171,22 @@ final class Ailoc2HookManager {
         Path hooksDirectoryPath = getRepoHooksDirectoryPath(normalizedRepoRoot);
         String currentLocalHooksPath = getGitConfigValue(normalizedRepoRoot, CORE_HOOKS_PATH_CONFIG_KEY, GitConfigScope.LOCAL);
         String currentEffectiveHooksPath = getGitConfigValue(normalizedRepoRoot, CORE_HOOKS_PATH_CONFIG_KEY, GitConfigScope.EFFECTIVE);
-        boolean removedManagedHookAssets = removeManagedHookAssets(normalizedRepoRoot);
+        boolean removedManagedHookAssets;
+        IOException managedAssetsError = null;
+        try {
+            removedManagedHookAssets = removeManagedHookAssets(normalizedRepoRoot);
+        }
+        catch (IOException error) {
+            removedManagedHookAssets = true;
+            managedAssetsError = error;
+        }
 
         if (!isRepoManagedHooksPath(normalizedRepoRoot, currentLocalHooksPath)) {
             if (removedManagedHookAssets) {
                 unsetLocalGitConfigValue(normalizedRepoRoot, PREVIOUS_LOCAL_HOOKS_PATH_CONFIG_KEY, true);
                 unsetLocalGitConfigValue(normalizedRepoRoot, DELEGATE_LOCAL_HOOKS_PATH_CONFIG_KEY, true);
             }
+            throwManagedAssetsError(managedAssetsError);
 
             return new HookUninstallResult(
                 HookUninstallStatus.NOT_INSTALLED,
@@ -194,6 +204,7 @@ final class Ailoc2HookManager {
             setLocalGitConfigValue(normalizedRepoRoot, CORE_HOOKS_PATH_CONFIG_KEY, previousLocalHooksPath);
             unsetLocalGitConfigValue(normalizedRepoRoot, PREVIOUS_LOCAL_HOOKS_PATH_CONFIG_KEY, true);
             unsetLocalGitConfigValue(normalizedRepoRoot, DELEGATE_LOCAL_HOOKS_PATH_CONFIG_KEY, true);
+            throwManagedAssetsError(managedAssetsError);
             return new HookUninstallResult(
                 HookUninstallStatus.RESTORED_PREVIOUS,
                 normalizedRepoRoot,
@@ -208,6 +219,7 @@ final class Ailoc2HookManager {
         unsetLocalGitConfigValue(normalizedRepoRoot, CORE_HOOKS_PATH_CONFIG_KEY, true);
         unsetLocalGitConfigValue(normalizedRepoRoot, PREVIOUS_LOCAL_HOOKS_PATH_CONFIG_KEY, true);
         unsetLocalGitConfigValue(normalizedRepoRoot, DELEGATE_LOCAL_HOOKS_PATH_CONFIG_KEY, true);
+        throwManagedAssetsError(managedAssetsError);
 
         return new HookUninstallResult(
             HookUninstallStatus.UNINSTALLED,
@@ -217,6 +229,40 @@ final class Ailoc2HookManager {
             getGitConfigValue(normalizedRepoRoot, CORE_HOOKS_PATH_CONFIG_KEY, GitConfigScope.EFFECTIVE),
             null,
             removedManagedHookAssets
+        );
+    }
+
+    private void throwManagedAssetsError(IOException error) throws IOException {
+        if (error != null) {
+            throw new IOException("Git hook configuration was cleaned up, but some managed AILoc2 assets could not be removed.", error);
+        }
+    }
+
+    WorkspaceClaudeInstallResult installWorkspaceClaudeHooks(Path workspaceRoot) throws IOException {
+        Path normalizedWorkspaceRoot = workspaceRoot.toAbsolutePath().normalize();
+        if (!Files.isDirectory(normalizedWorkspaceRoot)) {
+            throw new IOException("The workspace root is not an existing directory: " + normalizedWorkspaceRoot);
+        }
+
+        assertClaudeRuntimeResourceAvailable();
+        boolean alreadyInstalled = isManagedClaudeCodeInstalled(normalizedWorkspaceRoot);
+        installManagedClaudeCodeAssets(normalizedWorkspaceRoot);
+        markExecutableBestEffort(getClaudeRuntimePath(normalizedWorkspaceRoot));
+        return new WorkspaceClaudeInstallResult(
+            alreadyInstalled ? WorkspaceClaudeInstallStatus.ALREADY_INSTALLED : WorkspaceClaudeInstallStatus.INSTALLED,
+            normalizedWorkspaceRoot,
+            getClaudeSettingsPath(normalizedWorkspaceRoot),
+            getClaudeRuntimePath(normalizedWorkspaceRoot)
+        );
+    }
+
+    WorkspaceClaudeUninstallResult uninstallWorkspaceClaudeHooks(Path workspaceRoot) throws IOException {
+        Path normalizedWorkspaceRoot = workspaceRoot.toAbsolutePath().normalize();
+        boolean removed = removeClaudeCodeAssets(normalizedWorkspaceRoot);
+        return new WorkspaceClaudeUninstallResult(
+            removed ? WorkspaceClaudeUninstallStatus.UNINSTALLED : WorkspaceClaudeUninstallStatus.NOT_INSTALLED,
+            normalizedWorkspaceRoot,
+            removed
         );
     }
 
@@ -388,6 +434,8 @@ final class Ailoc2HookManager {
     }
 
     private void installManagedClaudeCodeAssets(Path repoRoot) throws IOException {
+        Path settingsPath = getClaudeSettingsPath(repoRoot);
+        JsonObject settings = readClaudeSettings(settingsPath);
         Path claudeDirectory = getClaudeDirectoryPath(repoRoot);
         Files.createDirectories(claudeDirectory);
         try (InputStream runtimeStream = Ailoc2HookManager.class.getResourceAsStream(CLAUDE_RUNTIME_RESOURCE_PATH)) {
@@ -397,8 +445,6 @@ final class Ailoc2HookManager {
             Files.copy(runtimeStream, getClaudeRuntimePath(repoRoot), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
 
-        Path settingsPath = getClaudeSettingsPath(repoRoot);
-        JsonObject settings = readClaudeSettings(settingsPath);
         JsonObject hooks = settings.has("hooks") && settings.get("hooks").isJsonObject()
             ? settings.getAsJsonObject("hooks")
             : new JsonObject();
@@ -412,17 +458,64 @@ final class Ailoc2HookManager {
     private boolean removeClaudeCodeAssets(Path repoRoot) throws IOException {
         boolean removed = false;
         Path settingsPath = getClaudeSettingsPath(repoRoot);
-        if (Files.exists(settingsPath)) {
-            JsonObject settings = readClaudeSettings(settingsPath);
-            if (settings.has("hooks") && settings.get("hooks").isJsonObject()) {
-                removeManagedClaudeHookCommands(settings.getAsJsonObject("hooks"));
-                Files.writeString(settingsPath, GSON.toJson(settings) + "\n", StandardCharsets.UTF_8);
-                removed = true;
+        IOException settingsError = null;
+        try {
+            if (Files.exists(settingsPath)) {
+                JsonObject settings = readClaudeSettings(settingsPath);
+                if (settings.has("hooks") && settings.get("hooks").isJsonObject()) {
+                    removeManagedClaudeHookCommands(settings.getAsJsonObject("hooks"));
+                    Files.writeString(settingsPath, GSON.toJson(settings) + "\n", StandardCharsets.UTF_8);
+                    removed = true;
+                }
             }
         }
+        catch (IOException error) {
+            settingsError = error;
+        }
 
-        removed = Files.deleteIfExists(getClaudeRuntimePath(repoRoot)) || removed;
+        try {
+            removed = Files.deleteIfExists(getClaudeRuntimePath(repoRoot)) || removed;
+        }
+        catch (IOException runtimeError) {
+            if (settingsError != null) {
+                runtimeError.addSuppressed(settingsError);
+            }
+            throw runtimeError;
+        }
+        if (settingsError != null) {
+            throw settingsError;
+        }
         return removed;
+    }
+
+    private boolean isManagedClaudeCodeInstalled(Path root) throws IOException {
+        if (!Files.isRegularFile(getClaudeRuntimePath(root))) {
+            return false;
+        }
+        JsonObject settings = readClaudeSettings(getClaudeSettingsPath(root));
+        if (!settings.has("hooks") || !settings.get("hooks").isJsonObject()) {
+            return false;
+        }
+        for (JsonElement eventHooks : settings.getAsJsonObject("hooks").entrySet().stream().map(Map.Entry::getValue).toList()) {
+            if (!eventHooks.isJsonArray()) {
+                continue;
+            }
+            for (JsonElement groupElement : eventHooks.getAsJsonArray()) {
+                if (!groupElement.isJsonObject()) {
+                    continue;
+                }
+                JsonObject group = groupElement.getAsJsonObject();
+                if (!group.has("hooks") || !group.get("hooks").isJsonArray()) {
+                    continue;
+                }
+                for (JsonElement commandElement : group.getAsJsonArray("hooks")) {
+                    if (isManagedClaudeCommand(commandElement)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private JsonObject readClaudeSettings(Path settingsPath) throws IOException {
@@ -432,10 +525,13 @@ final class Ailoc2HookManager {
 
         try {
             JsonElement parsed = JsonParser.parseString(Files.readString(settingsPath, StandardCharsets.UTF_8));
-            return parsed.isJsonObject() ? parsed.getAsJsonObject() : new JsonObject();
+            if (!parsed.isJsonObject()) {
+                throw new IOException("Existing Claude settings must contain a JSON object: " + settingsPath);
+            }
+            return parsed.getAsJsonObject();
         }
-        catch (RuntimeException ignored) {
-            return new JsonObject();
+        catch (RuntimeException error) {
+            throw new IOException("AILoc2 could not parse existing Claude settings: " + settingsPath, error);
         }
     }
 
@@ -1128,6 +1224,16 @@ final class Ailoc2HookManager {
         NOT_INSTALLED
     }
 
+    enum WorkspaceClaudeInstallStatus {
+        INSTALLED,
+        ALREADY_INSTALLED
+    }
+
+    enum WorkspaceClaudeUninstallStatus {
+        UNINSTALLED,
+        NOT_INSTALLED
+    }
+
     record HookInstallResult(
         HookInstallStatus status,
         Path repoRoot,
@@ -1149,6 +1255,19 @@ final class Ailoc2HookManager {
         String currentEffectiveHooksPath,
         String restoredHooksPath,
         boolean removedManagedHookAssets
+    ) {}
+
+    record WorkspaceClaudeInstallResult(
+        WorkspaceClaudeInstallStatus status,
+        Path workspaceRoot,
+        Path settingsPath,
+        Path runtimePath
+    ) {}
+
+    record WorkspaceClaudeUninstallResult(
+        WorkspaceClaudeUninstallStatus status,
+        Path workspaceRoot,
+        boolean removedManagedClaudeAssets
     ) {}
 
     private enum GitConfigScope {

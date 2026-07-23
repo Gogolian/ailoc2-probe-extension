@@ -43,6 +43,14 @@ It adds managed hooks for `Write|Edit|MultiEdit`:
 
 Existing Claude settings and unrelated hooks are preserved. Re-running install first removes older AILoc2-managed hook entries, then adds the current ones. Uninstall removes only hook commands that reference `ailoc2-claude-code.cjs`.
 
+## Aggregate workspace sessions
+
+Claude Code loads project hooks from the directory where its session starts. If that directory contains several nested Git repositories, repo-local `.claude/settings.json` files are not automatically used for the parent session.
+
+In the IntelliJ plugin, open the aggregate directory and run **Tools → AILoc2 Probe: Install Workspace Claude Hooks**. The action installs the managed settings and runtime only under the aggregate directory's `.claude` folder. The runtime resolves the Git root from every edited file and stores attribution in that nested repository's `.ailoc2-metrics` directory.
+
+Workspace installation is intentionally Claude-only: it does not search nested directories, change their `.gitignore`, write `.githooks`, or modify `core.hooksPath`. Run **Install Repo Hooks** separately in every nested repository that should calculate commit summaries. After installing workspace hooks, start a new Claude Code session from the aggregate directory.
+
 ## Attribution behavior
 
 Claude Code is the provenance signal. Successful `Write`, `Edit`, and `MultiEdit` file mutations are recorded as AI-authored edits without relying on size heuristics.

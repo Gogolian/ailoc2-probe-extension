@@ -47,6 +47,17 @@ When automatic wrapping is unsafe, AILoc2 prepares `.githooks/migration-package/
 11. optionally record a delegated repo-local hooks path to chain after AILoc2 runs
 12. set local `core.hooksPath` to `.githooks`
 
+## Aggregate workspace install
+
+The IntelliJ **Install Workspace Claude Hooks** action supports Claude Code sessions started above multiple nested repositories. It writes only:
+
+- `<workspace>/.claude/settings.json`
+- `<workspace>/.claude/ailoc2-claude-code.cjs`
+
+Existing unrelated Claude settings and hook commands are preserved, and reinstalling is idempotent. Malformed existing settings are reported instead of being overwritten. Uninstall removes only AILoc2-managed Claude commands and the managed runtime.
+
+Workspace installation never recursively modifies nested repositories. In particular, it does not write nested `.githooks`, change `core.hooksPath`, or alter nested `.gitignore` files. Git hooks remain a separate, explicit per-repository installation.
+
 ## Installation statuses
 
 | Status | Meaning |

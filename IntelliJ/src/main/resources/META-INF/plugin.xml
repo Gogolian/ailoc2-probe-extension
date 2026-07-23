@@ -33,5 +33,21 @@
             description="Uninstall AILoc2 Git hooks from the current repository">
       <add-to-group group-id="ToolsMenu" anchor="last" />
     </action>
+    <action id="Ailoc2.InstallWorkspaceHooks"
+            class="com.ailoc2.intellij.Ailoc2InstallWorkspaceHooksAction"
+            text="AILoc2 Probe: Install Workspace Claude Hooks"
+            description="Install Claude Code attribution hooks at an aggregate workspace root without changing nested Git repositories">
+      <synonym text="Install Workspace Claude Hooks" />
+      <synonym text="AILoc2 Workspace Hooks Install" />
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
+    <action id="Ailoc2.UninstallWorkspaceHooks"
+            class="com.ailoc2.intellij.Ailoc2UninstallWorkspaceHooksAction"
+            text="AILoc2 Probe: Uninstall Workspace Claude Hooks"
+            description="Remove aggregate workspace Claude Code attribution hooks without changing nested Git repositories">
+      <synonym text="Uninstall Workspace Claude Hooks" />
+      <synonym text="AILoc2 Workspace Hooks Uninstall" />
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
   </actions>
 </idea-plugin>

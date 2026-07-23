@@ -160,7 +160,7 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     public Path projectRepoRoot() {
-        Path basePath = project.getBasePath() == null ? null : Path.of(project.getBasePath());
+        Path basePath = projectBasePath();
         if (basePath != null) {
             Path root = findRepoRoot(basePath);
             if (root != null) {
@@ -168,6 +168,10 @@ public final class Ailoc2ProjectService implements Disposable {
             }
         }
         return null;
+    }
+
+    public Path projectBasePath() {
+        return project.getBasePath() == null ? null : Path.of(project.getBasePath()).toAbsolutePath().normalize();
     }
 
     @Override

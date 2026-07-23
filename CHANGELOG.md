@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## [1.0.17] - 2026-07-22
+- Add explicit Find Action aliases for installing and uninstalling aggregate workspace Claude hooks in IntelliJ.
+
+## [1.0.16] - 2026-07-20
+- Add aggregate workspace Claude Code hook installation and removal to the IntelliJ plugin.
+- Route edits from one parent Claude Code session to each nested file's Git repository without recursively changing repository configuration.
+- Preserve unrelated Claude settings and refuse to overwrite malformed settings.
+
 ## [1.0.15] - 2026-07-20
 - Preserve Claude Code attribution when IntelliJ reloads externally edited files.
 - Keep line attribution aligned after inserted, removed, or replaced lines.
