@@ -5,12 +5,13 @@ import { readRepoHookSummaryFile } from '../metrics/summary';
 
 export const DEFAULT_AI_PLACEHOLDER_LABEL = 'unavailable';
 
-const AI_SUBJECT_SUFFIX_PATTERN = /(?:^|\s+)(?:(?:\(AI:? [^)]*\)|\(AI lines: [^)]*\)|\(H lines: [^)]*\))(?:\s+|$))+$/u;
+const AI_SUBJECT_SUFFIX_PATTERN = /(?:^|\s+)(?:(?:\(AI:? [^)]*\)|\(AI lines: [^)]*\)|\(H lines: [^)]*\)|\(AI-Lines: [^)]*\))(?:\s+|$))+$/u;
+const AI_LINES_BODY_PATTERN = /^\s*\(AI-Lines: [^)]*\)\s*$/u;
 
 export type CommitMessageAnnotationResult = {
     messageFilePath: string;
     summaryFilePath: string;
-    suffixText: string;
+    annotationText: string;
     usedPlaceholder: boolean;
     summaryAvailable: boolean;
 };
@@ -23,82 +24,104 @@ export async function annotateCommitMessageFile(args: {
     const summaryFilePath = getMetricsSummaryFilePath(args.repoRoot);
     const summary = await readRepoHookSummaryFile(args.repoRoot);
     const hasGitSummary = summary?.isGitSummaryAvailable === true;
-    const suffix = createAiCommitSuffix({
-        aiPercentage: hasGitSummary ? summary.staged.aiPercentage : null,
+    const annotation = createAiLinesAnnotation({
         aiLineCount: hasGitSummary ? summary.staged.aiAddedLineCount : null,
         humanLineCount: hasGitSummary ? summary.staged.humanAddedLineCount : null,
+        unknownLineCount: hasGitSummary ? summary.staged.unknownAddedLineCount : null,
         placeholderLabel: args.placeholderLabel
     });
 
-    await applyAiSuffixToCommitMessageFile({
+    await applyAiLinesAnnotationToCommitMessageFile({
         messageFilePath: args.messageFilePath,
-        suffixText: suffix.suffixText
+        annotationText: annotation.annotationText
     });
 
     return {
         messageFilePath: args.messageFilePath,
         summaryFilePath,
-        suffixText: suffix.suffixText,
-        usedPlaceholder: suffix.usedPlaceholder,
-        summaryAvailable: hasGitSummary && !suffix.usedPlaceholder
+        annotationText: annotation.annotationText,
+        usedPlaceholder: annotation.usedPlaceholder,
+        summaryAvailable: hasGitSummary && !annotation.usedPlaceholder
     };
 }
 
-export async function applyAiSuffixToCommitMessageFile(args: {
+export async function applyAiLinesAnnotationToCommitMessageFile(args: {
     messageFilePath: string;
-    suffixText: string;
+    annotationText: string;
 }): Promise<void> {
     const currentMessageText = await fs.promises.readFile(args.messageFilePath, 'utf8');
-    const nextMessageText = applyAiSuffixToCommitMessage(currentMessageText, args.suffixText);
+    const nextMessageText = applyAiLinesAnnotationToCommitMessage(currentMessageText, args.annotationText);
     if (nextMessageText !== currentMessageText) {
         await fs.promises.writeFile(args.messageFilePath, nextMessageText, 'utf8');
     }
 }
 
-export function applyAiSuffixToCommitMessage(messageText: string, suffixText: string): string {
+export function applyAiLinesAnnotationToCommitMessage(messageText: string, annotationText: string): string {
     const newline = detectNewline(messageText);
     const lines = messageText.split(/\r\n|\r|\n/u);
-
     const normalizedSubject = stripAiSuffix(lines[0] ?? '');
-    lines[0] = normalizedSubject.length > 0
-        ? `${normalizedSubject}${suffixText}`
-        : suffixText.trimStart();
+    const originalBodyLines = lines.slice(1);
+    const bodyLines: string[] = [];
+    for (let index = 0; index < originalBodyLines.length; index++) {
+        const line = originalBodyLines[index];
+        if (!AI_LINES_BODY_PATTERN.test(line)) {
+            bodyLines.push(line);
+            continue;
+        }
 
-    return lines.join(newline);
+        if (
+            bodyLines.at(-1)?.trim().length === 0
+            && originalBodyLines[index + 1]?.trim().length === 0
+        ) {
+            bodyLines.pop();
+        }
+    }
+
+    while (bodyLines.length > 0 && bodyLines[0].trim().length === 0) {
+        bodyLines.shift();
+    }
+
+    const annotatedLines = [normalizedSubject, '', annotationText];
+    if (bodyLines.length > 0) {
+        annotatedLines.push('', ...bodyLines);
+    } else if (endsWithNewline(messageText)) {
+        annotatedLines.push('');
+    }
+
+    return annotatedLines.join(newline);
 }
 
-export function createAiCommitSuffix(args: {
-    aiPercentage: number | null;
+export function createAiLinesAnnotation(args: {
     aiLineCount: number | null;
     humanLineCount: number | null;
+    unknownLineCount: number | null;
     placeholderLabel?: string;
 }): {
-    suffixText: string;
+    annotationText: string;
     usedPlaceholder: boolean;
 } {
-    if (
-        isValidPercentage(args.aiPercentage)
-        && isValidLineCount(args.aiLineCount)
-        && isValidLineCount(args.humanLineCount)
-    ) {
+    const totalLineCount = sumLineCounts(args.aiLineCount, args.humanLineCount, args.unknownLineCount);
+    if (isValidLineCount(args.aiLineCount) && totalLineCount !== null) {
         return {
-            suffixText: ` (AI: ${args.aiPercentage.toFixed(2)}%) (AI lines: ${args.aiLineCount}) (H lines: ${args.humanLineCount})`,
+            annotationText: `(AI-Lines: ${args.aiLineCount}/${totalLineCount})`,
             usedPlaceholder: false
         };
     }
 
     const placeholderLabel = args.placeholderLabel ?? DEFAULT_AI_PLACEHOLDER_LABEL;
     return {
-        suffixText: ` (AI: ${placeholderLabel}) (AI lines: ${placeholderLabel}) (H lines: ${placeholderLabel})`,
+        annotationText: `(AI-Lines: ${placeholderLabel})`,
         usedPlaceholder: true
     };
 }
 
-function isValidPercentage(value: number | null): value is number {
-    return typeof value === 'number'
-        && Number.isFinite(value)
-        && value >= 0
-        && value <= 100;
+function sumLineCounts(...lineCounts: Array<number | null>): number | null {
+    if (!lineCounts.every(isValidLineCount)) {
+        return null;
+    }
+
+    const totalLineCount = lineCounts.reduce<number>((total, lineCount) => total + lineCount, 0);
+    return Number.isSafeInteger(totalLineCount) ? totalLineCount : null;
 }
 
 function isValidLineCount(value: number | null): value is number {
@@ -121,4 +144,8 @@ function detectNewline(text: string): string {
     }
 
     return '\n';
+}
+
+function endsWithNewline(text: string): boolean {
+    return /(?:\r\n|\r|\n)$/u.test(text);
 }

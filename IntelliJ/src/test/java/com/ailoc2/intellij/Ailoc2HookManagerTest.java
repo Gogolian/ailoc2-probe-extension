@@ -14,23 +14,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class Ailoc2HookManagerTest {
     @Test
-    void generatedHooksContainTheCompoundTrailerContract() {
+    void generatedHooksContainTheAiLinesBodyContract() {
         Ailoc2HookManager manager = new Ailoc2HookManager();
 
         String commitMsgHook = manager.createManagedCommitMsgHookScript();
         String runtime = manager.createManagedRuntimeScript();
 
-        assertTrue(commitMsgHook.contains("(AI: unavailable) (AI lines: unavailable) (H lines: unavailable)"));
-        assertTrue(commitMsgHook.contains("append_placeholder_suffix"));
-        assertTrue(commitMsgHook.contains("AI lines: [^)]*"));
+        assertTrue(commitMsgHook.contains("(AI-Lines: unavailable)"));
+        assertTrue(commitMsgHook.contains("append_placeholder_annotation"));
+        assertTrue(commitMsgHook.contains("AI-Lines: [^)]*"));
         assertTrue(runtime.contains("\"aiAddedLineCount\""));
         assertTrue(runtime.contains("\"humanAddedLineCount\""));
         assertTrue(runtime.contains("\"unknownAddedLineCount\""));
-        assertTrue(runtime.contains("(AI: $AI_DISPLAY%) (AI lines: $AI_LINE_COUNT) (H lines: $HUMAN_LINE_COUNT)"));
+        assertTrue(runtime.contains("(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)"));
     }
 
     @Test
-    void commitMsgHookUsesTheFullFallbackWhenRuntimeIsMissing(@TempDir Path directory) throws Exception {
+    void commitMsgHookWritesFallbackToBodyWhenRuntimeIsMissing(@TempDir Path directory) throws Exception {
         String shell = findShell();
         Assumptions.assumeTrue(shell != null, "A POSIX shell is required for the generated hook smoke test");
         Path hookPath = directory.resolve("commit-msg");
@@ -49,7 +49,7 @@ class Ailoc2HookManagerTest {
         run(directory, shell, hookPath.toString(), messagePath.toString());
 
         assertEquals(
-            "Ship it (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)\n\nBody\n",
+            "Ship it\n\n(AI-Lines: unavailable)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
     }
@@ -86,7 +86,7 @@ class Ailoc2HookManagerTest {
         run(repoRoot, shell, runtimePath.toString(), "annotate-commit-message", messagePath.toString());
 
         assertEquals(
-            "Ship it (AI: 50.00%) (AI lines: 1) (H lines: 1)\n\nBody\n",
+            "Ship it\n\n(AI-Lines: 1/3)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
         String summary = Files.readString(repoRoot.resolve(".ailoc2-metrics/summary.json"), StandardCharsets.UTF_8);

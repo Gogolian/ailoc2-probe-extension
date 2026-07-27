@@ -722,31 +722,31 @@ final class Ailoc2HookManager {
 
             MESSAGE_FILE="$1"
             RUNTIME_PATH="./.githooks/%s"
-            PLACEHOLDER_SUFFIX=' (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)'
+            PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
 
             %s
 
-            append_placeholder_suffix() {
+            append_placeholder_annotation() {
                 if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
                     return 0
                 fi
 
                 TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]))*$//')
+                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
                 {
-                    if [ -n "$SUBJECT_LINE" ]; then
-                        printf '%%s%%s\\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUFFIX"
-                    else
-                        printf '%%s\\n' "${PLACEHOLDER_SUFFIX# }"
-                    fi
-                    sed '1d' "$MESSAGE_FILE"
+                    printf '%%s\n\n%%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_ANNOTATION"
+                    sed '1d' "$MESSAGE_FILE" | awk '
+                        /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
+                        !started && /^[[:space:]]*$/ { next }
+                        { if (!started) { print ""; started = 1 } print }
+                    '
                 } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"
             }
 
             if [ -n "$MESSAGE_FILE" ] && [ -f "$RUNTIME_PATH" ]; then
-                sh "$RUNTIME_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_suffix
+                sh "$RUNTIME_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_annotation
             elif [ -n "$MESSAGE_FILE" ]; then
-                append_placeholder_suffix
+                append_placeholder_annotation
                 printf '%%s\\n' 'AILoc2 commit-msg warning: IntelliJ hook runtime is unavailable; using unavailable attribution.' >&2
             fi
 
@@ -786,7 +786,7 @@ final class Ailoc2HookManager {
             SUMMARY_FILE=".ailoc2-metrics/summary.json"
             STATE_DIR=".ailoc2-metrics/intellij-state"
             AUDIT_DIR=".ailoc2-metrics/commit-audits"
-            PLACEHOLDER_SUFFIX=' (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)'
+            PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
 
             refresh_summary() {
                 REPO_ROOT=$(pwd)
@@ -964,23 +964,23 @@ final class Ailoc2HookManager {
                 cp "$SUMMARY_FILE" "$AUDIT_DIR/pending.json"
             }
 
-            append_suffix() {
+            append_annotation() {
                 MESSAGE_FILE="$1"
-                SUFFIX="$2"
+                ANNOTATION="$2"
                 if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
                     return 0
                 fi
 
                 TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]))*$//')
+                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
 
                 {
-                    if [ -n "$SUBJECT_LINE" ]; then
-                        printf '%s%s\\n' "$SUBJECT_LINE" "$SUFFIX"
-                    else
-                        printf '%s\\n' "${SUFFIX# }"
-                    fi
-                    sed '1d' "$MESSAGE_FILE"
+                    printf '%s\n\n%s\n' "$SUBJECT_LINE" "$ANNOTATION"
+                    sed '1d' "$MESSAGE_FILE" | awk '
+                        /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
+                        !started && /^[[:space:]]*$/ { next }
+                        { if (!started) { print ""; started = 1 } print }
+                    '
                 } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"
             }
 
@@ -992,13 +992,14 @@ final class Ailoc2HookManager {
                     AI_PERCENTAGE=$(sed -n 's/.*"aiPercentage"[[:space:]]*:[[:space:]]*\\([0-9.][0-9.]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     AI_LINE_COUNT=$(sed -n 's/.*"aiAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     HUMAN_LINE_COUNT=$(sed -n 's/.*"humanAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
-                    if [ -n "$AI_PERCENTAGE" ] && [ -n "$AI_LINE_COUNT" ] && [ -n "$HUMAN_LINE_COUNT" ]; then
-                        AI_DISPLAY=$(awk -v value="$AI_PERCENTAGE" 'BEGIN { printf "%.2f", value }')
-                        append_suffix "$MESSAGE_FILE" " (AI: $AI_DISPLAY%) (AI lines: $AI_LINE_COUNT) (H lines: $HUMAN_LINE_COUNT)"
+                    UNKNOWN_LINE_COUNT=$(sed -n 's/.*"unknownAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
+                    if [ -n "$AI_PERCENTAGE" ] && [ -n "$AI_LINE_COUNT" ] && [ -n "$HUMAN_LINE_COUNT" ] && [ -n "$UNKNOWN_LINE_COUNT" ]; then
+                        TOTAL_LINE_COUNT=$((AI_LINE_COUNT + HUMAN_LINE_COUNT + UNKNOWN_LINE_COUNT))
+                        append_annotation "$MESSAGE_FILE" "(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)"
                         return 0
                     fi
                 fi
-                append_suffix "$MESSAGE_FILE" "$PLACEHOLDER_SUFFIX"
+                append_annotation "$MESSAGE_FILE" "$PLACEHOLDER_ANNOTATION"
             }
 
             # Convert a repo-relative path into the sanitized filename used under intellij-state.
@@ -1052,7 +1053,7 @@ final class Ailoc2HookManager {
                     annotate_commit_message "$2"
                     ;;
                 append-placeholder)
-                    append_suffix "$2" "$PLACEHOLDER_SUFFIX"
+                    append_annotation "$2" "$PLACEHOLDER_ANNOTATION"
                     ;;
                 *)
                     printf '%s\\n' 'Usage: ailoc2-intellij-hook-runtime.sh <refresh-summary|prepare-commit-audit|finalize-commit|annotate-commit-message <messageFile>|append-placeholder <messageFile>>' >&2

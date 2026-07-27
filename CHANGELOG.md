@@ -7,6 +7,9 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Write the case-sensitive `(AI-Lines: AI/total)` marker to commit message bodies in both VS Code and IntelliJ flows.
+- Include AI, Human, and Unknown non-blank added lines in the total while keeping only AI lines in the numerator.
+
 ## [1.0.18] - 2026-07-23
 - Add AI-authored and human-authored non-blank staged-line counts to VS Code and IntelliJ commit subjects.
 - Persist Unknown added-line counts in summaries and commit audits without assigning ambiguous work to either author.

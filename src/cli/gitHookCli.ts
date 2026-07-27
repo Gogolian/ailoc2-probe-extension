@@ -2,8 +2,8 @@ import * as path from 'path';
 
 import {
     annotateCommitMessageFile,
-    applyAiSuffixToCommitMessageFile,
-    createAiCommitSuffix,
+    applyAiLinesAnnotationToCommitMessageFile,
+    createAiLinesAnnotation,
     DEFAULT_AI_PLACEHOLDER_LABEL
 } from '../hooks/commitMessage';
 import {
@@ -82,24 +82,24 @@ async function runAnnotateCommitMessage(
             messageFilePath,
             placeholderLabel: DEFAULT_AI_PLACEHOLDER_LABEL
         });
-        console.log(annotationResult.suffixText);
+        console.log(annotationResult.annotationText);
         return 0;
     }
     catch (error) {
         console.error(`AILoc2 annotate-commit-message warning: ${toErrorMessage(error)}`);
 
         try {
-            const placeholderSuffix = createAiCommitSuffix({
-                aiPercentage: null,
+            const placeholderAnnotation = createAiLinesAnnotation({
                 aiLineCount: null,
                 humanLineCount: null,
+                unknownLineCount: null,
                 placeholderLabel: DEFAULT_AI_PLACEHOLDER_LABEL
             });
-            await applyAiSuffixToCommitMessageFile({
+            await applyAiLinesAnnotationToCommitMessageFile({
                 messageFilePath,
-                suffixText: placeholderSuffix.suffixText
+                annotationText: placeholderAnnotation.annotationText
             });
-            console.log(placeholderSuffix.suffixText);
+            console.log(placeholderAnnotation.annotationText);
             return 0;
         }
         catch (fallbackError) {

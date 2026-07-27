@@ -44,9 +44,10 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
         hasClaudeCaptureHook: claudeSettings.hooks?.PreToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('capture-before'))),
         hasClaudeRecordHook: claudeSettings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('record-edit'))),
         usesCombinedPreCommit: fs.readFileSync(path.join(repoRoot, '.githooks', 'pre-commit'), 'utf8').includes('prepare-commit >/dev/null'),
-        hasFullPlaceholder: commitMsgHook.includes("PLACEHOLDER_SUFFIX=' (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)'"),
+        hasUnavailableAnnotation: commitMsgHook.includes("PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'"),
         stripsLegacySuffix: commitMsgHook.includes('AI:? [^)]*'),
-        stripsLineSuffixes: commitMsgHook.includes('AI lines: [^)]*') && commitMsgHook.includes('H lines: [^)]*')
+        stripsLineSuffixes: commitMsgHook.includes('AI lines: [^)]*') && commitMsgHook.includes('H lines: [^)]*'),
+        writesAnnotationToBody: commitMsgHook.includes("printf '%s\n\n%s\n'")
     }, {
         status: 'installed',
         gitignoreUpdated: true,
@@ -57,9 +58,10 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
         hasClaudeCaptureHook: true,
         hasClaudeRecordHook: true,
         usesCombinedPreCommit: true,
-        hasFullPlaceholder: true,
+        hasUnavailableAnnotation: true,
         stripsLegacySuffix: true,
-        stripsLineSuffixes: true
+        stripsLineSuffixes: true,
+        writesAnnotationToBody: true
     });
 });
 
@@ -91,12 +93,12 @@ test('commit-msg refresh includes files staged by a delegated pre-commit hook', 
     const installResult = await installRepoHooks({ repoRoot, wrapExistingHookFiles: true });
 
     runGit(repoRoot, ['commit', '-m', 'final index attribution']);
-    const commitSubject = runGit(repoRoot, ['log', '-1', '--pretty=%s']).trim();
+    const commitMessage = runGit(repoRoot, ['log', '-1', '--pretty=%B']).trim();
 
     assert.equal(installResult.status, 'installed');
     assert.equal(
-        commitSubject,
-        'final index attribution (AI: 50.00%) (AI lines: 1) (H lines: 1)'
+        commitMessage,
+        'final index attribution\n\n(AI-Lines: 1/2)'
     );
 });
 
@@ -112,7 +114,7 @@ test('installRepoHooks upgrades a markerless legacy commit-msg hook', async () =
 
     assert.equal(installResult.status, 'installed');
     assert.match(upgradedHook, /# AILoc2 managed hook: commit-msg/u);
-    assert.ok(upgradedHook.includes('(AI lines: unavailable) (H lines: unavailable)'));
+    assert.ok(upgradedHook.includes('(AI-Lines: unavailable)'));
 });
 
 test('uninstallRepoHooks removes managed Claude runtime without creating missing Claude settings', async () => {

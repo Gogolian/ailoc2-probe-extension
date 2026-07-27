@@ -265,7 +265,7 @@ The commit trailer also reports literal AI and Human line counts. These are sepa
 - aggregate fallback paths distribute the integer line total using the same AI/Human magnitude ratio used by the existing percentage fallback
 - largest-remainder allocation keeps the total integral; when a single remaining line is exactly tied, it stays Unknown rather than favoring either author
 
-For every available slice, `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount` equals the eligible non-blank added-line total. Unknown is persisted for auditability but omitted from the commit subject.
+For every available slice, `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount` equals the eligible non-blank added-line total. This sum is the denominator in the commit body marker `(AI-Lines: AI/total)`.
 
 ## Prepared commit baseline
 
@@ -347,7 +347,7 @@ When fallback is used, the summary marks `usedFallbackAttribution: true` for tha
 
 Unknown lines are tracked explicitly in the line-attribution model, but the final headline percentage is based on AI and human weighted totals only.
 
-This is intentional. Unknown should remain unknown instead of quietly inflating one side of the result. The same rule applies to literal line counts: Unknown additions appear in `summary.json` and output summaries, while the commit subject includes only `(AI lines: n)` and `(H lines: n)`. The IntelliJ integration also preserves the same fields in its commit audits.
+This is intentional. Unknown should remain unknown instead of quietly inflating one side of the AI/Human percentage. For literal line counts, Unknown additions appear in `summary.json`, output summaries, IntelliJ commit audits, and the `total` denominator of `(AI-Lines: AI/total)`. They are not added to the AI numerator.
 
 ## Known blind spots
 

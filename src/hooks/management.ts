@@ -735,32 +735,32 @@ ${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
-PLACEHOLDER_SUFFIX=' (AI: unavailable) (AI lines: unavailable) (H lines: unavailable)'
+PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
 
 ${createDelegateHookFunction(delegateSpecs)}
 
-append_placeholder_suffix() {
+append_placeholder_annotation() {
     if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
         return 0
     fi
 
     TEMP_FILE="\${MESSAGE_FILE}.ailoc2.$$"
-    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]))*$//')
+    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
 
     {
-        if [ -n "$SUBJECT_LINE" ]; then
-            printf '%s%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUFFIX"
-        else
-            printf '%s\n' "\${PLACEHOLDER_SUFFIX# }"
-        fi
-        sed '1d' "$MESSAGE_FILE"
+        printf '%s\n\n%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_ANNOTATION"
+        sed '1d' "$MESSAGE_FILE" | awk '
+            /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
+            !started && /^[[:space:]]*$/ { next }
+            { if (!started) { print ""; started = 1 } print }
+        '
     } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"
 }
 
 if [ -n "$MESSAGE_FILE" ] && command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
-    node "$CLI_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_suffix
+    node "$CLI_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_annotation
 else
-    append_placeholder_suffix
+    append_placeholder_annotation
 fi
 
 run_delegate_hooks "$@"

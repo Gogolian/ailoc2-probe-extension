@@ -8,20 +8,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class Ailoc2CommitMessageFormatterTest {
     @Test
-    void appendsPercentageAndLineCounts() {
+    void appendsAiAndTotalLineCountsToBody() {
         String result = Ailoc2CommitMessageFormatter.apply("Ship it", availableSummary());
 
-        assertEquals("Ship it (AI: 40.00%) (AI lines: 4) (H lines: 6)", result);
+        assertEquals("Ship it\n\n(AI-Lines: 4/12)", result);
     }
 
     @Test
-    void replacesLegacyAndCompoundSuffixes() {
+    void migratesLegacySubjectSuffixes() {
         assertEquals(
-            "Ship it (AI: 40.00%) (AI lines: 4) (H lines: 6)",
+            "Ship it\n\n(AI-Lines: 4/12)",
             Ailoc2CommitMessageFormatter.apply("Ship it (AI 10.00%)", availableSummary())
         );
         assertEquals(
-            "Ship it (AI: 40.00%) (AI lines: 4) (H lines: 6)",
+            "Ship it\n\n(AI-Lines: 4/12)",
             Ailoc2CommitMessageFormatter.apply(
                 "Ship it (AI: 10.00%) (AI lines: 1) (H lines: 9)",
                 availableSummary()
@@ -35,15 +35,25 @@ class Ailoc2CommitMessageFormatterTest {
 
         String result = Ailoc2CommitMessageFormatter.apply(message, availableSummary());
 
-        assertEquals("Ship it (AI: 40.00%) (AI lines: 4) (H lines: 6)\r\n\r\nBody line\r\n", result);
+        assertEquals("Ship it\r\n\r\n(AI-Lines: 4/12)\r\n\r\nBody line\r\n", result);
     }
 
     @Test
-    void emptySubjectAndUnavailableSummaryAreIdempotent() {
+    void replacesExistingBodyAnnotationIdempotently() {
+        String message = "Ship it\n\nContext\n\n(AI-Lines: 1/10)\n\nFooter";
+        String first = Ailoc2CommitMessageFormatter.apply(message, availableSummary());
+        String second = Ailoc2CommitMessageFormatter.apply(first, availableSummary());
+
+        assertEquals("Ship it\n\n(AI-Lines: 4/12)\n\nContext\n\nFooter", first);
+        assertEquals(first, second);
+    }
+
+    @Test
+    void unavailableSummaryUsesNonNumericBodyAnnotation() {
         String first = Ailoc2CommitMessageFormatter.apply("", Ailoc2GitSummary.unavailable());
         String second = Ailoc2CommitMessageFormatter.apply(first, Ailoc2GitSummary.unavailable());
 
-        assertEquals("(AI: unavailable) (AI lines: unavailable) (H lines: unavailable)", first);
+        assertEquals("\n\n(AI-Lines: unavailable)", first);
         assertEquals(first, second);
     }
 
@@ -61,7 +71,7 @@ class Ailoc2CommitMessageFormatterTest {
             Map.of()
         );
 
-        assertEquals(Ailoc2CommitMessageFormatter.UNAVAILABLE_SUFFIX, Ailoc2CommitMessageFormatter.createSuffix(invalidSummary));
+        assertEquals(Ailoc2CommitMessageFormatter.UNAVAILABLE_ANNOTATION, Ailoc2CommitMessageFormatter.createAnnotation(invalidSummary));
     }
 
     private Ailoc2GitSummary availableSummary() {
@@ -72,7 +82,7 @@ class Ailoc2CommitMessageFormatterTest {
             6L,
             4L,
             6L,
-            0L,
+            2L,
             true,
             Map.of()
         );
