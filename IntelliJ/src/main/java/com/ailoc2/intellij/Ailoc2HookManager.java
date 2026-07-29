@@ -876,7 +876,10 @@ final class Ailoc2HookManager {
                             attributed[current_path] = 1
                         }
                         else if (weight > 0) {
-                            unknown_line_count++
+                            ai_weight += weight
+                            ai_line_count++
+                            ai_by_path[current_path] += weight
+                            attributed[current_path] = 1
                         }
                         current_line++
                         next

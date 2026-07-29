@@ -97,19 +97,19 @@ class Ailoc2HookManagerTest {
 
         Path sourceDirectory = repoRoot.resolve("src");
         Files.createDirectories(sourceDirectory);
-        for (String fileName : new String[]{"ai.ts", "human.ts", "unknown.ts"}) {
+        for (String fileName : new String[]{"ai.ts", "human.ts", "unknown.ts", "missing.ts"}) {
             Files.writeString(sourceDirectory.resolve(fileName), "const value = \"base\";\n", StandardCharsets.UTF_8);
         }
-        run(repoRoot, "git", "add", "src/ai.ts", "src/human.ts", "src/unknown.ts");
+        run(repoRoot, "git", "add", "src/ai.ts", "src/human.ts", "src/unknown.ts", "src/missing.ts");
         run(repoRoot, "git", "commit", "-m", "initial");
 
-        for (String fileName : new String[]{"ai.ts", "human.ts", "unknown.ts"}) {
+        for (String fileName : new String[]{"ai.ts", "human.ts", "unknown.ts", "missing.ts"}) {
             Files.writeString(sourceDirectory.resolve(fileName), "const value = \"next\";\n", StandardCharsets.UTF_8);
         }
         writeState(repoRoot, "src/ai.ts", "AI", 10L, 0L);
         writeState(repoRoot, "src/human.ts", "HUMAN", 0L, 10L);
         writeState(repoRoot, "src/unknown.ts", "UNKNOWN", 0L, 0L);
-        run(repoRoot, "git", "add", "src/ai.ts", "src/human.ts", "src/unknown.ts");
+        run(repoRoot, "git", "add", "src/ai.ts", "src/human.ts", "src/unknown.ts", "src/missing.ts");
 
         Path runtimePath = repoRoot.resolve("ailoc2-intellij-hook-runtime.sh");
         Files.writeString(runtimePath, new Ailoc2HookManager().createManagedRuntimeScript(), StandardCharsets.UTF_8);
@@ -119,13 +119,17 @@ class Ailoc2HookManagerTest {
         run(repoRoot, shell, runtimePath.toString(), "annotate-commit-message", messagePath.toString());
 
         assertEquals(
-            "Ship it (AI: 33.33%)\n\n(AI-Lines: 1/3)\n\nBody\n",
+            "Ship it (AI: 75%)\n\n(AI-Lines: 3/4)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
         String summary = Files.readString(repoRoot.resolve(".ailoc2-metrics/summary.json"), StandardCharsets.UTF_8);
-        assertTrue(summary.contains("\"aiAddedLineCount\": 1"));
+        assertTrue(summary.contains("\"aiWeightedChangedLines\": 51"));
+        assertTrue(summary.contains("\"humanWeightedChangedLines\": 17"));
+        assertTrue(summary.contains("\"aiAddedLineCount\": 3"));
         assertTrue(summary.contains("\"humanAddedLineCount\": 1"));
-        assertTrue(summary.contains("\"unknownAddedLineCount\": 1"));
+        assertTrue(summary.contains("\"unknownAddedLineCount\": 0"));
+        assertTrue(summary.contains("\"aiPercentage\": 75.000000"));
+        assertTrue(summary.contains("\"src/missing.ts\": {\"aiWeightedChangedLines\": 17, \"humanWeightedChangedLines\": 0}"));
     }
 
     private void writeState(Path repoRoot, String repoRelativePath, String bucket, long aiMagnitude, long humanMagnitude) throws IOException {

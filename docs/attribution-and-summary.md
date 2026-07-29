@@ -242,7 +242,7 @@ At a high level, the summary logic does this for each relevant repo-relative pat
 5. if changed-line attribution is possible for existing files, score only the changed line ranges using line-attribution spans
 6. otherwise fall back to aggregate AI vs human magnitudes for that file
 7. accumulate weighted changed-content totals and non-blank added-line counts into staged and unstaged slice summaries
-8. retain unresolved added lines as Unknown instead of assigning them to AI or Human
+8. assign unresolved added lines and changed-content weight to AI
 9. convert accumulated weighted totals into percentages
 
 New-file scoring deliberately prefers aggregate attribution over line spans. First-file creation can generate stale or noisy line spans when an older extension build missed the initial AI context. For historical states with a large human-only initial checkpoint followed by AI-dominant evidence, the summary marks fallback attribution and treats the new file as AI-dominant instead of requiring the user to delete `.ailoc2-metrics`.
@@ -255,17 +255,17 @@ This deliberately keeps final percentages formatting-neutral: formatter/linter t
 
 ## Added-line counting
 
-The commit annotations also report literal AI, Human, and Unknown line counts. These are separate from the weighted values used by the summary percentage:
+The commit annotations report literal AI and Human line counts. These are separate from the weighted values used by the summary percentage:
 
 - only non-blank added lines on the new side of the diff are counted
 - a modified line counts once, regardless of the removed line it replaces
 - pure deletions, blank additions, and whitespace-only hunks count zero
-- exact line-attribution spans increment AI, Human, or Unknown one line at a time
-- paths without rolling attribution state contribute Unknown lines
+- exact AI and Human line-attribution spans increment their matching bucket
+- explicit Unknown spans and paths without rolling attribution state contribute AI lines
 - aggregate fallback paths distribute the integer line total using the same AI/Human magnitude ratio used by the existing percentage fallback
-- largest-remainder allocation keeps the total integral; when a single remaining line is exactly tied, it stays Unknown rather than favoring either author
+- largest-remainder allocation keeps the total integral; any unresolved remainder, including an exact tie, is assigned to AI
 
-For every available slice, `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount` equals the eligible non-blank added-line total. This sum is the denominator in the commit body marker `(AI-Lines: AI/total)` and in the line-derived `(AI: percentage)` commit subject suffix.
+For every newly generated available slice, `aiAddedLineCount + humanAddedLineCount` equals the eligible non-blank added-line total. `unknownAddedLineCount` remains in the JSON schema for compatibility and is written as `0`. The AI/Human sum is the denominator in the commit body marker `(AI-Lines: AI/total)` and in the line-derived `(AI: percentage)` commit subject suffix.
 
 ## Prepared commit baseline
 
@@ -307,13 +307,13 @@ The generated summary lives at `.ailoc2-metrics/summary.json` and contains:
   "staged": {
     "changedFileCount": 3,
     "attributedChangedFileCount": 2,
-    "aiWeightedChangedLines": 73,
+    "aiWeightedChangedLines": 91,
     "humanWeightedChangedLines": 238,
-    "aiAddedLineCount": 12,
+    "aiAddedLineCount": 14,
     "humanAddedLineCount": 39,
-    "unknownAddedLineCount": 2,
-    "aiPercentage": 23.47,
-    "humanPercentage": 76.53,
+    "unknownAddedLineCount": 0,
+    "aiPercentage": 27.66,
+    "humanPercentage": 72.34,
     "usedFallbackAttribution": false
   },
   "unstaged": {
@@ -345,17 +345,15 @@ When fallback is used, the summary marks `usedFallbackAttribution: true` for tha
 
 ## Unknown attribution
 
-Unknown lines are tracked explicitly in the line-attribution model, but the percentage stored in the summary is based on AI and human weighted totals only.
-
-This is intentional. Unknown should remain unknown instead of quietly inflating one side of the weighted AI/Human summary percentage. For literal line counts, Unknown additions appear in `summary.json`, output summaries, IntelliJ commit audits, and the `total` denominator of `(AI-Lines: AI/total)`. They are not added to the AI numerator, but they do lower the line-derived percentage shown in the commit subject.
+Unknown lines remain representable in persisted line-attribution state and legacy summary files. When a new summary is generated, explicit Unknown spans, missing state, and unresolved aggregate remainders are assigned to AI for both non-whitespace weight and added-line counts. `unknownAddedLineCount` remains in summary JSON and commit audits for schema compatibility but is written as `0`.
 
 ## Known blind spots
 
 The current implementation has several important blind spots:
 
-- AI tools that do not expose distinguishable chat-editing signals may look human or unknown
+- AI tools that do not expose distinguishable chat-editing signals may look human; unobserved Git additions are assigned to AI
 - edits made outside VS Code are not observed at edit time
-- large manual paste operations without supported AI-tool context are treated as human edits, but unsupported AI tools can still look human or unknown
+- large manual paste operations without supported AI-tool context are treated as human edits, but unsupported AI tools can still look human
 - structural operations such as line moves and large refactors do not preserve perfect per-line identity
 - rename handling preserves file continuity structurally, but not a perfect semantic ownership model
 - `.gitignore` and metrics artifacts are intentionally excluded from tracking

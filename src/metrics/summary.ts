@@ -399,8 +399,8 @@ async function summarizeDiffSlices(
     for (const repoRelativePath of allRepoRelativePaths) {
         const rollingState = await readRollingState(repoRoot, repoRelativePath);
         if (!rollingState) {
-            applyUnknownAddedLines(stagedSummary, stagedEntriesByPath.get(repoRelativePath));
-            applyUnknownAddedLines(unstagedSummary, unstagedEntriesByPath.get(repoRelativePath));
+            applyUnresolvedAddedLinesAsAi(stagedSummary, stagedEntriesByPath.get(repoRelativePath));
+            applyUnresolvedAddedLinesAsAi(unstagedSummary, unstagedEntriesByPath.get(repoRelativePath));
             continue;
         }
 
@@ -525,64 +525,77 @@ function applyDiffSliceContribution(
 ): void {
     const totalMagnitude = attribution.aiMagnitude + attribution.humanMagnitude;
     if (totalMagnitude <= 0) {
-        summary.unknownAddedLineCount += diffEntry.addedLineCount;
+        applyUnresolvedAddedLinesAsAi(summary, diffEntry);
         return;
     }
 
     summary.attributedChangedFileCount += 1;
     summary.usedFallbackAttribution = summary.usedFallbackAttribution || attribution.usedFallbackAttribution;
-    const aiRatio = attribution.aiMagnitude / totalMagnitude;
-    const humanRatio = attribution.humanMagnitude / totalMagnitude;
-    summary.aiWeightedChangedLines += diffEntry.changedLines * aiRatio;
-    summary.humanWeightedChangedLines += diffEntry.changedLines * humanRatio;
     const allocatedLineCounts = allocateAddedLineCounts(
         diffEntry.addedLineCount,
         attribution.aiMagnitude,
         attribution.humanMagnitude
     );
+    const useAllocatedLineRatios = allocatedLineCounts.assignedUnresolvedToAi && diffEntry.addedLineCount > 0;
+    const aiRatio = useAllocatedLineRatios
+        ? allocatedLineCounts.ai / diffEntry.addedLineCount
+        : attribution.aiMagnitude / totalMagnitude;
+    const humanRatio = useAllocatedLineRatios
+        ? allocatedLineCounts.human / diffEntry.addedLineCount
+        : attribution.humanMagnitude / totalMagnitude;
+    summary.aiWeightedChangedLines += diffEntry.changedLines * aiRatio;
+    summary.humanWeightedChangedLines += diffEntry.changedLines * humanRatio;
     summary.aiAddedLineCount += allocatedLineCounts.ai;
     summary.humanAddedLineCount += allocatedLineCounts.human;
-    summary.unknownAddedLineCount += allocatedLineCounts.unknown;
 }
 
 function applyChangedLineAttributionSummary(
     summary: DiffSliceAttributionSummary,
     attribution: ChangedLineAttributionSummary
 ): boolean {
-    const totalAttributedWeight = attribution.aiWeight + attribution.humanWeight;
+    const totalAttributedWeight = attribution.aiWeight + attribution.humanWeight + attribution.unknownWeight;
     if (totalAttributedWeight <= 0) {
         return false;
     }
 
     summary.attributedChangedFileCount += 1;
-    summary.aiWeightedChangedLines += attribution.aiWeight;
+    summary.aiWeightedChangedLines += attribution.aiWeight + attribution.unknownWeight;
     summary.humanWeightedChangedLines += attribution.humanWeight;
-    summary.aiAddedLineCount += attribution.aiAddedLineCount;
+    summary.aiAddedLineCount += attribution.aiAddedLineCount + attribution.unknownAddedLineCount;
     summary.humanAddedLineCount += attribution.humanAddedLineCount;
-    summary.unknownAddedLineCount += attribution.unknownAddedLineCount;
     return true;
 }
 
-function applyUnknownAddedLines(
+function applyUnresolvedAddedLinesAsAi(
     summary: DiffSliceAttributionSummary,
     diffEntry: GitDiffStatEntry | undefined
 ): void {
-    if (diffEntry) {
-        summary.unknownAddedLineCount += diffEntry.addedLineCount;
+    if (!diffEntry || diffEntry.addedLineCount <= 0) {
+        return;
     }
+
+    summary.attributedChangedFileCount += 1;
+    summary.aiWeightedChangedLines += diffEntry.changedLines;
+    summary.aiAddedLineCount += diffEntry.addedLineCount;
+    summary.usedFallbackAttribution = true;
 }
 
 function allocateAddedLineCounts(
     addedLineCount: number,
     aiMagnitude: number,
     humanMagnitude: number
-): { ai: number; human: number; unknown: number; } {
+): { ai: number; human: number; unknown: number; assignedUnresolvedToAi: boolean; } {
     const normalizedAddedLineCount = Math.max(0, Math.trunc(addedLineCount));
     const normalizedAiMagnitude = Math.max(0, aiMagnitude);
     const normalizedHumanMagnitude = Math.max(0, humanMagnitude);
     const totalMagnitude = normalizedAiMagnitude + normalizedHumanMagnitude;
     if (normalizedAddedLineCount === 0 || totalMagnitude <= 0) {
-        return { ai: 0, human: 0, unknown: normalizedAddedLineCount };
+        return {
+            ai: normalizedAddedLineCount,
+            human: 0,
+            unknown: 0,
+            assignedUnresolvedToAi: normalizedAddedLineCount > 0
+        };
     }
 
     const aiQuota = (normalizedAddedLineCount * normalizedAiMagnitude) / totalMagnitude;
@@ -590,6 +603,7 @@ function allocateAddedLineCounts(
     let ai = Math.floor(aiQuota);
     let human = Math.floor(humanQuota);
     let unknown = normalizedAddedLineCount - ai - human;
+    let assignedUnresolvedToAi = false;
 
     if (unknown === 1) {
         const aiRemainder = aiQuota - ai;
@@ -604,7 +618,11 @@ function allocateAddedLineCounts(
         }
     }
 
-    return { ai, human, unknown };
+    assignedUnresolvedToAi = unknown > 0;
+    ai += unknown;
+    unknown = 0;
+
+    return { ai, human, unknown, assignedUnresolvedToAi };
 }
 
 function finalizeDiffSliceSummary(summary: DiffSliceAttributionSummary): void {

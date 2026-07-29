@@ -84,7 +84,13 @@ final class Ailoc2GitDiffSummarizer {
                     );
                 }
                 else if (weight > 0L) {
-                    unknownAddedLineCount++;
+                    aiWeight += weight;
+                    aiAddedLineCount++;
+                    attributedFiles.add(currentPath);
+                    fileWeights.compute(
+                        currentPath,
+                        (path, weights) -> (weights == null ? new Ailoc2GitSummary.FileWeights(0L, 0L) : weights).addAi(weight)
+                    );
                 }
                 currentLine++;
             }

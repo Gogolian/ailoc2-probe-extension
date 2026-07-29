@@ -18,7 +18,7 @@ The current architecture is built around five practical constraints:
 | --- | --- |
 | `src/extension.ts` | Extension activation, command registration, VS Code event listeners, edit classification, and handoff into persistence. |
 | `src/metrics/store.ts` | Debounced per-repo write queue, rolling state updates, manifest caching, save checkpoints, and lifecycle persistence. |
-| `src/metrics/summary.ts` | Reads Git diff slices plus rolling state and produces staged / unstaged weighted percentages and AI/Human/Unknown added-line counts. |
+| `src/metrics/summary.ts` | Reads Git diff slices plus rolling state and produces staged / unstaged weighted percentages and AI/Human added-line counts, folding unresolved lines into AI. |
 | `src/metrics/git.ts` | Thin wrappers around Git calls for working-tree and index blob IDs. |
 | `src/metrics/repoResolver.ts` | Resolves repo roots, repo-relative paths, and normalized logical paths. |
 | `src/metrics/pathing.ts` | Defines the on-disk metrics layout under `.ailoc2-metrics`. |

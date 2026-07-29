@@ -114,8 +114,10 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
     assert.equal(finalizationResult.clearedRollingStateFileCount, 0);
     assert.equal(finalizationResult.preservedUnstagedFileCount, 1);
     assert.equal(fs.existsSync(rollingStatePath), true);
-    assert.ok(Math.abs(finalizationResult.summary.unstaged.aiPercentage - 40) < FLOATING_POINT_TOLERANCE);
-    assert.ok(Math.abs(finalizationResult.summary.unstaged.humanPercentage - 60) < FLOATING_POINT_TOLERANCE);
+    assert.equal(finalizationResult.summary.unstaged.aiPercentage, 100);
+    assert.equal(finalizationResult.summary.unstaged.humanPercentage, 0);
+    assert.equal(finalizationResult.summary.unstaged.aiAddedLineCount, 1);
+    assert.equal(finalizationResult.summary.unstaged.unknownAddedLineCount, 0);
 });
 
 test('finalizeRepoCommit clears rolling state for fully committed files', async () => {
@@ -332,11 +334,11 @@ test('refreshRepoHookSummary needs flushed rolling state to attribute the first 
     const beforeFlush = await refreshRepoHookSummary({ repoRoot });
     assert.equal(beforeFlush.summary.isGitSummaryAvailable, true);
     assert.equal(beforeFlush.summary.staged.changedFileCount, 1);
-    assert.equal(beforeFlush.summary.staged.attributedChangedFileCount, 0);
-    assert.equal(beforeFlush.summary.staged.aiPercentage, 0);
-    assert.equal(beforeFlush.summary.staged.aiAddedLineCount, 0);
+    assert.equal(beforeFlush.summary.staged.attributedChangedFileCount, 1);
+    assert.equal(beforeFlush.summary.staged.aiPercentage, 100);
+    assert.equal(beforeFlush.summary.staged.aiAddedLineCount, 2);
     assert.equal(beforeFlush.summary.staged.humanAddedLineCount, 0);
-    assert.equal(beforeFlush.summary.staged.unknownAddedLineCount, 2);
+    assert.equal(beforeFlush.summary.staged.unknownAddedLineCount, 0);
 
     await metricsStore.flushRepo(repoRoot);
 
@@ -499,7 +501,7 @@ test('refreshRepoHookSummary weights changed lines by non-whitespace content', a
     assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
-test('refreshRepoHookSummary keeps unresolved added lines unknown', async () => {
+test('refreshRepoHookSummary attributes unresolved added lines as AI', async () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-unknown-lines-'));
     tempDirectories.push(repoRoot);
 
@@ -553,18 +555,23 @@ test('refreshRepoHookSummary keeps unresolved added lines unknown', async () => 
 
     const refreshed = await refreshRepoHookSummary({ repoRoot });
 
+    const expectedAiWeight = 'newAi'.length + 'newUnknown'.length;
+    const expectedHumanWeight = 'newHuman'.length;
+    assert.ok(Math.abs(
+        refreshed.summary.staged.aiPercentage - (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100
+    ) < FLOATING_POINT_TOLERANCE);
     assert.deepEqual({
         aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
         humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
         unknownAddedLineCount: refreshed.summary.staged.unknownAddedLineCount
     }, {
-        aiAddedLineCount: 1,
+        aiAddedLineCount: 2,
         humanAddedLineCount: 1,
-        unknownAddedLineCount: 1
+        unknownAddedLineCount: 0
     });
 });
 
-test('refreshRepoHookSummary leaves a tied aggregate fallback line unknown', async () => {
+test('refreshRepoHookSummary attributes a tied aggregate fallback line as AI', async () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-tied-fallback-'));
     tempDirectories.push(repoRoot);
 
@@ -585,15 +592,16 @@ test('refreshRepoHookSummary leaves a tied aggregate fallback line unknown', asy
 
     const refreshed = await refreshRepoHookSummary({ repoRoot });
 
-    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 50) < FLOATING_POINT_TOLERANCE);
+    assert.equal(refreshed.summary.staged.aiPercentage, 100);
+    assert.equal(refreshed.summary.staged.humanPercentage, 0);
     assert.deepEqual({
         aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
         humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
         unknownAddedLineCount: refreshed.summary.staged.unknownAddedLineCount
     }, {
-        aiAddedLineCount: 0,
+        aiAddedLineCount: 1,
         humanAddedLineCount: 0,
-        unknownAddedLineCount: 1
+        unknownAddedLineCount: 0
     });
 });
 

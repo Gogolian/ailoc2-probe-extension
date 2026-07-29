@@ -37,7 +37,7 @@ This is not a count of all changed lines:
 - a removed line contributes no line to the marker;
 - a pure deletion produces `(AI-Lines: 0/0)`;
 - blank and whitespace-only additions do not count;
-- Unknown lines increase the denominator but never the AI numerator.
+- unresolved lines are assigned to AI, so new summaries write `unknownAddedLineCount: 0`.
 
 The `aiPercentage` shown in `.ailoc2-metrics/summary.json` is a separate, character-weighted statistic:
 
@@ -45,7 +45,7 @@ $$
 \text{AI percentage}=100\times\frac{W_{AI}}{W_{AI}+W_{Human}}
 $$
 
-Unknown weight is excluded from the summary percentage. As a result, a commit with `(AI: 10%)` and `(AI-Lines: 1/10)` can coexist with a summary `aiPercentage` above 50% when the single AI line contains more non-whitespace content than the Human lines.
+New summaries fold Unknown weight and lines into AI. The compatibility Unknown count remains present and is zero. Character weighting can still make the summary `aiPercentage` differ from the line-derived commit subject percentage when AI and Human lines have different lengths.
 
 Primary implementation: [`src/hooks/commitMessage.ts`](../src/hooks/commitMessage.ts), `createAiLinesAnnotation()` and `applyAiLinesAnnotationToCommitMessage()`.
 
@@ -351,7 +351,7 @@ For every nonblank new-side hunk line:
 
 - AI span: increment `A` and add its non-whitespace length to $W_{AI}$;
 - Human span: increment `H` and add its weight to $W_{Human}$;
-- Unknown span: increment `U`.
+- Unknown span: increment `A` and add its non-whitespace length to $W_{AI}$.
 
 If exact line-local state cannot be used, the first file-level fallback derives AI and Human ratios from cumulative magnitude after subtracting the repository baseline:
 
@@ -360,7 +360,7 @@ r_{AI}=\frac{M_{AI}}{M_{AI}+M_{Human}},\qquad
 r_{Human}=\frac{M_{Human}}{M_{AI}+M_{Human}}
 $$
 
-Changed content and integer added-line counts are allocated by these ratios. A tied leftover line remains Unknown.
+Changed content and integer added-line counts are allocated by these ratios. Any unresolved integer remainder, including an exact tie, is assigned to AI.
 
 When both baseline-subtracted magnitudes are zero, fallback uses all-time AI/Human signal-event counts. If those are also zero, it uses the latest signal.
 
@@ -381,13 +381,13 @@ For staged and unstaged slices it includes:
 - changed-file count;
 - attributed-file count;
 - AI and Human weighted changed content;
-- AI, Human, and Unknown added-line counts;
+- AI and Human added-line counts, plus a compatibility `unknownAddedLineCount` field set to `0`;
 - AI and Human percentages;
 - the current `usedFallbackAttribution` implementation flag.
 
-That flag is not a fully reliable audit indicator. Exact span attribution containing Unknown weighted content can set it, while some aggregate paths—including normal new-file aggregation—can leave it unset.
+That flag is not a fully reliable audit indicator. Unknown exact spans can set it even though their resulting weight and lines are assigned to AI, while some aggregate paths—including normal new-file aggregation—can leave it unset.
 
-Missing state does not automatically make the summary unavailable. Eligible additions without attribution are normally counted as Unknown.
+Missing state does not automatically make the summary unavailable. Eligible additions without attribution are counted as AI.
 
 ## Step 14: recompute at commit time
 
@@ -425,7 +425,7 @@ These are current implementation risks, not hypothetical product requirements.
 | ---: | --- | --- |
 | Critical | no repository-wide lock or event deduplication | VS Code, Claude hooks, multiple windows, or IntelliJ mirroring can overwrite or double-apply state |
 | Critical | failed flushes are logged and swallowed after records leave the queue | attribution can be permanently lost while callers appear successful |
-| High | queued writes wait up to 350 ms | an immediate stage/commit can read stale durable state and count lines Unknown |
+| High | queued writes wait up to 350 ms | an immediate stage/commit can read stale durable state and assign unresolved lines to AI |
 | High | tab rescans refresh timestamps for existing chat tabs | unrelated tab activity can manufacture fresh AI evidence without a new AI apply |
 | High | native chat causality is only path plus time | unrelated edits in the timing window can be AI; delayed AI applies can be missed |
 | High | weak and strong AI signals collapse into one AI bucket | `PossibleAI...` receives the same credit as explicit Claude provenance |
@@ -434,7 +434,7 @@ These are current implementation risks, not hypothetical product requirements.
 | High | whitespace is removed without language awareness | behavior-changing indentation or whitespace inside literals can preserve old attribution and contribute zero |
 | High | partial staging needs an exact retained save checkpoint | without one, whole-file fallback can mix committed and uncommitted authorship |
 | High | exact and fallback paths use different weighting bases | the same Git change can influence percentages differently depending on checkpoint availability |
-| High | all-Unknown exact spans can fall through to aggregate history | explicitly unknown lines can inherit historical AI/Human ratios |
+| High | unresolved attribution defaults to AI | missing state or explicit Unknown spans can inflate AI attribution |
 | High | `usedFallbackAttribution` is not authoritative | Unknown exact content can set it while some aggregate attribution paths leave it unset |
 | High | new-file repair can force Human evidence to AI | a historical repair threshold can hide real mixed authorship |
 | High | Claude `Write` without a snapshot assumes an empty file | a failed pre-hook on an existing file can make all resulting content AI |
@@ -442,7 +442,7 @@ These are current implementation risks, not hypothetical product requirements.
 | Medium | raw events are not durably journaled | decisions cannot be replayed, deduplicated, or audited after aggregation |
 | Medium | pending Claude snapshots contain source text without TTL cleanup | failed/skipped invocations can retain plaintext indefinitely |
 | Medium | `.ignore` filters storage, not observation | ignored source can still enter snapshots and verbose diagnostics |
-| Medium | root/merge commit cleanup and unusual Git paths are fragile | stale state or Unknown attribution can remain for affected commits |
+| Medium | root/merge commit cleanup and unusual Git paths are fragile | stale state or fallback AI attribution can remain for affected commits |
 | Medium | Git output has a fixed buffer and parsing is not fully NUL-safe | large diffs or unusual filenames can make summaries unavailable or incomplete |
 
 ## Signals currently missing
@@ -461,7 +461,7 @@ The VS Code implementation does not directly monitor or positively identify:
 - edits made before extension activation;
 - semantic moves or mixed Human/AI content within one line.
 
-When an edit is observed without an AI signal it usually becomes Human. When a Git addition was not observed at all it usually becomes Unknown. That difference should be considered when interpreting the marker.
+When an edit is observed without an AI signal it usually becomes Human. When a Git addition was not observed at all it becomes AI under the unresolved-attribution policy. That difference should be considered when interpreting the marker.
 
 ## Recommended improvements
 

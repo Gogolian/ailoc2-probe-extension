@@ -34,11 +34,11 @@ class Ailoc2GitDiffSummarizerTest {
             new SummarySnapshot(
                 1,
                 1,
-                weight("ai token") + weight("+++counter;"),
+                weight("ai token") + weight("unknown token") + weight("+++counter;"),
                 weight("human token"),
-                2,
+                3,
                 1,
-                1
+                0
             ),
             snapshot(summary)
         );
@@ -65,7 +65,7 @@ class Ailoc2GitDiffSummarizerTest {
     }
 
     @Test
-    void preservesUnknownLinesAndExcludesBlankAndDeletedLines() {
+    void attributesUnknownLinesAsAiAndExcludesBlankAndDeletedLines() {
         Map<String, Ailoc2FileState> states = new HashMap<>();
         states.put("src/unknown.ts", new Ailoc2FileState());
         states.put("src/deleted.ts", new Ailoc2FileState());
@@ -86,7 +86,7 @@ class Ailoc2GitDiffSummarizerTest {
 
         Ailoc2GitSummary summary = summarize(diff, states, path -> false);
 
-        assertEquals(new SummarySnapshot(1, 0, 0L, 0L, 0, 0, 1), snapshot(summary));
+        assertEquals(new SummarySnapshot(1, 1, weight("unknown value"), 0L, 1, 0, 0), snapshot(summary));
     }
 
     @Test

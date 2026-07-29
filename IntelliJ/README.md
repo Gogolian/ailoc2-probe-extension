@@ -43,7 +43,7 @@ The plugin registers editor document and command listeners at project startup. R
 
 Every command start / finish and every persisted document-change event is also written to the IntelliJ log (`idea.log`) with the command context, changed file, edit sizes, and final attribution bucket so you can inspect real-world event patterns.
 
-At commit time the plugin reads the actual staged diff with whitespace-only hunks ignored and weights added staged lines by non-whitespace characters against the recorded per-line attribution state. The percentage stored in the summary remains character-weighted. The separate AI/Human/Unknown counters count non-blank added lines on the new side of the diff, so a modified line counts once while pure deletions and blank additions count zero. The commit body marker uses AI lines as the numerator and the sum of AI, Human, and Unknown lines as the total; the commit subject percentage is derived from that same ratio. This formatting-neutral simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
+At commit time the plugin reads the actual staged diff with whitespace-only hunks ignored and weights added staged lines by non-whitespace characters against the recorded per-line attribution state. The percentage stored in the summary remains character-weighted. The separate AI and Human counters count non-blank added lines on the new side of the diff, so a modified line counts once while pure deletions and blank additions count zero. Explicit Unknown buckets and lines without usable attribution are assigned to AI. The compatibility `unknownAddedLineCount` summary field is set to zero. The commit body marker uses AI lines as the numerator and the sum of AI and Human lines as the total; the commit subject percentage is derived from that same ratio. This formatting-neutral simplification currently applies to all tracked file types, including whitespace-significant languages; non-whitespace formatter/linter rewrites such as import sorting or quote changes still count as normal changes.
 
 ## Git hooks
 
@@ -55,7 +55,7 @@ The plugin adds two explicit Tools menu actions:
 - **AILoc2 Probe: Install Workspace Claude Hooks**
 - **AILoc2 Probe: Uninstall Workspace Claude Hooks**
 
-The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged percentages plus AI/Human/Unknown added-line counts on demand.
+The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged percentages plus AI/Human added-line counts on demand.
 
 If you want to exclude files or directories from IntelliJ metrics entirely, add gitignore-style rules to `.ailoc2-metrics/.ignore`. Ignored paths will not get IntelliJ rolling-state files and are skipped from the summary counts as well.
 
@@ -65,4 +65,4 @@ For a Claude Code session started from a directory that contains multiple reposi
 
 Both workspace hook actions are available from the **Tools** menu and from **Find Action** (`Ctrl+Shift+A`) by searching for `Install Workspace Claude Hooks` or `Uninstall Workspace Claude Hooks`.
 
-The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. Claude Code synchronizes its canonical rolling state into `.ailoc2-metrics/intellij-state`, allowing the runtime to refresh `.ailoc2-metrics/summary.json` from the final staged diff and annotate terminal or external Git commit subjects with `(AI: percentage)` plus bodies with `(AI-Lines: AI/total)`. Each summary includes aggregate AI/Human/Unknown line counts and exact per-file AI/Human weights. Before committed state is cleared, the summary used for the commit is archived as `.ailoc2-metrics/commit-audits/<commit-hash>.json`.
+The managed IntelliJ hook runtime is written as `.githooks/ailoc2-intellij-hook-runtime.sh`. Claude Code synchronizes its canonical rolling state into `.ailoc2-metrics/intellij-state`, allowing the runtime to refresh `.ailoc2-metrics/summary.json` from the final staged diff and annotate terminal or external Git commit subjects with `(AI: percentage)` plus bodies with `(AI-Lines: AI/total)`. Each summary includes aggregate AI/Human line counts, a zero-valued compatibility Unknown count, and exact per-file AI/Human weights. Before committed state is cleared, the summary used for the commit is archived as `.ailoc2-metrics/commit-audits/<commit-hash>.json`.

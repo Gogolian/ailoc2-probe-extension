@@ -147,7 +147,7 @@ The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ edit
 
 **Summary line**
 
-> `my-repo: STAGED -> AI 23.47% | Human 76.53% | AI lines 12 | Human lines 39 | Unknown lines 2 ; UNSTAGED -> AI 0.00% | Human 100.00% | AI lines 0 | Human lines 3 | Unknown lines 0`
+> `my-repo: STAGED -> AI 28.85% | Human 71.15% | AI lines 14 | Human lines 39 | Unknown lines 0 ; UNSTAGED -> AI 0.00% | Human 100.00% | AI lines 0 | Human lines 3 | Unknown lines 0`
 
 ## Files AILoc2 creates
 
@@ -205,13 +205,13 @@ your-repo/
 
 ## Attribution model
 
-The current heuristic is intentionally conservative.
+The current heuristic uses explicit AI and Human signals where available and assigns unresolved output to AI.
 
 - The **strongest AI signal** is recent `chat-editing-snapshot-text-model` activity followed almost immediately by a workspace-file change — especially a whole-document replacement.
 - Large one-shot multi-line insertions or expansions require recent chat-editing context to count as probable AI bulk edits. Size alone is not enough to call a paste AI.
 - A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
 - Zero-content change events are filtered out as lifecycle noise.
-- Unknown or unattributed slices are kept out of the character-weighted summary percentage instead of being quietly counted as AI. They remain in the total used by the commit subject's line percentage.
+- Unknown or unattributed changed lines are counted as AI in both line counts and character-weighted percentages.
 
 ### Signals used today
 
@@ -225,7 +225,7 @@ The current heuristic is intentionally conservative.
 
 ### How the summary is computed
 
-AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Summary percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. The separate line counters count non-blank added lines on the new side of the diff: a modified line counts once, while a pure deletion or blank addition counts zero. In `(AI-Lines: x/y)`, `x` is the AI line count and `y` is the sum of AI, Human, and Unknown line counts. The commit subject suffix is derived from the same counts as $100 \times x/y$, with at most two decimal places. Including Unknown in the total keeps formatter, linter, and other unattributed non-blank changes visible without assigning them to either AI or Human. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; structural formatter/linter rewrites such as import sorting still count as normal changes.
+AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Summary percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. The separate line counters count non-blank added lines on the new side of the diff: a modified line counts once, while a pure deletion or blank addition counts zero. In `(AI-Lines: x/y)`, `x` is the AI line count and `y` is the sum of AI and Human line counts. The commit subject suffix is derived from the same counts as $100 \times x/y$, with at most two decimal places. Any line that lacks usable attribution or has an explicit Unknown bucket is assigned to AI when the summary is generated. `unknownAddedLineCount` remains in summary JSON for compatibility and is `0` in new summaries. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; structural formatter/linter rewrites such as import sorting still count as normal changes.
 
 ## Current limitations
 
@@ -234,8 +234,8 @@ This project is already useful, but it is not pretending to be magic.
 - Today’s AI detection is heuristic, not universal ground truth.
 - The strongest support is for VS Code chat-editing apply flows.
 - Edits made outside supported integrations — or while the relevant integration is inactive — are not observed directly at creation time.
-- Some AI-assisted changes may still look human or unknown if the editor does not expose a distinct enough signal.
-- Large manual paste operations without supported AI-tool context are treated as human edits; ambiguous integrations can still produce unknown or incomplete attribution.
+- Some AI-assisted changes may still look human if the editor records a Human signal.
+- Large manual paste operations without supported AI-tool context are treated as human edits; unresolved changes without usable attribution are treated as AI.
 - `(AI: unavailable)` with `(AI-Lines: unavailable)` means summary generation, validation, or hook runtime fallback kicked in; it does **not** mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
 - You can also add repo-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.

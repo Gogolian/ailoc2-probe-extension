@@ -152,7 +152,7 @@ Two annotation pairs exist today:
 - attribution available: subject `(AI: 22.64%)`, body `(AI-Lines: 12/53)`
 - summary unavailable or invalid: subject `(AI: unavailable)`, body `(AI-Lines: unavailable)`
 
-The numerator $A$ is `summary.staged.aiAddedLineCount`. The denominator $T$ is `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount`, so tool-generated or otherwise unattributed non-blank lines remain part of the commit total. The subject percentage is $100 \times A/T$, rounded to at most two decimal places; `0/0` is represented as `0%`. Counts are base-10 integers with no format-imposed digit limit; JavaScript safe-integer and Java `long` limits still apply internally. All three count fields must be valid, otherwise annotation fails closed to the unavailable pair.
+The numerator $A$ is `summary.staged.aiAddedLineCount`. The denominator $T$ is `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount`. Newly generated summaries assign otherwise unattributed non-blank lines to AI and keep `unknownAddedLineCount` at `0`; the field remains part of validation for compatibility with existing summary readers. The subject percentage is $100 \times A/T$, rounded to at most two decimal places; `0/0` is represented as `0%`. Counts are base-10 integers with no format-imposed digit limit; JavaScript safe-integer and Java `long` limits still apply internally. All three count fields must be valid, otherwise annotation fails closed to the unavailable pair.
 
 ## Runtime CLI
 

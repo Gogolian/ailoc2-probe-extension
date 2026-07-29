@@ -34,7 +34,7 @@ The marker counts only the new side of the staged diff:
 - a modified line counts once;
 - a pure deletion contributes no line;
 - blank and whitespace-only additions contribute no line;
-- Unknown lines increase the denominator;
+- Unknown lines are assigned to AI when the summary is generated;
 - a deletion-only commit produces `(AI-Lines: 0/0)`.
 
 The staged `aiPercentage` in `.ailoc2-metrics/summary.json` is a separate non-whitespace character-weighted metric:
@@ -43,7 +43,7 @@ $$
 \text{AI percentage}=100\times\frac{W_{AI}}{W_{AI}+W_{Human}}
 $$
 
-Unknown weight is excluded from the summary percentage. The summary metric can therefore tell a different-looking but compatible story from the line-derived commit subject.
+New summaries fold Unknown weight and lines into AI. The compatibility Unknown count remains present and is zero.
 
 Primary implementation: [`Ailoc2CommitMessageFormatter.java`](../IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2CommitMessageFormatter.java), `createAnnotation()` and `apply()`.
 
@@ -307,7 +307,7 @@ Primary implementation: [`Ailoc2ProjectService.java`](../IntelliJ/src/main/java/
 4. if no bucket exists, use the file's magnitude winner;
 5. count the non-whitespace code points in the added text;
 6. ignore a line when that weight is zero;
-7. add the weight and one line to AI or Human, or one line to Unknown.
+7. add the weight and one line to Human only for a Human bucket; AI, Unknown, and missing attribution are assigned to AI.
 
 Exact positional buckets therefore determine both the line count and weighted percentage when available.
 
@@ -328,7 +328,7 @@ It contains:
 - availability;
 - changed and attributed file counts;
 - AI and Human weights;
-- AI, Human, and Unknown added-line counts;
+- AI and Human added-line counts, plus a compatibility Unknown count set to zero;
 - AI and Human percentages;
 - per-file AI/Human weights;
 - staged and, for Java-triggered full refreshes, unstaged slices.
