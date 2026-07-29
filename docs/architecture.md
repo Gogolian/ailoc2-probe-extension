@@ -45,7 +45,7 @@ flowchart TD
     I --> J[pre-commit snapshots index baseline and refreshes summary.json]
     J --> K[commit-msg refreshes the final index and annotates the commit subject and body]
     K --> L[post-commit promotes baseline and refreshes summary.json]
-    M[Claude Code Write/Edit/MultiEdit] --> N[Claude Code hook runtime records AI edit]
+    M[Claude Code file tool or Bash output redirection] --> N[Claude Code hook runtime records AI edit]
     N --> I
 ```
 

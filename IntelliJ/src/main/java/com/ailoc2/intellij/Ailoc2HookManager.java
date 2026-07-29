@@ -37,7 +37,7 @@ final class Ailoc2HookManager {
     private static final String MANUAL_MERGE_HOOK_FILE_SUFFIX = ".ailoc2-proposed";
     private static final List<String> REQUIRED_REPO_HOOK_FILES = List.of("pre-commit", "commit-msg", "post-commit");
     private static final List<String> MANAGED_GITIGNORE_PATTERNS = List.of(".ailoc2-metrics/", ".githooks/", ".claude/");
-    private static final String CLAUDE_MANAGED_TOOL_MATCHER = "Write|Edit|MultiEdit";
+    private static final String CLAUDE_MANAGED_TOOL_MATCHER = "Write|Edit|MultiEdit|Bash";
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     HookInstallResult installRepoHooks(

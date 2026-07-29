@@ -37,7 +37,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 ## What AILoc2 does today
 
 - Watches VS Code document edits, saves, renames, and deletes.
-- Records Claude Code `Write`, `Edit`, and `MultiEdit` file mutations through repo-local Claude hooks.
+- Records Claude Code `Write`, `Edit`, `MultiEdit`, and explicit Bash output-redirection file mutations through repo-local Claude hooks.
 - Correlates workspace-file changes with VS Code chat-editing virtual documents.
 - Classifies file changes into AI-leaning and human-leaning signals.
 - Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
@@ -123,7 +123,7 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 
 ### Claude Code companion
 
-The Claude Code runtime is bundled as `out/claude-code/ailoc2-claude-code.cjs`. The normal **Install Repo Hooks** flow installs repo-local `.claude/settings.json` hooks that snapshot files before Claude Code `Write`, `Edit`, and `MultiEdit` operations and record successful edits into the same `.ailoc2-metrics/state/files/**` rolling state used by the VS Code extension.
+The Claude Code runtime is bundled as `out/claude-code/ailoc2-claude-code.cjs`. The normal **Install Repo Hooks** flow installs repo-local `.claude/settings.json` hooks that snapshot files before Claude Code `Write`, `Edit`, `MultiEdit`, and Bash commands with explicit output redirection destinations, then record successful edits into the same `.ailoc2-metrics/state/files/**` rolling state used by the VS Code extension.
 
 After `npm run build`, you can also install only the Claude Code hooks into a target repo with:
 

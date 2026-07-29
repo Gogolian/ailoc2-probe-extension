@@ -23,7 +23,7 @@ The runtime supports these commands:
 
 | Command | Behavior |
 | --- | --- |
-| `capture-before [payloadJsonPath|-]` | Reads a Claude Code hook payload and snapshots target file contents before `Write`, `Edit`, or `MultiEdit` runs. |
+| `capture-before [payloadJsonPath|-]` | Reads a Claude Code hook payload and snapshots target file contents before `Write`, `Edit`, `MultiEdit`, or a Bash command with an explicit output redirection runs. |
 | `record-edit [payloadJsonPath|-]` | Reads the post-tool payload, loads the before snapshot, reads the file after Claude Code changed it, and writes AI attribution into `.ailoc2-metrics/state/files/**`. |
 | `install-claude-hooks [repoRoot] [runtimeSourcePath]` | Copies the runtime to `.claude/ailoc2-claude-code.cjs` and merges AILoc2 hook entries into `.claude/settings.json`. |
 | `uninstall-claude-hooks [repoRoot]` | Removes AILoc2-managed Claude Code hook entries and deletes the copied runtime. |
@@ -36,7 +36,7 @@ The normal AILoc2 **Install Repo Hooks** flow installs Claude Code hooks automat
 
 `.claude/settings.json`
 
-It adds managed hooks for `Write|Edit|MultiEdit`:
+It adds managed hooks for `Write|Edit|MultiEdit|Bash`:
 
 - `PreToolUse` → `capture-before`
 - `PostToolUse` → `record-edit`
@@ -53,7 +53,7 @@ Workspace installation is intentionally Claude-only: it does not search nested d
 
 ## Attribution behavior
 
-Claude Code is the provenance signal. Successful `Write`, `Edit`, and `MultiEdit` file mutations are recorded as AI-authored edits without relying on size heuristics.
+Claude Code is the provenance signal. Successful `Write`, `Edit`, and `MultiEdit` file mutations are recorded as AI-authored edits without relying on size heuristics. Bash commands are recorded only when the command contains an explicit output redirection destination, which covers fallbacks such as `cat > file << EOF` without treating read-only shell commands as file edits.
 
 Current mapping:
 
@@ -62,12 +62,14 @@ Current mapping:
 | `Write` | `ProbableAIApplyToWorkspaceFile` |
 | `Edit` | `ProbableAIBulkWorkspaceEdit` |
 | `MultiEdit` | `ProbableAIBulkWorkspaceEdit` |
+| `Bash` output redirection creating a file | `ProbableAIApplyToWorkspaceFile` |
+| `Bash` output redirection updating a file | `ProbableAIBulkWorkspaceEdit` |
 
 The runtime computes formatter-neutral line diff segments using `src/metrics/lineDiff.ts`, queues records through `RepoMetricsStore`, and writes save checkpoints so staged Git blobs can be matched to Claude attribution later.
 
 ## Missing before snapshots
 
-For `Edit` and `MultiEdit`, AILoc2 requires a before snapshot. If `record-edit` runs without a matching `capture-before` snapshot, it skips the edit instead of attributing the whole file to AI. This avoids over-counting when hook ordering or payloads are incomplete.
+For `Edit`, `MultiEdit`, and Bash output redirections, AILoc2 requires a before snapshot. If `record-edit` runs without a matching `capture-before` snapshot, it skips the edit instead of attributing the whole file to AI. This avoids over-counting when hook ordering or payloads are incomplete.
 
 For `Write`, a missing before snapshot is treated as an empty file, which matches the common new-file case.
 

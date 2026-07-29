@@ -306,7 +306,7 @@ Primary implementation: [`src/extension.ts`](../src/extension.ts), rename/delete
 
 ## Step 10: incorporate explicit Claude Code provenance
 
-When Claude Code integration is installed, AILoc2 registers hooks for `Write`, `Edit`, and `MultiEdit`:
+When Claude Code integration is installed, AILoc2 registers hooks for `Write`, `Edit`, `MultiEdit`, and `Bash`. Bash attribution is limited to commands with an explicit output redirection destination:
 
 1. `PreToolUse` stores the complete prior file text under `.ailoc2-metrics/claude-code/pending`.
 2. `PostToolUse` ignores known failed tool calls.
@@ -315,7 +315,7 @@ When Claude Code integration is installed, AILoc2 registers hooks for `Write`, `
 5. It removes the pending snapshot after the recording call returns. Because store flush failures are swallowed, this does not prove that the update became durable.
 6. It overlays canonical line attribution into IntelliJ's TSV state so IntelliJ-installed hooks can consume Claude provenance. AI and Human spans are copied; a canonical Unknown line preserves an existing IntelliJ bucket at that line when present.
 
-`Edit` or `MultiEdit` without a prior snapshot is skipped. `Write` without a prior snapshot assumes empty prior content, which can over-attribute an existing file if the pre-hook failed.
+`Edit`, `MultiEdit`, or Bash output redirection without a prior snapshot is skipped. `Write` without a prior snapshot assumes empty prior content, which can over-attribute an existing file if the pre-hook failed.
 
 This path is stronger than VS Code chat correlation because the tool invocation explicitly identifies a supported file operation.
 

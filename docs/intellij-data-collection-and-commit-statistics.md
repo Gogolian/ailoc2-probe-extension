@@ -263,7 +263,7 @@ Primary implementation: [`Ailoc2Storage.java`](../IntelliJ/src/main/java/com/ail
 
 ## Step 10: incorporate Claude Code provenance
 
-The IntelliJ installer can deploy the shared Claude runtime and hooks for `Write`, `Edit`, and `MultiEdit`.
+The IntelliJ installer can deploy the shared Claude runtime and hooks for `Write`, `Edit`, `MultiEdit`, and Bash commands with explicit output redirection destinations.
 
 The Node runtime:
 

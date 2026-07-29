@@ -5,8 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [1.0.21] - 2026-07-29
 
+- Attribute files written by Claude Code through explicit Bash output redirections, including heredoc fallbacks after a file-tool failure.
 - Restore the commit subject suffix as `(AI: percentage)`, derived from `AI-Lines` so `(AI-Lines: 10/20)` produces `(AI: 50%)`.
 - Write the case-sensitive `(AI-Lines: AI/total)` marker to commit message bodies in both VS Code and IntelliJ flows.
 - Include AI, Human, and Unknown non-blank added lines in the total while keeping only AI lines in the numerator.

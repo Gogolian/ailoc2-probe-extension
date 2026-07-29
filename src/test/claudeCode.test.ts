@@ -83,6 +83,127 @@ test('Claude Code Edit without before snapshot is skipped instead of over-attrib
     assert.equal(fs.existsSync(getRollingStatePath(repoRoot, path.normalize(gitRelativePath))), false);
 });
 
+test('Claude Code Bash heredoc fallback records its redirected file as AI', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-bash-');
+    const gitRelativePath = 'sample.txt';
+    const absoluteFilePath = path.join(repoRoot, gitRelativePath);
+    const beforeText = Array.from({ length: 10 }, (_, index) => `Original line ${index + 1}`).join('\n') + '\n';
+    const afterText = Array.from({ length: 40 }, (_, index) => `Claude line ${index + 1}`).join('\n') + '\n';
+    fs.writeFileSync(absoluteFilePath, beforeText, 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'add sample']);
+    const payload = createClaudeBashPayload(
+        repoRoot,
+        `cat > "${absoluteFilePath}" << 'EOF'\n${afterText}EOF`,
+        'tool-bash-1'
+    );
+
+    const captureResults = await captureClaudeCodeBefore(payload);
+    fs.writeFileSync(absoluteFilePath, afterText, 'utf8');
+    const recordResults = await recordClaudeCodePostEdit(payload);
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.deepEqual({
+        captured: captureResults.map((result) => ({ existed: result.existed })),
+        recorded: recordResults.map((result) => ({ skipped: result.skipped, repoRelativePath: result.repoRelativePath })),
+        aiAddedLineCount: refreshed.summary.unstaged.aiAddedLineCount,
+        humanAddedLineCount: refreshed.summary.unstaged.humanAddedLineCount,
+        unknownAddedLineCount: refreshed.summary.unstaged.unknownAddedLineCount
+    }, {
+        captured: [{ existed: true }],
+        recorded: [{ skipped: false, repoRelativePath: path.normalize(gitRelativePath) }],
+        aiAddedLineCount: 40,
+        humanAddedLineCount: 0,
+        unknownAddedLineCount: 0
+    });
+});
+
+test('Claude Code read-only Bash commands do not create attribution targets', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-read-only-bash-');
+
+    const captureResults = await captureClaudeCodeBefore(createClaudeBashPayload(
+        repoRoot,
+        'git status --short && cat README.md',
+        'tool-bash-read-only'
+    ));
+
+    assert.deepEqual(captureResults, []);
+});
+
+test('Claude Code Bash parsing ignores quoted and heredoc content that resembles redirection', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-bash-content-');
+    const actualPath = path.join(repoRoot, 'actual.txt');
+    const payload = createClaudeBashPayload(
+        repoRoot,
+        `cat > "${actualPath}" << 'EOF'\nconst comparison = left > right;\nEOF\nprintf '%s' "literal > quoted.txt"`,
+        'tool-bash-content'
+    );
+
+    const captureResults = await captureClaudeCodeBefore(payload);
+
+    assert.deepEqual(captureResults.map((result) => result.absoluteFilePath), [actualPath]);
+});
+
+test('Claude Code Bash parsing supports numeric and escaped output paths but skips dynamic paths', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-bash-paths-');
+    const payload = createClaudeBashPayload(
+        repoRoot,
+        'printf value > 2026.log; printf value > escaped\\ path.txt; printf value > "$TARGET"; printf value > /dev/null',
+        'tool-bash-paths'
+    );
+
+    const captureResults = await captureClaudeCodeBefore(payload);
+
+    assert.deepEqual(captureResults.map((result) => result.absoluteFilePath), [
+        path.join(repoRoot, '2026.log'),
+        path.join(repoRoot, 'escaped path.txt')
+    ]);
+});
+
+test('Claude Code Bash parsing respects control operators, comments, multiline quotes, and descriptor output', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-bash-operators-');
+    const payload = createClaudeBashPayload(
+        repoRoot,
+        [
+            'printf value >tight.log&&true',
+            'printf value >& combined.log',
+            'printf value 2>&1',
+            'printf value;# >comment.log',
+            'printf "%s" "multiline',
+            '> quoted.log"',
+            'tee >(cat > process-output.log)'
+        ].join('\n'),
+        'tool-bash-operators'
+    );
+
+    const captureResults = await captureClaudeCodeBefore(payload);
+
+    assert.deepEqual(captureResults.map((result) => result.absoluteFilePath), [
+        path.join(repoRoot, 'tight.log'),
+        path.join(repoRoot, 'combined.log'),
+        path.join(repoRoot, 'process-output.log')
+    ]);
+});
+
+test('Claude Code failed Bash commands remove their pending snapshots', async () => {
+    const repoRoot = createGitRepo('ailoc2-claude-bash-failed-');
+    const payload = createClaudeBashPayload(repoRoot, 'printf value > output.log', 'tool-bash-failed');
+    const captureResults = await captureClaudeCodeBefore(payload);
+
+    const recordResults = await recordClaudeCodePostEdit({
+        ...payload,
+        tool_response: { is_error: true }
+    });
+
+    assert.deepEqual({
+        result: recordResults.map((result) => ({ skipped: result.skipped, reason: result.reason })),
+        snapshotExists: fs.existsSync(captureResults[0].snapshotPath)
+    }, {
+        result: [{ skipped: true, reason: 'ClaudeToolUseFailed' }],
+        snapshotExists: false
+    });
+});
+
 test('Claude Code metrics combine with human metrics in staged summary', async () => {
     const repoRoot = createGitRepo('ailoc2-claude-mixed-summary-');
     const humanGitPath = 'src/human.js';
@@ -149,8 +270,10 @@ test('installClaudeCodeHooks merges AILoc2 hooks into existing Claude settings',
 
     assert.equal(fs.existsSync(installResult.runtimePath), true);
     assert.deepEqual(settings.permissions?.allow, ['Bash(git status)']);
-    assert.equal(settings.hooks?.PreToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('capture-before'))), true);
-    assert.equal(settings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('record-edit'))), true);
+    assert.equal(settings.hooks?.PreToolUse?.some((entry) => entry.matcher === 'Write|Edit|MultiEdit|Bash'
+        && entry.hooks?.some((hook) => hook.command?.includes('capture-before'))), true);
+    assert.equal(settings.hooks?.PostToolUse?.some((entry) => entry.matcher === 'Write|Edit|MultiEdit|Bash'
+        && entry.hooks?.some((hook) => hook.command?.includes('record-edit'))), true);
     assert.equal(settings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command === 'echo keep-me')), true);
 });
 
@@ -192,6 +315,19 @@ function createClaudePayload(repoRoot: string, toolName: string, gitRelativePath
         tool_input: {
             file_path: gitRelativePath
         },
+        tool_response: {
+            is_error: false
+        }
+    };
+}
+
+function createClaudeBashPayload(repoRoot: string, command: string, invocationId: string): Record<string, unknown> {
+    return {
+        session_id: 'claude-session-1',
+        tool_name: 'Bash',
+        tool_use_id: invocationId,
+        cwd: repoRoot,
+        tool_input: { command },
         tool_response: {
             is_error: false
         }

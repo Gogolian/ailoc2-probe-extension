@@ -31,7 +31,7 @@ export type ClaudeCodeHooksInstallResult = {
 };
 
 const CLAUDE_CODE_RUNTIME_FILE_NAME = 'ailoc2-claude-code.cjs';
-const MANAGED_TOOL_MATCHER = 'Write|Edit|MultiEdit';
+const MANAGED_TOOL_MATCHER = 'Write|Edit|MultiEdit|Bash';
 
 type ClaudeCodeEditTarget = {
     absoluteFilePath: string;
@@ -107,7 +107,9 @@ export async function captureClaudeCodeBefore(payload: ClaudeCodeHookPayload): P
 
 export async function recordClaudeCodePostEdit(payload: ClaudeCodeHookPayload): Promise<ClaudeCodeRecordResult[]> {
     if (isFailedToolUse(payload)) {
-        return extractClaudeCodeEditTargets(payload).map((target) => ({
+        const targets = extractClaudeCodeEditTargets(payload);
+        await removePendingSnapshots(targets);
+        return targets.map((target) => ({
             absoluteFilePath: target.absoluteFilePath,
             repoRoot: '',
             repoRelativePath: '',
@@ -145,6 +147,7 @@ export async function recordClaudeCodePostEdit(payload: ClaudeCodeHookPayload): 
 
         const afterText = await readTextFileIfExists(target.absoluteFilePath);
         if (afterText === null) {
+            await fs.promises.rm(snapshotPath, { force: true });
             results.push({
                 absoluteFilePath: target.absoluteFilePath,
                 repoRoot: repoLocation.repoRoot,
@@ -174,6 +177,15 @@ export async function recordClaudeCodePostEdit(payload: ClaudeCodeHookPayload): 
     }
 
     return results;
+}
+
+async function removePendingSnapshots(targets: ClaudeCodeEditTarget[]): Promise<void> {
+    await Promise.all(targets.map(async (target) => {
+        const repoLocation = resolveRepoLocationForFsPathNode(target.absoluteFilePath);
+        if (repoLocation) {
+            await fs.promises.rm(getPendingSnapshotPath(repoLocation.repoRoot, target), { force: true });
+        }
+    }));
 }
 
 export async function installClaudeCodeHooks(args: {
@@ -235,7 +247,7 @@ export function extractClaudeCodeEditTargets(payload: ClaudeCodeHookPayload): Cl
     const toolInput = getToolInput(payload);
     const invocationSeed = getInvocationSeed(payload, toolName);
 
-    return Array.from(new Set(extractFilePathCandidates(toolInput)))
+    return Array.from(new Set(extractFilePathCandidates(toolInput, toolName)))
         .map((candidatePath) => path.resolve(cwd, candidatePath))
         .map((absoluteFilePath) => ({
             absoluteFilePath,
@@ -366,7 +378,7 @@ function getToolName(payload: ClaudeCodeHookPayload): string {
 }
 
 function isTrackedClaudeTool(toolName: string): boolean {
-    return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit';
+    return toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Bash';
 }
 
 function getToolInput(payload: ClaudeCodeHookPayload): Record<string, unknown> {
@@ -376,7 +388,7 @@ function getToolInput(payload: ClaudeCodeHookPayload): Record<string, unknown> {
         ?? {};
 }
 
-function extractFilePathCandidates(toolInput: Record<string, unknown>): string[] {
+function extractFilePathCandidates(toolInput: Record<string, unknown>, toolName: string): string[] {
     const directCandidates = [
         getString(toolInput.file_path),
         getString(toolInput.filePath),
@@ -397,7 +409,216 @@ function extractFilePathCandidates(toolInput: Record<string, unknown>): string[]
             return [];
         });
 
-    return [...directCandidates, ...arrayCandidates];
+    const bashMutationCandidates = toolName === 'Bash'
+        ? extractBashRedirectionPathCandidates(getString(toolInput.command) ?? '')
+        : [];
+
+    return [...directCandidates, ...arrayCandidates, ...bashMutationCandidates];
+}
+
+function extractBashRedirectionPathCandidates(command: string): string[] {
+    const candidates: string[] = [];
+    const pendingHeredocs: Array<{ delimiter: string; stripLeadingTabs: boolean }> = [];
+    let quote: 'single' | 'double' | null = null;
+    for (const line of command.split(/\r\n|\r|\n/u)) {
+        const pendingHeredoc = pendingHeredocs[0];
+        if (pendingHeredoc) {
+            const candidateDelimiter = pendingHeredoc.stripLeadingTabs ? line.replace(/^\t+/u, '') : line;
+            if (candidateDelimiter === pendingHeredoc.delimiter) {
+                pendingHeredocs.shift();
+            }
+            continue;
+        }
+
+        const parsedLine = parseBashCommandLineRedirections(line, quote);
+        candidates.push(...parsedLine.outputPaths);
+        pendingHeredocs.push(...parsedLine.heredocs);
+        quote = parsedLine.quote;
+    }
+    return candidates;
+}
+
+function parseBashCommandLineRedirections(line: string, initialQuote: 'single' | 'double' | null): {
+    outputPaths: string[];
+    heredocs: Array<{ delimiter: string; stripLeadingTabs: boolean }>;
+    quote: 'single' | 'double' | null;
+} {
+    const outputPaths: string[] = [];
+    const heredocs: Array<{ delimiter: string; stripLeadingTabs: boolean }> = [];
+    let quote = initialQuote;
+    let inConditionalExpression = false;
+    let inArithmeticExpression = false;
+
+    for (let index = 0; index < line.length; index += 1) {
+        const character = line[index];
+        if (quote === 'single') {
+            if (character === "'") {
+                quote = null;
+            }
+            continue;
+        }
+        if (quote === 'double') {
+            if (character === '\\' && isDoubleQuoteEscapable(line[index + 1])) {
+                index += 1;
+            }
+            else if (character === '"') {
+                quote = null;
+            }
+            continue;
+        }
+        if (character === '\\') {
+            index += 1;
+            continue;
+        }
+        if (character === "'") {
+            quote = 'single';
+            continue;
+        }
+        if (character === '"') {
+            quote = 'double';
+            continue;
+        }
+        if (character === '#' && isBashTokenBoundary(line[index - 1])) {
+            break;
+        }
+        if (line.startsWith('[[', index)) {
+            inConditionalExpression = true;
+            index += 1;
+            continue;
+        }
+        if (inConditionalExpression && line.startsWith(']]', index)) {
+            inConditionalExpression = false;
+            index += 1;
+            continue;
+        }
+        if (line.startsWith('((', index)) {
+            inArithmeticExpression = true;
+            index += 1;
+            continue;
+        }
+        if (inArithmeticExpression && line.startsWith('))', index)) {
+            inArithmeticExpression = false;
+            index += 1;
+            continue;
+        }
+        if (inConditionalExpression || inArithmeticExpression) {
+            continue;
+        }
+        if (line.startsWith('<<<', index)) {
+            index += 2;
+            continue;
+        }
+        if (line.startsWith('<<', index)) {
+            const stripLeadingTabs = line[index + 2] === '-';
+            const delimiter = parseBashWord(line, index + (stripLeadingTabs ? 3 : 2));
+            if (delimiter?.value) {
+                heredocs.push({ delimiter: delimiter.value, stripLeadingTabs });
+                index = delimiter.endIndex - 1;
+            }
+            continue;
+        }
+        if (character !== '>') {
+            continue;
+        }
+        if (line[index + 1] === '(') {
+            continue;
+        }
+
+        let destinationStart = index + 1;
+        if (line[destinationStart] === '>' || line[destinationStart] === '|') {
+            destinationStart += 1;
+        }
+        if (line[destinationStart] === '&') {
+            destinationStart += 1;
+        }
+        const destination = parseBashWord(line, destinationStart);
+        if (destination) {
+            if (!/^\d+$/u.test(destination.value)
+                && !destination.dynamic
+                && !isDiscardedBashOutputPath(destination.value)) {
+                outputPaths.push(destination.value);
+            }
+            index = destination.endIndex - 1;
+        }
+    }
+
+    return { outputPaths, heredocs, quote };
+}
+
+function parseBashWord(line: string, startIndex: number): { value: string; dynamic: boolean; endIndex: number } | null {
+    let index = startIndex;
+    while (index < line.length && /\s/u.test(line[index])) {
+        index += 1;
+    }
+    if (index >= line.length || line[index] === '&' || line[index] === '#') {
+        return null;
+    }
+
+    let value = '';
+    let dynamic = false;
+    let quote: 'single' | 'double' | null = null;
+    for (; index < line.length; index += 1) {
+        const character = line[index];
+        if (quote === 'single') {
+            if (character === "'") {
+                quote = null;
+            }
+            else {
+                value += character;
+            }
+            continue;
+        }
+        if (quote === 'double') {
+            if (character === '"') {
+                quote = null;
+            }
+            else if (character === '\\' && isDoubleQuoteEscapable(line[index + 1])) {
+                index += 1;
+                value += line[index];
+            }
+            else {
+                dynamic ||= character === '$' || character === '`';
+                value += character;
+            }
+            continue;
+        }
+        if (/\s/u.test(character) || ';&|<>()'.includes(character)) {
+            break;
+        }
+        if (character === "'") {
+            quote = 'single';
+        }
+        else if (character === '"') {
+            quote = 'double';
+        }
+        else if (character === '\\' && index + 1 < line.length) {
+            index += 1;
+            value += line[index];
+        }
+        else {
+            dynamic ||= character === '$' || character === '`' || character === '*' || character === '?' || character === '[';
+            value += character;
+        }
+    }
+
+    dynamic ||= value.startsWith('~');
+    return value.length > 0 && quote === null ? { value, dynamic, endIndex: index } : null;
+}
+
+function isBashTokenBoundary(character: string | undefined): boolean {
+    return character === undefined || /\s/u.test(character) || ';&|()'.includes(character);
+}
+
+function isDoubleQuoteEscapable(character: string | undefined): boolean {
+    return character === '$' || character === '`' || character === '"' || character === '\\' || character === '\n';
+}
+
+function isDiscardedBashOutputPath(candidatePath: string): boolean {
+    const normalizedPath = candidatePath.replace(/\\/gu, '/').toLowerCase();
+    return normalizedPath === 'nul'
+        || normalizedPath === '/dev/null'
+        || normalizedPath === '/dev/stdout'
+        || normalizedPath === '/dev/stderr';
 }
 
 function getInvocationSeed(payload: ClaudeCodeHookPayload, toolName: string): string | null {

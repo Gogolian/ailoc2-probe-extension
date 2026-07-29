@@ -32,6 +32,16 @@ class Ailoc2HookManagerTest {
     }
 
     @Test
+    void installedClaudeHooksIncludeBashFallbacks(@TempDir Path workspaceRoot) throws Exception {
+        Ailoc2HookManager manager = new Ailoc2HookManager();
+
+        manager.installWorkspaceClaudeHooks(workspaceRoot);
+
+        String settings = Files.readString(workspaceRoot.resolve(".claude/settings.json"), StandardCharsets.UTF_8);
+        assertTrue(settings.contains("\"matcher\": \"Write|Edit|MultiEdit|Bash\""));
+    }
+
+    @Test
     void commitMsgHookWritesFallbackToBodyWhenRuntimeIsMissing(@TempDir Path directory) throws Exception {
         String shell = findShell();
         Assumptions.assumeTrue(shell != null, "A POSIX shell is required for the generated hook smoke test");
