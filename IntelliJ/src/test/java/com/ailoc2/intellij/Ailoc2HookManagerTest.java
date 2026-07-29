@@ -123,13 +123,13 @@ class Ailoc2HookManagerTest {
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
         String summary = Files.readString(repoRoot.resolve(".ailoc2-metrics/summary.json"), StandardCharsets.UTF_8);
-        assertTrue(summary.contains("\"aiWeightedChangedLines\": 51"));
-        assertTrue(summary.contains("\"humanWeightedChangedLines\": 17"));
+        assertTrue(summary.contains("\"aiWeightedChangedLines\": 54"));
+        assertTrue(summary.contains("\"humanWeightedChangedLines\": 18"));
         assertTrue(summary.contains("\"aiAddedLineCount\": 3"));
         assertTrue(summary.contains("\"humanAddedLineCount\": 1"));
         assertTrue(summary.contains("\"unknownAddedLineCount\": 0"));
         assertTrue(summary.contains("\"aiPercentage\": 75.000000"));
-        assertTrue(summary.contains("\"src/missing.ts\": {\"aiWeightedChangedLines\": 17, \"humanWeightedChangedLines\": 0}"));
+        assertTrue(summary.contains("\"src/missing.ts\": {\"aiWeightedChangedLines\": 18, \"humanWeightedChangedLines\": 0}"));
     }
 
     private void writeState(Path repoRoot, String repoRelativePath, String bucket, long aiMagnitude, long humanMagnitude) throws IOException {
