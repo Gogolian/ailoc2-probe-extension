@@ -19,7 +19,7 @@ A fresh managed install provisions exactly four repo-local files:
 | File | Purpose |
 | --- | --- |
 | `.githooks/pre-commit` | Prepares the next-HEAD baseline snapshot and refreshes the summary file before commit finalization. |
-| `.githooks/commit-msg` | Adds the AI and total line-count marker to the commit body. |
+| `.githooks/commit-msg` | Adds the AI line percentage to the commit subject and AI/total counts to the body. |
 | `.githooks/post-commit` | Promotes the committed baseline, clears fully committed file metrics, and refreshes the summary after a successful commit. |
 | `.githooks/ailoc2-hook-runtime.cjs` | Bundled runtime CLI invoked by the managed hooks. |
 
@@ -107,14 +107,16 @@ The managed `commit-msg` hook:
    `node ./.githooks/ailoc2-hook-runtime.cjs annotate-commit-message "$1"`
 
 4. during annotation, recomputes the pending baseline and summary from the final Git index
-5. if annotation fails, adds a placeholder body marker instead
+5. if annotation fails, adds placeholder subject and body annotations instead
 6. if a delegated repo-local hook exists, runs that delegated hook afterward
 
-The placeholder marker is currently:
+The placeholder annotations are currently:
+
+`(AI: unavailable)`
 
 `(AI-Lines: unavailable)`
 
-That string means annotation could not produce all valid summary-backed line counts at commit time. It does **not** mean no AI was used.
+They mean annotation could not produce all valid summary-backed line counts at commit time. They do **not** mean no AI was used.
 
 The final-index recomputation matters when an earlier delegated `pre-commit` hook formats, lints, generates, or stages files after AILoc2's first pre-commit pass. Commit annotation and the baseline promoted after the commit both use what Git is actually about to commit.
 
@@ -137,19 +139,20 @@ This step is what advances the repo baseline from “last fully clean state” t
 
 `src/hooks/commitMessage.ts` applies a few careful rules:
 
-- the case-sensitive marker is written to the commit **body**, not the subject
-- any existing legacy subject suffix is stripped during migration
+- the commit subject receives `(AI: percentage)` and the body receives the case-sensitive `(AI-Lines: AI/total)` marker
+- the subject percentage is derived from the body counts, so `(AI-Lines: 10/20)` produces `(AI: 50%)`
+- any existing attribution subject suffix is replaced instead of duplicated
 - an existing `(AI-Lines: ...)` body line is replaced instead of duplicated
 - the original newline convention (`\n`, `\r\n`, or `\r`) is preserved
 
-### Marker generation
+### Annotation generation
 
-Two marker shapes exist today:
+Two annotation pairs exist today:
 
-- attribution available: `(AI-Lines: 12/53)`
-- summary unavailable or invalid: `(AI-Lines: unavailable)`
+- attribution available: subject `(AI: 22.64%)`, body `(AI-Lines: 12/53)`
+- summary unavailable or invalid: subject `(AI: unavailable)`, body `(AI-Lines: unavailable)`
 
-The numerator is `summary.staged.aiAddedLineCount`. The denominator is `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount`, so tool-generated or otherwise unattributed non-blank lines remain part of the commit total. Counts are base-10 integers with no format-imposed digit limit; JavaScript safe-integer and Java `long` limits still apply internally. All three count fields must be valid, otherwise annotation fails closed to the unavailable marker.
+The numerator $A$ is `summary.staged.aiAddedLineCount`. The denominator $T$ is `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount`, so tool-generated or otherwise unattributed non-blank lines remain part of the commit total. The subject percentage is $100 \times A/T$, rounded to at most two decimal places; `0/0` is represented as `0%`. Counts are base-10 integers with no format-imposed digit limit; JavaScript safe-integer and Java `long` limits still apply internally. All three count fields must be valid, otherwise annotation fails closed to the unavailable pair.
 
 ## Runtime CLI
 
@@ -162,7 +165,7 @@ The managed hooks call the bundled CLI defined in `src/cli/gitHookCli.ts`.
 | `prepare-commit [repoRoot]` | Prepares the pending baseline and refreshes the summary in one process. This is the command used by managed `pre-commit` hooks. |
 | `prepare-commit-baseline [repoRoot]` | Snapshots the current Git index into a pending baseline file for promotion after a successful commit. |
 | `refresh-summary [repoRoot]` | Recomputes `.ailoc2-metrics/summary.json` and prints the formatted summary line. |
-| `annotate-commit-message <messageFilePath> [repoRoot]` | Refreshes the final-index baseline and summary, writes the AI-Lines marker to the commit body, and prints the marker used. |
+| `annotate-commit-message <messageFilePath> [repoRoot]` | Refreshes the final-index baseline and summary, writes the subject percentage and AI-Lines body marker, and prints the body marker used. |
 | `finalize-commit [repoRoot]` | Promotes the pending baseline (or derives one from the current index) and refreshes `.ailoc2-metrics/summary.json`. |
 
 If `repoRoot` is omitted, the CLI resolves it relative to the current working directory.
@@ -222,8 +225,8 @@ That usually means one of these happened:
 - Node was unavailable in the hook environment
 - the managed runtime file was missing
 - the summary file could not be refreshed or read
-- an older or malformed summary did not contain valid AI and Human line counts
-- the hook runtime hit an unexpected error and fell back to the placeholder suffix
+- an older or malformed summary did not contain valid AI, Human, and Unknown line counts
+- the hook runtime hit an unexpected error and fell back to the placeholder annotations
 
 First things to check:
 

@@ -24,7 +24,7 @@ The current architecture is built around five practical constraints:
 | `src/metrics/pathing.ts` | Defines the on-disk metrics layout under `.ailoc2-metrics`. |
 | `src/metrics/schema.ts` | Shared record types, signal groups, attribution buckets, and rolling-state structures. |
 | `src/hooks/management.ts` | Installs and uninstalls managed hooks, copies runtime assets, and handles hook chaining. |
-| `src/hooks/commitMessage.ts` | Applies the `(AI-Lines: AI/total)` marker, or its unavailable form, to the commit body. |
+| `src/hooks/commitMessage.ts` | Applies the line-derived `(AI: percentage)` subject suffix and matching `(AI-Lines: AI/total)` body marker, or their unavailable forms. |
 | `src/cli/gitHookCli.ts` | Bundled CLI entrypoint executed by the managed hooks. |
 | `src/cli/claudeCodeCli.ts` | Bundled CLI entrypoint executed by Claude Code hooks. |
 | `src/integrations/claudeCode/` | Claude Code hook payload parsing, before snapshots, hook settings merge, and shared metrics writes. |
@@ -43,7 +43,7 @@ flowchart TD
     G --> H[Queue rolling-state update in RepoMetricsStore]
     H --> I[Write .ailoc2-metrics/state/files/*.metrics.json]
     I --> J[pre-commit snapshots index baseline and refreshes summary.json]
-    J --> K[commit-msg refreshes the final index and adds AI-Lines to the commit body]
+    J --> K[commit-msg refreshes the final index and annotates the commit subject and body]
     K --> L[post-commit promotes baseline and refreshes summary.json]
     M[Claude Code Write/Edit/MultiEdit] --> N[Claude Code hook runtime records AI edit]
     N --> I
@@ -182,7 +182,7 @@ The design is intentionally fail-soft.
 
 - the extension keeps logging even when some repo-specific operations fail
 - hook scripts try not to block commits purely because AILoc2 could not compute or annotate a summary
-- commit annotation falls back to `(AI-Lines: unavailable)` instead of aborting the commit
+- commit annotation falls back to `(AI: unavailable)` and `(AI-Lines: unavailable)` instead of aborting the commit
 
 In other words: the project prefers imperfect visibility over workflow-breaking drama.
 

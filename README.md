@@ -13,7 +13,7 @@
   <img alt="Status" src="https://img.shields.io/badge/status-experimental-orange" />
 </p>
 
-> **Status:** experimental, working prototype. The current VS Code extension appears as `AILoc2 Probe`. It tracks editor activity, persists repo-local attribution state in `.ailoc2-metrics`, refreshes staged and unstaged summaries, and adds `(AI-Lines: 12/53)` to commit message bodies.
+> **Status:** experimental, working prototype. The current VS Code extension appears as `AILoc2 Probe`. It tracks editor activity, persists repo-local attribution state in `.ailoc2-metrics`, refreshes staged and unstaged summaries, and adds a line-derived `(AI: 22.64%)` suffix to commit subjects plus `(AI-Lines: 12/53)` to commit bodies.
 
 AILoc2 is built around a practical question most teams cannot answer yet:
 
@@ -30,7 +30,7 @@ AILoc2 takes a simpler route:
 - observe edits where they actually happen — inside VS Code, IntelliJ IDEA, and Claude Code
 - keep attribution artifacts inside the repo
 - summarize attribution against staged and unstaged Git diffs
-- annotate the commit body automatically via local Git hooks
+- annotate the commit subject and body automatically via local Git hooks
 
 No hosted backend is required by this repo. No special commit command to remember. No provenance cosplay.
 
@@ -43,8 +43,8 @@ No hosted backend is required by this repo. No special commit command to remembe
 - Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
 - Builds staged and unstaged summaries from actual Git diff slices, ignoring whitespace-only diff noise in final percentages and line counts.
 - Installs repo-local Git hooks into `.githooks`.
-- Annotates commit message bodies with `(AI-Lines: <AI>/<total>)`, for example `(AI-Lines: 12/53)`.
-- Falls back safely to `(AI-Lines: unavailable)` when summary data cannot be produced.
+- Annotates commit subjects with the AI-added-line percentage, for example `(AI: 22.64%)`, and commit bodies with the matching counts, for example `(AI-Lines: 12/53)`.
+- Falls back safely to `(AI: unavailable)` and `(AI-Lines: unavailable)` when summary data cannot be produced.
 
 ## Why it feels different
 
@@ -63,7 +63,7 @@ flowchart LR
     A[Edit code in VS Code / IntelliJ / Claude Code] --> B[AILoc2 observes editor and tool signals]
     B --> C[Rolling attribution state in .ailoc2-metrics/state/files]
     C --> D[pre-commit refreshes summary.json]
-    D --> E[commit-msg adds AI and total line counts to the commit body]
+    D --> E[commit-msg adds the AI line percentage to the subject and AI/total counts to the body]
 ```
 
 At a high level, AILoc2 does four things:
@@ -117,7 +117,7 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 - `AILoc2 Probe` output channel for detailed diagnostics
 - `AILoc2 Summary` output channel for summary refreshes
 - `.ailoc2-metrics/summary.json` inside the tracked repo
-- commit message bodies automatically annotated during `git commit`
+- commit subjects and bodies automatically annotated during `git commit`
 - post-commit baseline advancement and cleanup so fully committed files start fresh while files with remaining unstaged work keep their attribution
 - optional `.ailoc2-metrics/.ignore` rules if you want gitignore-style opt-outs for specific tracked files or directories
 
@@ -135,13 +135,13 @@ See [`docs/claude-code.md`](docs/claude-code.md) for the hook model and failure 
 
 ### IntelliJ IDEA plugin prototype
 
-The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ editor changes locally, records repo-local metrics under `.ailoc2-metrics/intellij-state`, computes staged AI attribution from `git diff --cached` during IntelliJ commit handling, adds `(AI-Lines: AI/total)` to the commit body, and clears fully committed file metrics after successful commits without requiring prompt, instruction, or source-code tag changes.
+The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ editor changes locally, records repo-local metrics under `.ailoc2-metrics/intellij-state`, computes staged AI attribution from `git diff --cached` during IntelliJ commit handling, adds `(AI: percentage)` to the commit subject and `(AI-Lines: AI/total)` to the body, and clears fully committed file metrics after successful commits without requiring prompt, instruction, or source-code tag changes.
 
 ## Example output
 
 **Commit message**
 
-> `feat: tighten diff attribution fallback`
+> `feat: tighten diff attribution fallback (AI: 22.64%)`
 >
 > `(AI-Lines: 12/53)`
 
@@ -211,7 +211,7 @@ The current heuristic is intentionally conservative.
 - Large one-shot multi-line insertions or expansions require recent chat-editing context to count as probable AI bulk edits. Size alone is not enough to call a paste AI.
 - A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
 - Zero-content change events are filtered out as lifecycle noise.
-- Unknown or unattributed slices are kept out of the headline percentage when possible instead of being quietly counted as AI.
+- Unknown or unattributed slices are kept out of the character-weighted summary percentage instead of being quietly counted as AI. They remain in the total used by the commit subject's line percentage.
 
 ### Signals used today
 
@@ -225,7 +225,7 @@ The current heuristic is intentionally conservative.
 
 ### How the summary is computed
 
-AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Final percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. The separate line counters count non-blank added lines on the new side of the diff: a modified line counts once, while a pure deletion or blank addition counts zero. In `(AI-Lines: x/y)`, `x` is the AI line count and `y` is the sum of AI, Human, and Unknown line counts. Including Unknown in the total keeps formatter, linter, and other unattributed non-blank changes visible without assigning them to either AI or Human. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; structural formatter/linter rewrites such as import sorting still count as normal changes.
+AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Summary percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. The separate line counters count non-blank added lines on the new side of the diff: a modified line counts once, while a pure deletion or blank addition counts zero. In `(AI-Lines: x/y)`, `x` is the AI line count and `y` is the sum of AI, Human, and Unknown line counts. The commit subject suffix is derived from the same counts as $100 \times x/y$, with at most two decimal places. Including Unknown in the total keeps formatter, linter, and other unattributed non-blank changes visible without assigning them to either AI or Human. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; structural formatter/linter rewrites such as import sorting still count as normal changes.
 
 ## Current limitations
 
@@ -236,7 +236,7 @@ This project is already useful, but it is not pretending to be magic.
 - Edits made outside supported integrations — or while the relevant integration is inactive — are not observed directly at creation time.
 - Some AI-assisted changes may still look human or unknown if the editor does not expose a distinct enough signal.
 - Large manual paste operations without supported AI-tool context are treated as human edits; ambiguous integrations can still produce unknown or incomplete attribution.
-- `(AI-Lines: unavailable)` means summary generation, validation, or hook runtime fallback kicked in; it does **not** mean “no AI was used.”
+- `(AI: unavailable)` with `(AI-Lines: unavailable)` means summary generation, validation, or hook runtime fallback kicked in; it does **not** mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
 - You can also add repo-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.
 

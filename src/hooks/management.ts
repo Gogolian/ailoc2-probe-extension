@@ -736,6 +736,7 @@ ${createWrappedDelegateMarkerBlock(delegateSpecs)}
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
 PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
+PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'
 
 ${createDelegateHookFunction(delegateSpecs)}
 
@@ -748,7 +749,11 @@ append_placeholder_annotation() {
     SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
 
     {
-        printf '%s\n\n%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_ANNOTATION"
+        if [ -n "$SUBJECT_LINE" ]; then
+            printf '%s%s\n\n%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUBJECT_SUFFIX" "$PLACEHOLDER_ANNOTATION"
+        else
+            printf '%s\n\n%s\n' "\${PLACEHOLDER_SUBJECT_SUFFIX# }" "$PLACEHOLDER_ANNOTATION"
+        fi
         sed '1d' "$MESSAGE_FILE" | awk '
             /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
             !started && /^[[:space:]]*$/ { next }

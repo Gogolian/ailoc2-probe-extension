@@ -7,6 +7,7 @@ export const DEFAULT_AI_PLACEHOLDER_LABEL = 'unavailable';
 
 const AI_SUBJECT_SUFFIX_PATTERN = /(?:^|\s+)(?:(?:\(AI:? [^)]*\)|\(AI lines: [^)]*\)|\(H lines: [^)]*\)|\(AI-Lines: [^)]*\))(?:\s+|$))+$/u;
 const AI_LINES_BODY_PATTERN = /^\s*\(AI-Lines: [^)]*\)\s*$/u;
+const AI_LINES_ANNOTATION_PATTERN = /^\(AI-Lines: (?:(\d+)\/(\d+)|([^)]*))\)$/u;
 
 export type CommitMessageAnnotationResult = {
     messageFilePath: string;
@@ -59,7 +60,7 @@ export async function applyAiLinesAnnotationToCommitMessageFile(args: {
 export function applyAiLinesAnnotationToCommitMessage(messageText: string, annotationText: string): string {
     const newline = detectNewline(messageText);
     const lines = messageText.split(/\r\n|\r|\n/u);
-    const normalizedSubject = stripAiSuffix(lines[0] ?? '');
+    const normalizedSubject = appendAiSubjectSuffix(stripAiSuffix(lines[0] ?? ''), annotationText);
     const originalBodyLines = lines.slice(1);
     const bodyLines: string[] = [];
     for (let index = 0; index < originalBodyLines.length; index++) {
@@ -132,6 +133,39 @@ function isValidLineCount(value: number | null): value is number {
 
 function stripAiSuffix(subjectLine: string): string {
     return subjectLine.replace(AI_SUBJECT_SUFFIX_PATTERN, '').trimEnd();
+}
+
+function appendAiSubjectSuffix(subjectLine: string, annotationText: string): string {
+    const suffix = createAiSubjectSuffix(annotationText);
+    return subjectLine.length > 0 ? `${subjectLine} ${suffix}` : suffix;
+}
+
+function createAiSubjectSuffix(annotationText: string): string {
+    const match = AI_LINES_ANNOTATION_PATTERN.exec(annotationText);
+    const aiLineCount = Number(match?.[1]);
+    const totalLineCount = Number(match?.[2]);
+    if (
+        match?.[1] !== undefined
+        && match[2] !== undefined
+        && isValidLineCount(aiLineCount)
+        && isValidLineCount(totalLineCount)
+        && aiLineCount <= totalLineCount
+    ) {
+        return `(AI: ${formatAiLinePercentage(aiLineCount, totalLineCount)}%)`;
+    }
+
+    const placeholderLabel = match?.[3]?.trim() || DEFAULT_AI_PLACEHOLDER_LABEL;
+    return `(AI: ${placeholderLabel})`;
+}
+
+function formatAiLinePercentage(aiLineCount: number, totalLineCount: number): string {
+    if (totalLineCount === 0) {
+        return '0';
+    }
+
+    return ((aiLineCount / totalLineCount) * 100)
+        .toFixed(2)
+        .replace(/\.?0+$/u, '');
 }
 
 function detectNewline(text: string): string {

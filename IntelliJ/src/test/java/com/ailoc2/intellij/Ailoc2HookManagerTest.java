@@ -21,12 +21,14 @@ class Ailoc2HookManagerTest {
         String runtime = manager.createManagedRuntimeScript();
 
         assertTrue(commitMsgHook.contains("(AI-Lines: unavailable)"));
+        assertTrue(commitMsgHook.contains("(AI: unavailable)"));
         assertTrue(commitMsgHook.contains("append_placeholder_annotation"));
         assertTrue(commitMsgHook.contains("AI-Lines: [^)]*"));
         assertTrue(runtime.contains("\"aiAddedLineCount\""));
         assertTrue(runtime.contains("\"humanAddedLineCount\""));
         assertTrue(runtime.contains("\"unknownAddedLineCount\""));
         assertTrue(runtime.contains("(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)"));
+        assertTrue(runtime.contains("(AI: $AI_LINE_PERCENTAGE%)"));
     }
 
     @Test
@@ -49,7 +51,28 @@ class Ailoc2HookManagerTest {
         run(directory, shell, hookPath.toString(), messagePath.toString());
 
         assertEquals(
-            "Ship it\n\n(AI-Lines: unavailable)\n\nBody\n",
+            "Ship it (AI: unavailable)\n\n(AI-Lines: unavailable)\n\nBody\n",
+            Files.readString(messagePath, StandardCharsets.UTF_8)
+        );
+    }
+
+    @Test
+    void runtimeAppendPlaceholderWritesFallbackToSubjectAndBody(@TempDir Path directory) throws Exception {
+        String shell = findShell();
+        Assumptions.assumeTrue(shell != null, "A POSIX shell is required for the generated runtime smoke test");
+        Path runtimePath = directory.resolve("ailoc2-intellij-hook-runtime.sh");
+        Files.writeString(
+            runtimePath,
+            new Ailoc2HookManager().createManagedRuntimeScript(),
+            StandardCharsets.UTF_8
+        );
+        Path messagePath = directory.resolve("COMMIT_EDITMSG");
+        Files.writeString(messagePath, "Ship it (AI: 42%)\n\nBody\n", StandardCharsets.UTF_8);
+
+        run(directory, shell, runtimePath.toString(), "append-placeholder", messagePath.toString());
+
+        assertEquals(
+            "Ship it (AI: unavailable)\n\n(AI-Lines: unavailable)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
     }
@@ -86,7 +109,7 @@ class Ailoc2HookManagerTest {
         run(repoRoot, shell, runtimePath.toString(), "annotate-commit-message", messagePath.toString());
 
         assertEquals(
-            "Ship it\n\n(AI-Lines: 1/3)\n\nBody\n",
+            "Ship it (AI: 33.33%)\n\n(AI-Lines: 1/3)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
         String summary = Files.readString(repoRoot.resolve(".ailoc2-metrics/summary.json"), StandardCharsets.UTF_8);

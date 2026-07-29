@@ -7,6 +7,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Restore the commit subject suffix as `(AI: percentage)`, derived from `AI-Lines` so `(AI-Lines: 10/20)` produces `(AI: 50%)`.
 - Write the case-sensitive `(AI-Lines: AI/total)` marker to commit message bodies in both VS Code and IntelliJ flows.
 - Include AI, Human, and Unknown non-blank added lines in the total while keeping only AI lines in the numerator.
 

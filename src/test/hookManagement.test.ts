@@ -45,6 +45,7 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
         hasClaudeRecordHook: claudeSettings.hooks?.PostToolUse?.some((entry) => entry.hooks?.some((hook) => hook.command?.includes('record-edit'))),
         usesCombinedPreCommit: fs.readFileSync(path.join(repoRoot, '.githooks', 'pre-commit'), 'utf8').includes('prepare-commit >/dev/null'),
         hasUnavailableAnnotation: commitMsgHook.includes("PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'"),
+        hasUnavailableSubjectSuffix: commitMsgHook.includes("PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'"),
         stripsLegacySuffix: commitMsgHook.includes('AI:? [^)]*'),
         stripsLineSuffixes: commitMsgHook.includes('AI lines: [^)]*') && commitMsgHook.includes('H lines: [^)]*'),
         writesAnnotationToBody: commitMsgHook.includes("printf '%s\n\n%s\n'")
@@ -59,6 +60,7 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
         hasClaudeRecordHook: true,
         usesCombinedPreCommit: true,
         hasUnavailableAnnotation: true,
+        hasUnavailableSubjectSuffix: true,
         stripsLegacySuffix: true,
         stripsLineSuffixes: true,
         writesAnnotationToBody: true
@@ -98,7 +100,7 @@ test('commit-msg refresh includes files staged by a delegated pre-commit hook', 
     assert.equal(installResult.status, 'installed');
     assert.equal(
         commitMessage,
-        'final index attribution\n\n(AI-Lines: 1/2)'
+        'final index attribution (AI: 50%)\n\n(AI-Lines: 1/2)'
     );
 });
 

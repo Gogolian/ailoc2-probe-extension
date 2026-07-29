@@ -255,7 +255,7 @@ This deliberately keeps final percentages formatting-neutral: formatter/linter t
 
 ## Added-line counting
 
-The commit trailer also reports literal AI and Human line counts. These are separate from the weighted values used by the percentage:
+The commit annotations also report literal AI, Human, and Unknown line counts. These are separate from the weighted values used by the summary percentage:
 
 - only non-blank added lines on the new side of the diff are counted
 - a modified line counts once, regardless of the removed line it replaces
@@ -265,7 +265,7 @@ The commit trailer also reports literal AI and Human line counts. These are sepa
 - aggregate fallback paths distribute the integer line total using the same AI/Human magnitude ratio used by the existing percentage fallback
 - largest-remainder allocation keeps the total integral; when a single remaining line is exactly tied, it stays Unknown rather than favoring either author
 
-For every available slice, `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount` equals the eligible non-blank added-line total. This sum is the denominator in the commit body marker `(AI-Lines: AI/total)`.
+For every available slice, `aiAddedLineCount + humanAddedLineCount + unknownAddedLineCount` equals the eligible non-blank added-line total. This sum is the denominator in the commit body marker `(AI-Lines: AI/total)` and in the line-derived `(AI: percentage)` commit subject suffix.
 
 ## Prepared commit baseline
 
@@ -345,9 +345,9 @@ When fallback is used, the summary marks `usedFallbackAttribution: true` for tha
 
 ## Unknown attribution
 
-Unknown lines are tracked explicitly in the line-attribution model, but the final headline percentage is based on AI and human weighted totals only.
+Unknown lines are tracked explicitly in the line-attribution model, but the percentage stored in the summary is based on AI and human weighted totals only.
 
-This is intentional. Unknown should remain unknown instead of quietly inflating one side of the AI/Human percentage. For literal line counts, Unknown additions appear in `summary.json`, output summaries, IntelliJ commit audits, and the `total` denominator of `(AI-Lines: AI/total)`. They are not added to the AI numerator.
+This is intentional. Unknown should remain unknown instead of quietly inflating one side of the weighted AI/Human summary percentage. For literal line counts, Unknown additions appear in `summary.json`, output summaries, IntelliJ commit audits, and the `total` denominator of `(AI-Lines: AI/total)`. They are not added to the AI numerator, but they do lower the line-derived percentage shown in the commit subject.
 
 ## Known blind spots
 

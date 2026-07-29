@@ -1,5 +1,7 @@
 package com.ailoc2.intellij;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -20,6 +22,10 @@ final class Ailoc2CommitMessageFormatter {
         String[] lines = messageText.split("\\r\\n|\\r|\\n", -1);
         String subject = lines.length > 0 ? lines[0] : "";
         String normalizedSubject = ATTRIBUTION_SUFFIX_PATTERN.matcher(subject).replaceFirst("").stripTrailing();
+        String subjectSuffix = createSubjectSuffix(summary);
+        String annotatedSubject = normalizedSubject.isEmpty()
+            ? subjectSuffix
+            : normalizedSubject + " " + subjectSuffix;
         List<String> bodyLines = new ArrayList<>();
         for (int index = 1; index < lines.length; index++) {
             if (AI_LINES_BODY_PATTERN.matcher(lines[index]).matches()) {
@@ -39,7 +45,7 @@ final class Ailoc2CommitMessageFormatter {
             bodyLines.removeFirst();
         }
 
-        StringBuilder annotatedMessage = new StringBuilder(normalizedSubject)
+        StringBuilder annotatedMessage = new StringBuilder(annotatedSubject)
             .append(newline)
             .append(newline)
             .append(createAnnotation(summary));
@@ -53,32 +59,51 @@ final class Ailoc2CommitMessageFormatter {
     }
 
     static String createAnnotation(Ailoc2GitSummary summary) {
-        if (!hasValidAttribution(summary)) {
+        Long totalLineCount = getTotalLineCount(summary);
+        if (totalLineCount == null) {
             return UNAVAILABLE_ANNOTATION;
         }
 
-        long totalLineCount;
+        return "(AI-Lines: " + summary.aiAddedLineCount + "/" + totalLineCount + ")";
+    }
+
+    private static String createSubjectSuffix(Ailoc2GitSummary summary) {
+        Long totalLineCount = getTotalLineCount(summary);
+        if (totalLineCount == null) {
+            return "(AI: unavailable)";
+        }
+        if (totalLineCount == 0L) {
+            return "(AI: 0%)";
+        }
+
+        String percentage = BigDecimal.valueOf(summary.aiAddedLineCount)
+            .multiply(BigDecimal.valueOf(100L))
+            .divide(BigDecimal.valueOf(totalLineCount), 2, RoundingMode.HALF_UP)
+            .stripTrailingZeros()
+            .toPlainString();
+        return "(AI: " + percentage + "%)";
+    }
+
+    private static Long getTotalLineCount(Ailoc2GitSummary summary) {
+        if (
+            summary == null
+            || !summary.available
+            || summary.aiAddedLineCount < 0L
+            || summary.humanAddedLineCount < 0L
+            || summary.unknownAddedLineCount < 0L
+        ) {
+            return null;
+        }
+
         try {
-            totalLineCount = Math.addExact(
+            return Math.addExact(
                 Math.addExact(summary.aiAddedLineCount, summary.humanAddedLineCount),
                 summary.unknownAddedLineCount
             );
         }
         catch (ArithmeticException ignored) {
-            return UNAVAILABLE_ANNOTATION;
+            return null;
         }
-        return "(AI-Lines: " + summary.aiAddedLineCount + "/" + totalLineCount + ")";
-    }
-
-    private static boolean hasValidAttribution(Ailoc2GitSummary summary) {
-        return summary != null
-            && summary.available
-            && Double.isFinite(summary.aiPercentage)
-            && summary.aiPercentage >= 0.0d
-            && summary.aiPercentage <= 100.0d
-            && summary.aiAddedLineCount >= 0L
-            && summary.humanAddedLineCount >= 0L
-            && summary.unknownAddedLineCount >= 0L;
     }
 
     private static String detectNewline(String text) {

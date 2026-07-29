@@ -2,14 +2,16 @@
 
 This folder is the implementation guide for AILoc2.
 
-The top-level [`README.md`](../README.md) explains what the project is and how to try it. These docs explain how the current prototype works internally, where data is stored, which heuristics are used, and where the extension deliberately stays conservative.
+The top-level [`README.md`](../README.md) explains what the project is and how to try it. These docs explain how the current prototype works internally, where data is stored, which heuristics are used, and where implementation behavior does or does not meet its conservative-attribution goal.
 
 ## Reading order
 
 1. [`architecture.md`](architecture.md) — start here for the runtime model, source map, lifecycle, and key moving parts.
-2. [`attribution-and-summary.md`](attribution-and-summary.md) — read this next if you want to understand how edit signals become repo-level AI percentages and line counts.
-3. [`hooks-and-runtime.md`](hooks-and-runtime.md) — read this if you care about hook installation, chaining, CLI behavior, and commit-message annotation.
-4. [`claude-code.md`](claude-code.md) — read this for the Claude Code companion runtime and shared `.ailoc2-metrics` flow.
+2. [`vscode-data-collection-and-commit-statistics.md`](vscode-data-collection-and-commit-statistics.md) — follow the complete VS Code path from monitored signals to the commit marker, including data-quality risks and missing signals.
+3. [`intellij-data-collection-and-commit-statistics.md`](intellij-data-collection-and-commit-statistics.md) — follow the corresponding IntelliJ path and understand where its evidence and staging model differ.
+4. [`attribution-and-summary.md`](attribution-and-summary.md) — use this as a compact reference for the canonical VS Code rolling-state and summary algorithm.
+5. [`hooks-and-runtime.md`](hooks-and-runtime.md) — read this if you care about VS Code hook installation, chaining, CLI behavior, and commit-message annotation.
+6. [`claude-code.md`](claude-code.md) — read this for the Claude Code companion runtime and shared `.ailoc2-metrics` flow.
 
 ## Source map
 
@@ -28,6 +30,10 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 | Hook runtime CLI entrypoint | `src/cli/gitHookCli.ts` |
 | Claude Code runtime CLI entrypoint | `src/cli/claudeCodeCli.ts` |
 | Claude Code metrics bridge | `src/integrations/claudeCode/` |
+| IntelliJ event capture and classification | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2ProjectService.java` |
+| IntelliJ positional line state | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2FileState.java` |
+| IntelliJ Git summary and commit annotation | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2GitDiffSummarizer.java`, `Ailoc2CommitMessageFormatter.java` |
+| IntelliJ Git hook runtime generation | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2HookManager.java` |
 
 ## Quick reference
 
@@ -47,7 +53,7 @@ AILoc2 is intentionally biased toward a few constraints:
 - **local-first** — state lives in the repo, not a backend
 - **commit-native** — the primary result lands in the commit workflow
 - **inspectable** — JSON artifacts are meant to be readable by humans and tooling
-- **conservative** — ambiguous edits should not silently turn into inflated AI percentages
+- **conservative by intent** — ambiguous edits should not silently inflate AI percentages; the platform guides document current heuristics that do not yet fully meet this goal
 - **non-invasive** — hooks should fail open and avoid blocking normal development
 
 ## Historical note

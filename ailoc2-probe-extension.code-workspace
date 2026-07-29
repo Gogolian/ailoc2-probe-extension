@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../../tryouts2/vscode"
+		},
+		{
+			"path": "../ailoc-test-repo"
 		}
 	],
 	"settings": {}

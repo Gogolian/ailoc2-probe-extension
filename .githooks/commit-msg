@@ -4,36 +4,39 @@
 
 MESSAGE_FILE="$1"
 CLI_PATH="./.githooks/ailoc2-hook-runtime.cjs"
-PLACEHOLDER_SUFFIX=' (AI: unavailable)'
+PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
+PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'
 
 run_delegate_hooks() {
     return 0
 }
 
-append_placeholder_suffix() {
+append_placeholder_annotation() {
     if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
         return 0
     fi
 
     TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/[[:space:]]+(AI:? [^)]*)$//')
+    SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
 
     {
         if [ -n "$SUBJECT_LINE" ]; then
-            printf '%s%s
-' "$SUBJECT_LINE" "$PLACEHOLDER_SUFFIX"
+            printf '%s%s\n\n%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUBJECT_SUFFIX" "$PLACEHOLDER_ANNOTATION"
         else
-            printf '%s
-' "${PLACEHOLDER_SUFFIX# }"
+            printf '%s\n\n%s\n' "${PLACEHOLDER_SUBJECT_SUFFIX# }" "$PLACEHOLDER_ANNOTATION"
         fi
-        sed '1d' "$MESSAGE_FILE"
+        sed '1d' "$MESSAGE_FILE" | awk '
+            /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
+            !started && /^[[:space:]]*$/ { next }
+            { if (!started) { print ""; started = 1 } print }
+        '
     } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"
 }
 
 if [ -n "$MESSAGE_FILE" ] && command -v node >/dev/null 2>&1 && [ -f "$CLI_PATH" ]; then
-    node "$CLI_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_suffix
+    node "$CLI_PATH" annotate-commit-message "$MESSAGE_FILE" >/dev/null 2>&1 || append_placeholder_annotation
 else
-    append_placeholder_suffix
+    append_placeholder_annotation
 fi
 
 run_delegate_hooks "$@"

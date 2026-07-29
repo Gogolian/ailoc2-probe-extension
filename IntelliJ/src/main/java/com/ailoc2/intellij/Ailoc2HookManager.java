@@ -723,6 +723,7 @@ final class Ailoc2HookManager {
             MESSAGE_FILE="$1"
             RUNTIME_PATH="./.githooks/%s"
             PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
+            PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'
 
             %s
 
@@ -734,7 +735,11 @@ final class Ailoc2HookManager {
                 TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
                 SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
                 {
-                    printf '%%s\n\n%%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_ANNOTATION"
+                    if [ -n "$SUBJECT_LINE" ]; then
+                        printf '%%s%%s\n\n%%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUBJECT_SUFFIX" "$PLACEHOLDER_ANNOTATION"
+                    else
+                        printf '%%s\n\n%%s\n' "${PLACEHOLDER_SUBJECT_SUFFIX# }" "$PLACEHOLDER_ANNOTATION"
+                    fi
                     sed '1d' "$MESSAGE_FILE" | awk '
                         /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
                         !started && /^[[:space:]]*$/ { next }
@@ -787,6 +792,7 @@ final class Ailoc2HookManager {
             STATE_DIR=".ailoc2-metrics/intellij-state"
             AUDIT_DIR=".ailoc2-metrics/commit-audits"
             PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
+            PLACEHOLDER_SUBJECT_SUFFIX='(AI: unavailable)'
 
             refresh_summary() {
                 REPO_ROOT=$(pwd)
@@ -967,6 +973,7 @@ final class Ailoc2HookManager {
             append_annotation() {
                 MESSAGE_FILE="$1"
                 ANNOTATION="$2"
+                SUBJECT_SUFFIX="$3"
                 if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
                     return 0
                 fi
@@ -975,7 +982,11 @@ final class Ailoc2HookManager {
                 SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
 
                 {
-                    printf '%s\n\n%s\n' "$SUBJECT_LINE" "$ANNOTATION"
+                    if [ -n "$SUBJECT_LINE" ]; then
+                        printf '%s %s\n\n%s\n' "$SUBJECT_LINE" "$SUBJECT_SUFFIX" "$ANNOTATION"
+                    else
+                        printf '%s\n\n%s\n' "$SUBJECT_SUFFIX" "$ANNOTATION"
+                    fi
                     sed '1d' "$MESSAGE_FILE" | awk '
                         /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
                         !started && /^[[:space:]]*$/ { next }
@@ -989,17 +1000,26 @@ final class Ailoc2HookManager {
                 refresh_summary
                 prepare_commit_audit
                 if grep -q '"isGitSummaryAvailable"[[:space:]]*:[[:space:]]*true' "$SUMMARY_FILE"; then
-                    AI_PERCENTAGE=$(sed -n 's/.*"aiPercentage"[[:space:]]*:[[:space:]]*\\([0-9.][0-9.]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     AI_LINE_COUNT=$(sed -n 's/.*"aiAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     HUMAN_LINE_COUNT=$(sed -n 's/.*"humanAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     UNKNOWN_LINE_COUNT=$(sed -n 's/.*"unknownAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
-                    if [ -n "$AI_PERCENTAGE" ] && [ -n "$AI_LINE_COUNT" ] && [ -n "$HUMAN_LINE_COUNT" ] && [ -n "$UNKNOWN_LINE_COUNT" ]; then
+                    if [ -n "$AI_LINE_COUNT" ] && [ -n "$HUMAN_LINE_COUNT" ] && [ -n "$UNKNOWN_LINE_COUNT" ]; then
                         TOTAL_LINE_COUNT=$((AI_LINE_COUNT + HUMAN_LINE_COUNT + UNKNOWN_LINE_COUNT))
-                        append_annotation "$MESSAGE_FILE" "(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)"
+                        if [ "$TOTAL_LINE_COUNT" -gt 0 ]; then
+                            AI_LINE_PERCENTAGE=$(awk -v ai="$AI_LINE_COUNT" -v total="$TOTAL_LINE_COUNT" 'BEGIN {
+                                formatted = sprintf("%.2f", (ai / total) * 100)
+                                sub(/0$/, "", formatted)
+                                sub(/[.]0$/, "", formatted)
+                                printf "%s", formatted
+                            }')
+                        else
+                            AI_LINE_PERCENTAGE="0"
+                        fi
+                        append_annotation "$MESSAGE_FILE" "(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)" "(AI: $AI_LINE_PERCENTAGE%)"
                         return 0
                     fi
                 fi
-                append_annotation "$MESSAGE_FILE" "$PLACEHOLDER_ANNOTATION"
+                append_annotation "$MESSAGE_FILE" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_SUBJECT_SUFFIX"
             }
 
             # Convert a repo-relative path into the sanitized filename used under intellij-state.
@@ -1053,7 +1073,7 @@ final class Ailoc2HookManager {
                     annotate_commit_message "$2"
                     ;;
                 append-placeholder)
-                    append_annotation "$2" "$PLACEHOLDER_ANNOTATION"
+                    append_annotation "$2" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_SUBJECT_SUFFIX"
                     ;;
                 *)
                     printf '%s\\n' 'Usage: ailoc2-intellij-hook-runtime.sh <refresh-summary|prepare-commit-audit|finalize-commit|annotate-commit-message <messageFile>|append-placeholder <messageFile>>' >&2
