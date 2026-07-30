@@ -38,7 +38,7 @@ class Ailoc2GitDiffSummarizerTest {
                 weight("human token"),
                 3,
                 1,
-                0
+                1
             ),
             snapshot(summary)
         );
@@ -86,7 +86,7 @@ class Ailoc2GitDiffSummarizerTest {
 
         Ailoc2GitSummary summary = summarize(diff, states, path -> false);
 
-        assertEquals(new SummarySnapshot(1, 1, weight("unknown value"), 0L, 1, 0, 0), snapshot(summary));
+        assertEquals(new SummarySnapshot(1, 1, weight("unknown value"), 0L, 1, 0, 1), snapshot(summary));
     }
 
     @Test

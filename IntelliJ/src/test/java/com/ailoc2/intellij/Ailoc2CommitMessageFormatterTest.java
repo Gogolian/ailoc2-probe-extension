@@ -11,7 +11,7 @@ class Ailoc2CommitMessageFormatterTest {
     void appendsLineDerivedPercentageToSubjectAndCountsToBody() {
         String result = Ailoc2CommitMessageFormatter.apply("Ship it", availableSummary());
 
-        assertEquals("Ship it (AI: 33.33%)\n\n(AI-Lines: 4/12)", result);
+        assertEquals("Ship it (AI: 40%)\n\n(AI-Lines: 4/10)\n(Unsure: 2/4)", result);
     }
 
     @Test
@@ -22,14 +22,14 @@ class Ailoc2CommitMessageFormatterTest {
             1L,
             9L,
             10L,
-            8L,
+            10L,
             2L,
             true,
             Map.of()
         );
 
         assertEquals(
-            "Ship it (AI: 50%)\n\n(AI-Lines: 10/20)",
+            "Ship it (AI: 50%)\n\n(AI-Lines: 10/20)\n(Unsure: 2/10)",
             Ailoc2CommitMessageFormatter.apply("Ship it (AI: 10.00%)", summary)
         );
     }
@@ -37,11 +37,11 @@ class Ailoc2CommitMessageFormatterTest {
     @Test
     void migratesLegacySubjectSuffixes() {
         assertEquals(
-            "Ship it (AI: 33.33%)\n\n(AI-Lines: 4/12)",
+            "Ship it (AI: 40%)\n\n(AI-Lines: 4/10)\n(Unsure: 2/4)",
             Ailoc2CommitMessageFormatter.apply("Ship it (AI 10.00%)", availableSummary())
         );
         assertEquals(
-            "Ship it (AI: 33.33%)\n\n(AI-Lines: 4/12)",
+            "Ship it (AI: 40%)\n\n(AI-Lines: 4/10)\n(Unsure: 2/4)",
             Ailoc2CommitMessageFormatter.apply(
                 "Ship it (AI: 10.00%) (AI lines: 1) (H lines: 9)",
                 availableSummary()
@@ -55,7 +55,7 @@ class Ailoc2CommitMessageFormatterTest {
 
         String result = Ailoc2CommitMessageFormatter.apply(message, availableSummary());
 
-        assertEquals("Ship it (AI: 33.33%)\r\n\r\n(AI-Lines: 4/12)\r\n\r\nBody line\r\n", result);
+        assertEquals("Ship it (AI: 40%)\r\n\r\n(AI-Lines: 4/10)\r\n(Unsure: 2/4)\r\n\r\nBody line\r\n", result);
     }
 
     @Test
@@ -64,7 +64,7 @@ class Ailoc2CommitMessageFormatterTest {
         String first = Ailoc2CommitMessageFormatter.apply(message, availableSummary());
         String second = Ailoc2CommitMessageFormatter.apply(first, availableSummary());
 
-        assertEquals("Ship it (AI: 33.33%)\n\n(AI-Lines: 4/12)\n\nContext\n\nFooter", first);
+        assertEquals("Ship it (AI: 40%)\n\n(AI-Lines: 4/10)\n(Unsure: 2/4)\n\nContext\n\nFooter", first);
         assertEquals(first, second);
     }
 
@@ -73,7 +73,7 @@ class Ailoc2CommitMessageFormatterTest {
         String first = Ailoc2CommitMessageFormatter.apply("", Ailoc2GitSummary.unavailable());
         String second = Ailoc2CommitMessageFormatter.apply(first, Ailoc2GitSummary.unavailable());
 
-        assertEquals("(AI: unavailable)\n\n(AI-Lines: unavailable)", first);
+        assertEquals("(AI: unavailable)\n\n(AI-Lines: unavailable)\n(Unsure: unavailable)", first);
         assertEquals(first, second);
     }
 
