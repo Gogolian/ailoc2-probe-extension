@@ -97,7 +97,8 @@ async function runAnnotateCommitMessage(
             });
             await applyAiLinesAnnotationToCommitMessageFile({
                 messageFilePath,
-                annotationText: placeholderAnnotation.annotationText
+                annotationText: placeholderAnnotation.annotationText,
+                unsureAnnotationText: placeholderAnnotation.unsureAnnotationText
             });
             console.log(placeholderAnnotation.annotationText);
             return 0;

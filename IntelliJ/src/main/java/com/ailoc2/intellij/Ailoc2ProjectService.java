@@ -337,16 +337,16 @@ public final class Ailoc2ProjectService implements Disposable {
         }
         if (commandContext.hasUndefinedCommandName()
             && commandContext.hasEmptyCommandGroup()) {
-            return new ClassificationResult(Ailoc2AttributionBucket.AI, "undefined-command");
+            return new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "undefined-command");
         }
         if (event.getOldLength() == 0
             && isBulkMultilineInsertion(event)) {
-            return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-insert");
+            return new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "bulk-insert");
         }
         if (event.getOldLength() > 0
             && event.getNewLength() > event.getOldLength() * (long) AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD
             && event.getNewLength() > AI_BULK_REPLACEMENT_MINIMUM_LENGTH) {
-            return new ClassificationResult(Ailoc2AttributionBucket.AI, "bulk-replacement");
+            return new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "bulk-replacement");
         }
         return new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "default-human");
     }

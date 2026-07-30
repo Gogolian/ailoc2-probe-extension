@@ -86,6 +86,7 @@ final class Ailoc2GitDiffSummarizer {
                 else if (weight > 0L) {
                     aiWeight += weight;
                     aiAddedLineCount++;
+                    unknownAddedLineCount++;
                     attributedFiles.add(currentPath);
                     fileWeights.compute(
                         currentPath,

@@ -96,7 +96,8 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
     };
     assert.deepEqual(preparedBaseline.cleanBaselineByRepoRelativePath[repoRelativePath], {
         aiChangeMagnitude: 8,
-        humanChangeMagnitude: 3
+        humanChangeMagnitude: 3,
+        unknownChangeMagnitude: 0
     });
 
     runGit(repoRoot, ['commit', '-m', 'stage only']);
@@ -109,7 +110,8 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
     assert.equal(finalizationResult.baselineSource, 'prepared');
     assert.deepEqual(repoSummaryState.cleanBaselineByRepoRelativePath[repoRelativePath], {
         aiChangeMagnitude: 8,
-        humanChangeMagnitude: 3
+        humanChangeMagnitude: 3,
+        unknownChangeMagnitude: 0
     });
     assert.equal(finalizationResult.clearedRollingStateFileCount, 0);
     assert.equal(finalizationResult.preservedUnstagedFileCount, 1);
@@ -238,7 +240,8 @@ test('prepareRepoPreCommit resolves only staged rolling states and preserves unr
         },
         [stagedPath]: {
             aiChangeMagnitude: 10,
-            humanChangeMagnitude: 0
+            humanChangeMagnitude: 0,
+            unknownChangeMagnitude: 0
         }
     });
 });
@@ -338,7 +341,7 @@ test('refreshRepoHookSummary needs flushed rolling state to attribute the first 
     assert.equal(beforeFlush.summary.staged.aiPercentage, 100);
     assert.equal(beforeFlush.summary.staged.aiAddedLineCount, 2);
     assert.equal(beforeFlush.summary.staged.humanAddedLineCount, 0);
-    assert.equal(beforeFlush.summary.staged.unknownAddedLineCount, 0);
+    assert.equal(beforeFlush.summary.staged.unknownAddedLineCount, 2);
 
     await metricsStore.flushRepo(repoRoot);
 
@@ -494,8 +497,8 @@ test('refreshRepoHookSummary weights changed lines by non-whitespace content', a
     assert.equal(refreshed.summary.isGitSummaryAvailable, true);
     assert.equal(refreshed.summary.staged.changedFileCount, 1);
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 1);
-    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - (7 / 17) * 100) < FLOATING_POINT_TOLERANCE);
-    assert.ok(Math.abs(refreshed.summary.staged.humanPercentage - (10 / 17) * 100) < FLOATING_POINT_TOLERANCE);
+    assert.equal(refreshed.summary.staged.aiPercentage, 50);
+    assert.equal(refreshed.summary.staged.humanPercentage, 50);
     assert.equal(refreshed.summary.staged.aiAddedLineCount, 1);
     assert.equal(refreshed.summary.staged.humanAddedLineCount, 1);
     assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
@@ -555,11 +558,8 @@ test('refreshRepoHookSummary attributes unresolved added lines as AI', async () 
 
     const refreshed = await refreshRepoHookSummary({ repoRoot });
 
-    const expectedAiWeight = 'newAi'.length + 'newUnknown'.length;
-    const expectedHumanWeight = 'newHuman'.length;
-    assert.ok(Math.abs(
-        refreshed.summary.staged.aiPercentage - (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100
-    ) < FLOATING_POINT_TOLERANCE);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - (2 / 3) * 100) < FLOATING_POINT_TOLERANCE);
+    assert.ok(Math.abs(refreshed.summary.staged.humanPercentage - (1 / 3) * 100) < FLOATING_POINT_TOLERANCE);
     assert.deepEqual({
         aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
         humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
@@ -567,7 +567,7 @@ test('refreshRepoHookSummary attributes unresolved added lines as AI', async () 
     }, {
         aiAddedLineCount: 2,
         humanAddedLineCount: 1,
-        unknownAddedLineCount: 0
+        unknownAddedLineCount: 1
     });
 });
 
@@ -601,7 +601,7 @@ test('refreshRepoHookSummary attributes a tied aggregate fallback line as AI', a
     }, {
         aiAddedLineCount: 1,
         humanAddedLineCount: 0,
-        unknownAddedLineCount: 0
+        unknownAddedLineCount: 1
     });
 });
 
@@ -627,7 +627,8 @@ test('refreshRepoHookSummary does not count deleted lines as authored additions'
 
     const refreshed = await refreshRepoHookSummary({ repoRoot });
 
-    assert.equal(refreshed.summary.staged.humanPercentage, 100);
+    assert.equal(refreshed.summary.staged.aiPercentage, 0);
+    assert.equal(refreshed.summary.staged.humanPercentage, 0);
     assert.deepEqual({
         aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
         humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
@@ -927,17 +928,16 @@ test('refreshRepoHookSummary attributes a staged small human file plus large AI 
     await metricsStore.flushRepo(repoRoot);
 
     const refreshed = await refreshRepoHookSummary({ repoRoot });
-    const expectedAiWeight = nonWhitespaceWeight(aiText);
-    const expectedHumanWeight = nonWhitespaceWeight(humanText);
-    const expectedAiPercentage = (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100;
+    const expectedAiLineCount = countNonBlankLines(aiText);
+    const expectedHumanLineCount = countNonBlankLines(humanText);
+    const expectedAiPercentage = (expectedAiLineCount / (expectedAiLineCount + expectedHumanLineCount)) * 100;
 
     assert.equal(refreshed.summary.isGitSummaryAvailable, true);
     assert.equal(refreshed.summary.staged.changedFileCount, 2);
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 2);
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
-    assert.ok(refreshed.summary.staged.aiPercentage > 98);
-    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(aiText));
-    assert.equal(refreshed.summary.staged.humanAddedLineCount, countNonBlankLines(humanText));
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, expectedAiLineCount);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, expectedHumanLineCount);
     assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 
@@ -1032,9 +1032,9 @@ test('refreshRepoHookSummary keeps formatter-neutral staged new-file rewrites wi
     assert.equal(aiRollingState.cumulativeHumanChangeMagnitude, 0);
 
     const refreshed = await refreshRepoHookSummary({ repoRoot });
-    const expectedAiWeight = nonWhitespaceWeight(aiAfterFormatText);
-    const expectedHumanWeight = nonWhitespaceWeight(humanText);
-    const expectedAiPercentage = (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100;
+    const expectedAiLineCount = countNonBlankLines(aiAfterFormatText);
+    const expectedHumanLineCount = countNonBlankLines(humanText);
+    const expectedAiPercentage = (expectedAiLineCount / (expectedAiLineCount + expectedHumanLineCount)) * 100;
 
     assert.equal(refreshed.summary.isGitSummaryAvailable, true);
     assert.equal(refreshed.summary.staged.changedFileCount, 2);
@@ -1042,8 +1042,8 @@ test('refreshRepoHookSummary keeps formatter-neutral staged new-file rewrites wi
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
     assert.ok(refreshed.summary.staged.aiPercentage > 45);
     assert.ok(refreshed.summary.staged.humanPercentage < 55);
-    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(aiAfterFormatText));
-    assert.equal(refreshed.summary.staged.humanAddedLineCount, countNonBlankLines(humanText));
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, expectedAiLineCount);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, expectedHumanLineCount);
     assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 

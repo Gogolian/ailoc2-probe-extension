@@ -13,14 +13,19 @@ export const HUMAN_SIGNAL_KEYS = [
     'LikelyHumanOrRegularEditorEdit'
 ] as const;
 
+export const UNKNOWN_SIGNAL_KEYS = [
+    'UncorrelatedBulkOrNewFileEdit'
+] as const;
+
 export const SIGNAL_COUNTER_KEYS = [
     ...AI_SIGNAL_KEYS,
-    ...HUMAN_SIGNAL_KEYS
+    ...HUMAN_SIGNAL_KEYS,
+    ...UNKNOWN_SIGNAL_KEYS
 ] as const;
 
 export type SignalCounterKey = typeof SIGNAL_COUNTER_KEYS[number];
-export type AttributionBucket = 'AI' | 'Human';
-export type LineAttribution = AttributionBucket | 'Unknown';
+export type AttributionBucket = 'AI' | 'Human' | 'Unknown';
+export type LineAttribution = AttributionBucket;
 
 export type LineDiffSegment = {
     type: 'equal' | 'added' | 'removed';
@@ -41,6 +46,10 @@ export function getAttributionBucketForSignal(signal: string): AttributionBucket
 
     if ((HUMAN_SIGNAL_KEYS as readonly string[]).includes(signal)) {
         return 'Human';
+    }
+
+    if ((UNKNOWN_SIGNAL_KEYS as readonly string[]).includes(signal)) {
+        return 'Unknown';
     }
 
     return null;
@@ -125,6 +134,7 @@ export type SaveAttributionCheckpoint = {
     gitBlobOid: string | null;
     cumulativeAiChangeMagnitude: number;
     cumulativeHumanChangeMagnitude: number;
+    cumulativeUnknownChangeMagnitude: number;
     lineAttributionSpans: LineAttributionSpan[];
 };
 
@@ -138,6 +148,7 @@ export type FileRollingState = {
     signalCounters: Record<string, number>;
     cumulativeAiChangeMagnitude: number;
     cumulativeHumanChangeMagnitude: number;
+    cumulativeUnknownChangeMagnitude: number;
     saveAttributionCheckpoints: SaveAttributionCheckpoint[];
     lineAttributionSpans: LineAttributionSpan[];
     deletedAt: string | null;
@@ -146,6 +157,7 @@ export type FileRollingState = {
 export type RepoCleanBaselineEntry = {
     aiChangeMagnitude: number;
     humanChangeMagnitude: number;
+    unknownChangeMagnitude: number;
 };
 
 export type RepoSummaryState = {

@@ -50,6 +50,7 @@ final class Ailoc2Storage {
         builder.append("recordedAt\t").append(state.getRecordedAt()).append('\n');
         builder.append("aiMagnitude\t").append(state.getAiMagnitude()).append('\n');
         builder.append("humanMagnitude\t").append(state.getHumanMagnitude()).append('\n');
+        builder.append("unknownMagnitude\t").append(state.getUnknownMagnitude()).append('\n');
         for (Map.Entry<Integer, Ailoc2AttributionBucket> entry : state.getLineBuckets().entrySet()) {
             builder.append("line\t").append(entry.getKey()).append('\t').append(entry.getValue().name()).append('\n');
         }
@@ -226,6 +227,9 @@ final class Ailoc2Storage {
                 }
                 else if (parts.length == 2 && "humanMagnitude".equals(parts[0])) {
                     state.setHumanMagnitude(Long.parseLong(parts[1]));
+                }
+                else if (parts.length == 2 && "unknownMagnitude".equals(parts[0])) {
+                    state.setUnknownMagnitude(Long.parseLong(parts[1]));
                 }
                 else if (parts.length == 2 && "source".equals(parts[0])) {
                     state.setSource(parts[1]);

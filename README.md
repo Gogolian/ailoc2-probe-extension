@@ -211,7 +211,7 @@ The current heuristic uses explicit AI and Human signals where available and ass
 - Large one-shot multi-line insertions or expansions require recent chat-editing context to count as probable AI bulk edits. Size alone is not enough to call a paste AI.
 - A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
 - Zero-content change events are filtered out as lifecycle noise.
-- Unknown or unattributed changed lines are counted as AI in both line counts and character-weighted percentages.
+- Unknown or unattributed changed lines are counted as AI in both line counts and line-derived percentages.
 
 ### Signals used today
 
@@ -225,7 +225,7 @@ The current heuristic uses explicit AI and Human signals where available and ass
 
 ### How the summary is computed
 
-AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Summary percentages ignore whitespace-only diff hunks and weight changed lines by non-whitespace characters only, so formatter and linter whitespace churn is not counted as AI or Human work. The separate line counters count non-blank added lines on the new side of the diff: a modified line counts once, while a pure deletion or blank addition counts zero. In `(AI-Lines: x/y)`, `x` is the AI line count and `y` is the sum of AI and Human line counts. The commit subject suffix is derived from the same counts as $100 \times x/y$, with at most two decimal places. Any line that lacks usable attribution or has an explicit Unknown bucket is assigned to AI when the summary is generated. `unknownAddedLineCount` remains in summary JSON for compatibility and is `0` in new summaries. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; structural formatter/linter rewrites such as import sorting still count as normal changes.
+AILoc2 compares rolling attribution state with staged and unstaged Git diff slices. Summary percentages use the non-blank added-line counts shown beside them: a modified line counts once, while a pure deletion or blank addition counts zero. Character weights remain in summary JSON as diagnostic data. In `(AI-Lines: x/y)`, `x` is the AI line count and `y` is the sum of AI and Human line counts. The summary and commit subject percentages are derived from the same counts as $100 \times x/y$, with at most two decimal places. Any line that lacks usable attribution or has an explicit Unknown bucket is assigned to AI when the summary is generated. `unknownAddedLineCount` remains in summary JSON for compatibility and is `0` in new summaries. Newly added files are scored from file-level attribution magnitudes because line-local spans can be noisy during first-file creation. This simplification currently applies to all tracked file types, including whitespace-significant languages; structural formatter/linter rewrites such as import sorting still count as normal changes.
 
 ## Current limitations
 

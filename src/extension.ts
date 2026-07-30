@@ -121,6 +121,7 @@ type ChangeStats = {
     isNoOp: boolean;
     isWholeDocumentReplace: boolean;
     isSmallLocalizedEdit: boolean;
+    isInitialFilePopulation: boolean;
     isLargeBulkInsertion: boolean;
     isLargeBulkExpansion: boolean;
     replacementRatio: number | null;
@@ -136,6 +137,7 @@ type ChangeMetricCandidate = {
     totalInsertedLineCount: number;
     totalRemovedLineCount: number;
     isWholeDocumentReplace: boolean;
+    isInitialFilePopulation: boolean;
     isLargeBulkInsertion: boolean;
     isLargeBulkExpansion: boolean;
     hasRecentSnapshotActivity: boolean;
@@ -1358,6 +1360,7 @@ function describeChangeHeuristics(input: {
         isNoOp: input.changeStats.isNoOp,
         isWholeDocumentReplace: input.changeStats.isWholeDocumentReplace,
         isSmallLocalizedEdit: input.changeStats.isSmallLocalizedEdit,
+        isInitialFilePopulation: input.changeStats.isInitialFilePopulation,
         replacementRatio: input.changeStats.replacementRatio,
         totalInsertedTextLength: input.changeStats.totalInsertedTextLength,
         totalRemovedTextLength: input.changeStats.totalRemovedTextLength,
@@ -1403,6 +1406,12 @@ function computeChangeStats(
         && event.contentChanges.length === 1
         && totalInsertedTextLength <= 8
         && totalRemovedTextLength <= 8;
+    const isInitialFilePopulation = Boolean(
+        beforeSnapshot
+        && beforeSnapshot.text.length === 0
+        && totalRemovedTextLength === 0
+        && totalInsertedTextLength > 0
+    );
     const isLargeBulkInsertion = totalRemovedTextLength === 0
         && totalInsertedTextLength >= BULK_AI_INSERT_MINIMUM_TEXT_LENGTH
         && totalInsertedLineCount >= BULK_AI_INSERT_MINIMUM_LINE_COUNT;
@@ -1423,6 +1432,7 @@ function computeChangeStats(
         isNoOp,
         isWholeDocumentReplace,
         isSmallLocalizedEdit,
+        isInitialFilePopulation,
         isLargeBulkInsertion,
         isLargeBulkExpansion,
         replacementRatio
@@ -1457,6 +1467,7 @@ function classifyChangeEvent(input: {
             isNoOp: input.changeStats.isNoOp,
             isWholeDocumentReplace: input.changeStats.isWholeDocumentReplace,
             isSmallLocalizedEdit: input.changeStats.isSmallLocalizedEdit,
+            isInitialFilePopulation: input.changeStats.isInitialFilePopulation,
             isLargeBulkInsertion: input.changeStats.isLargeBulkInsertion,
             isLargeBulkExpansion: input.changeStats.isLargeBulkExpansion,
             hasRecentChatCorrelation: input.recentChatEditCorrelation !== null,
@@ -1491,6 +1502,7 @@ function createChangeMetricCandidate(input: {
         totalInsertedLineCount: input.changeStats.totalInsertedLineCount,
         totalRemovedLineCount: input.changeStats.totalRemovedLineCount,
         isWholeDocumentReplace: input.changeStats.isWholeDocumentReplace,
+        isInitialFilePopulation: input.changeStats.isInitialFilePopulation,
         isLargeBulkInsertion: input.changeStats.isLargeBulkInsertion,
         isLargeBulkExpansion: input.changeStats.isLargeBulkExpansion,
         hasRecentSnapshotActivity: input.recentChatEditCorrelation?.hasRecentSnapshotActivity ?? false,

@@ -90,7 +90,8 @@ async function mirrorClaudeAttributionForIntellij(
         'source\tCLAUDE_CODE',
         `recordedAt\t${recordedAt}`,
         `aiMagnitude\t${rollingState.cumulativeAiChangeMagnitude}`,
-        `humanMagnitude\t${rollingState.cumulativeHumanChangeMagnitude}`
+        `humanMagnitude\t${rollingState.cumulativeHumanChangeMagnitude}`,
+        `unknownMagnitude\t${rollingState.cumulativeUnknownChangeMagnitude}`
     ];
     let lineNumber = 1;
     for (const span of rollingState.lineAttributionSpans) {

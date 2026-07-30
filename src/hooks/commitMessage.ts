@@ -7,12 +7,14 @@ export const DEFAULT_AI_PLACEHOLDER_LABEL = 'unavailable';
 
 const AI_SUBJECT_SUFFIX_PATTERN = /(?:^|\s+)(?:(?:\(AI:? [^)]*\)|\(AI lines: [^)]*\)|\(H lines: [^)]*\)|\(AI-Lines: [^)]*\))(?:\s+|$))+$/u;
 const AI_LINES_BODY_PATTERN = /^\s*\(AI-Lines: [^)]*\)\s*$/u;
+const UNSURE_BODY_PATTERN = /^\s*\(Unsure: [^)]*\)\s*$/u;
 const AI_LINES_ANNOTATION_PATTERN = /^\(AI-Lines: (?:(\d+)\/(\d+)|([^)]*))\)$/u;
 
 export type CommitMessageAnnotationResult = {
     messageFilePath: string;
     summaryFilePath: string;
     annotationText: string;
+    unsureAnnotationText: string;
     usedPlaceholder: boolean;
     summaryAvailable: boolean;
 };
@@ -34,13 +36,15 @@ export async function annotateCommitMessageFile(args: {
 
     await applyAiLinesAnnotationToCommitMessageFile({
         messageFilePath: args.messageFilePath,
-        annotationText: annotation.annotationText
+        annotationText: annotation.annotationText,
+        unsureAnnotationText: annotation.unsureAnnotationText
     });
 
     return {
         messageFilePath: args.messageFilePath,
         summaryFilePath,
         annotationText: annotation.annotationText,
+        unsureAnnotationText: annotation.unsureAnnotationText,
         usedPlaceholder: annotation.usedPlaceholder,
         summaryAvailable: hasGitSummary && !annotation.usedPlaceholder
     };
@@ -49,15 +53,24 @@ export async function annotateCommitMessageFile(args: {
 export async function applyAiLinesAnnotationToCommitMessageFile(args: {
     messageFilePath: string;
     annotationText: string;
+    unsureAnnotationText: string;
 }): Promise<void> {
     const currentMessageText = await fs.promises.readFile(args.messageFilePath, 'utf8');
-    const nextMessageText = applyAiLinesAnnotationToCommitMessage(currentMessageText, args.annotationText);
+    const nextMessageText = applyAiLinesAnnotationToCommitMessage(
+        currentMessageText,
+        args.annotationText,
+        args.unsureAnnotationText
+    );
     if (nextMessageText !== currentMessageText) {
         await fs.promises.writeFile(args.messageFilePath, nextMessageText, 'utf8');
     }
 }
 
-export function applyAiLinesAnnotationToCommitMessage(messageText: string, annotationText: string): string {
+export function applyAiLinesAnnotationToCommitMessage(
+    messageText: string,
+    annotationText: string,
+    unsureAnnotationText: string
+): string {
     const newline = detectNewline(messageText);
     const lines = messageText.split(/\r\n|\r|\n/u);
     const normalizedSubject = appendAiSubjectSuffix(stripAiSuffix(lines[0] ?? ''), annotationText);
@@ -65,7 +78,7 @@ export function applyAiLinesAnnotationToCommitMessage(messageText: string, annot
     const bodyLines: string[] = [];
     for (let index = 0; index < originalBodyLines.length; index++) {
         const line = originalBodyLines[index];
-        if (!AI_LINES_BODY_PATTERN.test(line)) {
+        if (!AI_LINES_BODY_PATTERN.test(line) && !UNSURE_BODY_PATTERN.test(line)) {
             bodyLines.push(line);
             continue;
         }
@@ -82,7 +95,7 @@ export function applyAiLinesAnnotationToCommitMessage(messageText: string, annot
         bodyLines.shift();
     }
 
-    const annotatedLines = [normalizedSubject, '', annotationText];
+    const annotatedLines = [normalizedSubject, '', annotationText, unsureAnnotationText];
     if (bodyLines.length > 0) {
         annotatedLines.push('', ...bodyLines);
     } else if (endsWithNewline(messageText)) {
@@ -99,12 +112,19 @@ export function createAiLinesAnnotation(args: {
     placeholderLabel?: string;
 }): {
     annotationText: string;
+    unsureAnnotationText: string;
     usedPlaceholder: boolean;
 } {
-    const totalLineCount = sumLineCounts(args.aiLineCount, args.humanLineCount, args.unknownLineCount);
-    if (isValidLineCount(args.aiLineCount) && totalLineCount !== null) {
+    const totalLineCount = sumLineCounts(args.aiLineCount, args.humanLineCount);
+    if (
+        isValidLineCount(args.aiLineCount)
+        && isValidLineCount(args.unknownLineCount)
+        && args.unknownLineCount <= args.aiLineCount
+        && totalLineCount !== null
+    ) {
         return {
             annotationText: `(AI-Lines: ${args.aiLineCount}/${totalLineCount})`,
+            unsureAnnotationText: `(Unsure: ${args.unknownLineCount}/${args.aiLineCount})`,
             usedPlaceholder: false
         };
     }
@@ -112,6 +132,7 @@ export function createAiLinesAnnotation(args: {
     const placeholderLabel = args.placeholderLabel ?? DEFAULT_AI_PLACEHOLDER_LABEL;
     return {
         annotationText: `(AI-Lines: ${placeholderLabel})`,
+        unsureAnnotationText: `(Unsure: ${placeholderLabel})`,
         usedPlaceholder: true
     };
 }

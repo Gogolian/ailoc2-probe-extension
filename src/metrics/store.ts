@@ -448,6 +448,7 @@ export class RepoMetricsStore {
             gitBlobOid,
             cumulativeAiChangeMagnitude: rollingState.cumulativeAiChangeMagnitude,
             cumulativeHumanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude,
+            cumulativeUnknownChangeMagnitude: rollingState.cumulativeUnknownChangeMagnitude,
             lineAttributionSpans: this.cloneLineAttributionSpans(rollingState.lineAttributionSpans)
         };
 
@@ -457,6 +458,7 @@ export class RepoMetricsStore {
             && lastCheckpoint.gitBlobOid === gitBlobOid
             && lastCheckpoint.cumulativeAiChangeMagnitude === nextCheckpoint.cumulativeAiChangeMagnitude
             && lastCheckpoint.cumulativeHumanChangeMagnitude === nextCheckpoint.cumulativeHumanChangeMagnitude
+            && lastCheckpoint.cumulativeUnknownChangeMagnitude === nextCheckpoint.cumulativeUnknownChangeMagnitude
             && this.areLineAttributionSpansEqual(lastCheckpoint.lineAttributionSpans, nextCheckpoint.lineAttributionSpans)
         );
 
@@ -509,6 +511,9 @@ export class RepoMetricsStore {
         }
         else if (attributionBucket === 'Human') {
             rollingState.cumulativeHumanChangeMagnitude += attributionRelevantChangeMagnitude;
+        }
+        else if (attributionBucket === 'Unknown') {
+            rollingState.cumulativeUnknownChangeMagnitude += attributionRelevantChangeMagnitude;
         }
     }
 
@@ -574,6 +579,7 @@ export class RepoMetricsStore {
                     },
                     cumulativeAiChangeMagnitude: existing.cumulativeAiChangeMagnitude ?? emptyState.cumulativeAiChangeMagnitude,
                     cumulativeHumanChangeMagnitude: existing.cumulativeHumanChangeMagnitude ?? emptyState.cumulativeHumanChangeMagnitude,
+                    cumulativeUnknownChangeMagnitude: existing.cumulativeUnknownChangeMagnitude ?? emptyState.cumulativeUnknownChangeMagnitude,
                     saveAttributionCheckpoints: (existing.saveAttributionCheckpoints ?? []).map((checkpoint) =>
                         this.normalizeSaveAttributionCheckpoint(checkpoint)
                     ),
@@ -604,6 +610,7 @@ export class RepoMetricsStore {
             signalCounters: this.createSignalCounters(),
             cumulativeAiChangeMagnitude: 0,
             cumulativeHumanChangeMagnitude: 0,
+            cumulativeUnknownChangeMagnitude: 0,
             saveAttributionCheckpoints: [],
             lineAttributionSpans: [],
             deletedAt: null
@@ -618,6 +625,7 @@ export class RepoMetricsStore {
         gitBlobOid: string | null;
         cumulativeAiChangeMagnitude: number;
         cumulativeHumanChangeMagnitude: number;
+        cumulativeUnknownChangeMagnitude: number;
         lineAttributionSpans: LineAttributionSpan[];
     }>): FileRollingState['saveAttributionCheckpoints'][number] {
         return {
@@ -627,6 +635,9 @@ export class RepoMetricsStore {
                 : 0,
             cumulativeHumanChangeMagnitude: typeof checkpoint.cumulativeHumanChangeMagnitude === 'number'
                 ? checkpoint.cumulativeHumanChangeMagnitude
+                : 0,
+            cumulativeUnknownChangeMagnitude: typeof checkpoint.cumulativeUnknownChangeMagnitude === 'number'
+                ? checkpoint.cumulativeUnknownChangeMagnitude
                 : 0,
             lineAttributionSpans: this.normalizeLineAttributionSpans(checkpoint.lineAttributionSpans ?? [])
         };

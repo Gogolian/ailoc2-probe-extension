@@ -234,15 +234,15 @@ test('Claude Code metrics combine with human metrics in staged summary', async (
 
     runGit(repoRoot, ['add', humanGitPath, claudeGitPath]);
     const refreshed = await refreshRepoHookSummary({ repoRoot });
-    const expectedAiWeight = nonWhitespaceWeight(claudeText);
-    const expectedHumanWeight = nonWhitespaceWeight(humanText);
-    const expectedAiPercentage = (expectedAiWeight / (expectedAiWeight + expectedHumanWeight)) * 100;
+    const expectedAiLineCount = countNonBlankLines(claudeText);
+    const expectedHumanLineCount = countNonBlankLines(humanText);
+    const expectedAiPercentage = (expectedAiLineCount / (expectedAiLineCount + expectedHumanLineCount)) * 100;
 
     assert.equal(refreshed.summary.staged.changedFileCount, 2);
     assert.equal(refreshed.summary.staged.attributedChangedFileCount, 2);
     assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - expectedAiPercentage) < FLOATING_POINT_TOLERANCE);
-    assert.equal(refreshed.summary.staged.aiAddedLineCount, countNonBlankLines(claudeText));
-    assert.equal(refreshed.summary.staged.humanAddedLineCount, countNonBlankLines(humanText));
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, expectedAiLineCount);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, expectedHumanLineCount);
     assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
 });
 

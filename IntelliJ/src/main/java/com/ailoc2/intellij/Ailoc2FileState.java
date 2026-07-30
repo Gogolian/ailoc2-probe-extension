@@ -8,6 +8,7 @@ final class Ailoc2FileState {
     private final Map<Integer, Ailoc2AttributionBucket> lineBuckets = new TreeMap<>();
     private long aiMagnitude;
     private long humanMagnitude;
+    private long unknownMagnitude;
     private String source = "INTELLIJ";
     private String recordedAt = "";
 
@@ -92,6 +93,9 @@ final class Ailoc2FileState {
         else if (bucket == Ailoc2AttributionBucket.HUMAN) {
             humanMagnitude += positiveMagnitude;
         }
+        else {
+            unknownMagnitude += positiveMagnitude;
+        }
     }
 
     long getAiMagnitude() {
@@ -102,12 +106,20 @@ final class Ailoc2FileState {
         return humanMagnitude;
     }
 
+    long getUnknownMagnitude() {
+        return unknownMagnitude;
+    }
+
     void setAiMagnitude(long aiMagnitude) {
         this.aiMagnitude = Math.max(0L, aiMagnitude);
     }
 
     void setHumanMagnitude(long humanMagnitude) {
         this.humanMagnitude = Math.max(0L, humanMagnitude);
+    }
+
+    void setUnknownMagnitude(long unknownMagnitude) {
+        this.unknownMagnitude = Math.max(0L, unknownMagnitude);
     }
 
     String getSource() {
@@ -127,9 +139,16 @@ final class Ailoc2FileState {
     }
 
     Ailoc2AttributionBucket fallbackBucket() {
-        if (aiMagnitude == 0L && humanMagnitude == 0L) {
+        long strongestMagnitude = Math.max(aiMagnitude, Math.max(humanMagnitude, unknownMagnitude));
+        if (strongestMagnitude == 0L) {
             return Ailoc2AttributionBucket.UNKNOWN;
         }
-        return aiMagnitude >= humanMagnitude ? Ailoc2AttributionBucket.AI : Ailoc2AttributionBucket.HUMAN;
+        int strongestBucketCount = (aiMagnitude == strongestMagnitude ? 1 : 0)
+            + (humanMagnitude == strongestMagnitude ? 1 : 0)
+            + (unknownMagnitude == strongestMagnitude ? 1 : 0);
+        if (strongestBucketCount > 1 || unknownMagnitude == strongestMagnitude) {
+            return Ailoc2AttributionBucket.UNKNOWN;
+        }
+        return aiMagnitude == strongestMagnitude ? Ailoc2AttributionBucket.AI : Ailoc2AttributionBucket.HUMAN;
     }
 }

@@ -7,6 +7,7 @@ export type WorkspaceFileChangeClassificationInput = {
     isNoOp: boolean;
     isWholeDocumentReplace: boolean;
     isSmallLocalizedEdit: boolean;
+    isInitialFilePopulation: boolean;
     isLargeBulkInsertion: boolean;
     isLargeBulkExpansion: boolean;
     hasRecentChatCorrelation: boolean;
@@ -49,10 +50,10 @@ export function classifyWorkspaceFileChange(input: WorkspaceFileChangeClassifica
         };
     }
 
-    if (input.isLargeBulkInsertion || input.isLargeBulkExpansion) {
+    if (input.isInitialFilePopulation || input.isLargeBulkInsertion || input.isLargeBulkExpansion) {
         return {
-            signal: 'LikelyHumanOrRegularEditorEdit',
-            explanation: 'A large workspace-file edit occurred without chat-editing evidence, so it is treated as a human paste or regular editor operation.'
+            signal: 'UncorrelatedBulkOrNewFileEdit',
+            explanation: 'A new file population or bulk workspace edit occurred without enough evidence to distinguish an AI tool from a human bulk operation.'
         };
     }
 

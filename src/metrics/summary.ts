@@ -520,10 +520,12 @@ function applyDiffSliceContribution(
     attribution: {
         aiMagnitude: number;
         humanMagnitude: number;
+        unknownMagnitude: number;
         usedFallbackAttribution: boolean;
     }
 ): void {
-    const totalMagnitude = attribution.aiMagnitude + attribution.humanMagnitude;
+    const unknownMagnitude = attribution.unknownMagnitude ?? 0;
+    const totalMagnitude = attribution.aiMagnitude + attribution.humanMagnitude + unknownMagnitude;
     if (totalMagnitude <= 0) {
         applyUnresolvedAddedLinesAsAi(summary, diffEntry);
         return;
@@ -534,12 +536,13 @@ function applyDiffSliceContribution(
     const allocatedLineCounts = allocateAddedLineCounts(
         diffEntry.addedLineCount,
         attribution.aiMagnitude,
-        attribution.humanMagnitude
+        attribution.humanMagnitude,
+        unknownMagnitude
     );
     const useAllocatedLineRatios = allocatedLineCounts.assignedUnresolvedToAi && diffEntry.addedLineCount > 0;
     const aiRatio = useAllocatedLineRatios
         ? allocatedLineCounts.ai / diffEntry.addedLineCount
-        : attribution.aiMagnitude / totalMagnitude;
+        : (attribution.aiMagnitude + unknownMagnitude) / totalMagnitude;
     const humanRatio = useAllocatedLineRatios
         ? allocatedLineCounts.human / diffEntry.addedLineCount
         : attribution.humanMagnitude / totalMagnitude;
@@ -547,6 +550,7 @@ function applyDiffSliceContribution(
     summary.humanWeightedChangedLines += diffEntry.changedLines * humanRatio;
     summary.aiAddedLineCount += allocatedLineCounts.ai;
     summary.humanAddedLineCount += allocatedLineCounts.human;
+    summary.unknownAddedLineCount += allocatedLineCounts.unknown;
 }
 
 function applyChangedLineAttributionSummary(
@@ -563,6 +567,7 @@ function applyChangedLineAttributionSummary(
     summary.humanWeightedChangedLines += attribution.humanWeight;
     summary.aiAddedLineCount += attribution.aiAddedLineCount + attribution.unknownAddedLineCount;
     summary.humanAddedLineCount += attribution.humanAddedLineCount;
+    summary.unknownAddedLineCount += attribution.unknownAddedLineCount;
     return true;
 }
 
@@ -577,61 +582,72 @@ function applyUnresolvedAddedLinesAsAi(
     summary.attributedChangedFileCount += 1;
     summary.aiWeightedChangedLines += diffEntry.changedLines;
     summary.aiAddedLineCount += diffEntry.addedLineCount;
+    summary.unknownAddedLineCount += diffEntry.addedLineCount;
     summary.usedFallbackAttribution = true;
 }
 
 function allocateAddedLineCounts(
     addedLineCount: number,
     aiMagnitude: number,
-    humanMagnitude: number
+    humanMagnitude: number,
+    unknownMagnitude: number = 0
 ): { ai: number; human: number; unknown: number; assignedUnresolvedToAi: boolean; } {
     const normalizedAddedLineCount = Math.max(0, Math.trunc(addedLineCount));
     const normalizedAiMagnitude = Math.max(0, aiMagnitude);
     const normalizedHumanMagnitude = Math.max(0, humanMagnitude);
-    const totalMagnitude = normalizedAiMagnitude + normalizedHumanMagnitude;
+    const normalizedUnknownMagnitude = Math.max(0, unknownMagnitude ?? 0);
+    const totalMagnitude = normalizedAiMagnitude + normalizedHumanMagnitude + normalizedUnknownMagnitude;
     if (normalizedAddedLineCount === 0 || totalMagnitude <= 0) {
         return {
             ai: normalizedAddedLineCount,
             human: 0,
-            unknown: 0,
+            unknown: normalizedAddedLineCount,
             assignedUnresolvedToAi: normalizedAddedLineCount > 0
         };
     }
 
     const aiQuota = (normalizedAddedLineCount * normalizedAiMagnitude) / totalMagnitude;
     const humanQuota = (normalizedAddedLineCount * normalizedHumanMagnitude) / totalMagnitude;
+    const unknownQuota = (normalizedAddedLineCount * normalizedUnknownMagnitude) / totalMagnitude;
     let ai = Math.floor(aiQuota);
     let human = Math.floor(humanQuota);
-    let unknown = normalizedAddedLineCount - ai - human;
+    let unknown = Math.floor(unknownQuota);
+    let unresolved = normalizedAddedLineCount - ai - human - unknown;
     let assignedUnresolvedToAi = false;
 
-    if (unknown === 1) {
+    if (unresolved === 1) {
         const aiRemainder = aiQuota - ai;
         const humanRemainder = humanQuota - human;
-        if (aiRemainder > humanRemainder) {
+        const unknownRemainder = unknownQuota - unknown;
+        if (aiRemainder > humanRemainder && aiRemainder > unknownRemainder) {
             ai += 1;
-            unknown = 0;
+            unresolved = 0;
         }
-        else if (humanRemainder > aiRemainder) {
+        else if (humanRemainder > aiRemainder && humanRemainder > unknownRemainder) {
             human += 1;
-            unknown = 0;
+            unresolved = 0;
+        }
+        else if (unknownRemainder > aiRemainder && unknownRemainder > humanRemainder) {
+            unknown += 1;
+            unresolved = 0;
         }
     }
 
-    assignedUnresolvedToAi = unknown > 0;
+    assignedUnresolvedToAi = unresolved > 0;
+    unknown += unresolved;
     ai += unknown;
-    unknown = 0;
 
     return { ai, human, unknown, assignedUnresolvedToAi };
 }
 
 function finalizeDiffSliceSummary(summary: DiffSliceAttributionSummary): void {
-    const totalWeightedChangedLines = summary.aiWeightedChangedLines + summary.humanWeightedChangedLines;
-    summary.aiPercentage = totalWeightedChangedLines > 0
-        ? (summary.aiWeightedChangedLines / totalWeightedChangedLines) * 100
+    const totalAddedLineCount = summary.aiAddedLineCount
+        + summary.humanAddedLineCount;
+    summary.aiPercentage = totalAddedLineCount > 0
+        ? (summary.aiAddedLineCount / totalAddedLineCount) * 100
         : 0;
-    summary.humanPercentage = totalWeightedChangedLines > 0
-        ? (summary.humanWeightedChangedLines / totalWeightedChangedLines) * 100
+    summary.humanPercentage = totalAddedLineCount > 0
+        ? (summary.humanAddedLineCount / totalAddedLineCount) * 100
         : 0;
 }
 
@@ -639,21 +655,25 @@ function subtractAttribution(
     currentAttribution: {
         aiMagnitude: number;
         humanMagnitude: number;
+        unknownMagnitude: number;
         usedFallbackAttribution: boolean;
     },
     previousAttribution: {
         aiMagnitude: number;
         humanMagnitude: number;
+        unknownMagnitude: number;
         usedFallbackAttribution: boolean;
     }
 ): {
     aiMagnitude: number;
     humanMagnitude: number;
+    unknownMagnitude: number;
     usedFallbackAttribution: boolean;
 } {
     return {
         aiMagnitude: Math.max(0, currentAttribution.aiMagnitude - previousAttribution.aiMagnitude),
         humanMagnitude: Math.max(0, currentAttribution.humanMagnitude - previousAttribution.humanMagnitude),
+        unknownMagnitude: Math.max(0, (currentAttribution.unknownMagnitude ?? 0) - (previousAttribution.unknownMagnitude ?? 0)),
         usedFallbackAttribution: currentAttribution.usedFallbackAttribution || previousAttribution.usedFallbackAttribution
     };
 }
@@ -664,11 +684,13 @@ function deriveCurrentFileAttribution(
 ): {
     aiMagnitude: number;
     humanMagnitude: number;
+    unknownMagnitude: number;
     usedFallbackAttribution: boolean;
 } {
     const baseline = baselineByRepoRelativePath[rollingState.repoRelativePath] ?? {
         aiChangeMagnitude: 0,
         humanChangeMagnitude: 0
+        , unknownChangeMagnitude: 0
     };
 
     let aiMagnitude = Math.max(
@@ -679,9 +701,13 @@ function deriveCurrentFileAttribution(
         0,
         rollingState.cumulativeHumanChangeMagnitude - baseline.humanChangeMagnitude
     );
+    let unknownMagnitude = Math.max(
+        0,
+        rollingState.cumulativeUnknownChangeMagnitude - (baseline.unknownChangeMagnitude ?? 0)
+    );
 
     let usedFallbackAttribution = false;
-    if (aiMagnitude === 0 && humanMagnitude === 0) {
+    if (aiMagnitude === 0 && humanMagnitude === 0 && unknownMagnitude === 0) {
         const aiSignalCount = AI_SIGNAL_KEYS.reduce(
             (sum, signal) => sum + (rollingState.signalCounters[signal] ?? 0),
             0
@@ -708,12 +734,17 @@ function deriveCurrentFileAttribution(
                 humanMagnitude = 1;
                 usedFallbackAttribution = true;
             }
+            else if (attributionBucket === 'Unknown') {
+                unknownMagnitude = 1;
+                usedFallbackAttribution = true;
+            }
         }
     }
 
     return {
         aiMagnitude,
         humanMagnitude,
+        unknownMagnitude,
         usedFallbackAttribution
     };
 }
@@ -723,11 +754,13 @@ function deriveNewFileAttributionForSummary(
     attribution: {
         aiMagnitude: number;
         humanMagnitude: number;
+        unknownMagnitude: number;
         usedFallbackAttribution: boolean;
     }
 ): {
     aiMagnitude: number;
     humanMagnitude: number;
+    unknownMagnitude: number;
     usedFallbackAttribution: boolean;
 } {
     if (!shouldRepairHistoricalBulkAiNewFileAttribution(rollingState, attribution)) {
@@ -737,6 +770,7 @@ function deriveNewFileAttributionForSummary(
     return {
         aiMagnitude: attribution.aiMagnitude + attribution.humanMagnitude,
         humanMagnitude: 0,
+        unknownMagnitude: attribution.unknownMagnitude,
         usedFallbackAttribution: true
     };
 }
@@ -746,6 +780,7 @@ function shouldRepairHistoricalBulkAiNewFileAttribution(
     attribution: {
         aiMagnitude: number;
         humanMagnitude: number;
+        unknownMagnitude: number;
     }
 ): boolean {
     if (attribution.aiMagnitude <= 0 || attribution.humanMagnitude <= 0) {
@@ -777,6 +812,7 @@ async function deriveStagedCheckpointAttribution(
 ): Promise<{
     aiMagnitude: number;
     humanMagnitude: number;
+    unknownMagnitude: number;
     usedFallbackAttribution: boolean;
     lineAttributionSpans: LineAttributionSpan[];
 } | null> {
@@ -796,11 +832,13 @@ async function deriveStagedCheckpointAttribution(
     const baseline = baselineByRepoRelativePath[rollingState.repoRelativePath] ?? {
         aiChangeMagnitude: 0,
         humanChangeMagnitude: 0
+        , unknownChangeMagnitude: 0
     };
 
     return {
         aiMagnitude: Math.max(0, matchingCheckpoint.cumulativeAiChangeMagnitude - baseline.aiChangeMagnitude),
         humanMagnitude: Math.max(0, matchingCheckpoint.cumulativeHumanChangeMagnitude - baseline.humanChangeMagnitude),
+        unknownMagnitude: Math.max(0, matchingCheckpoint.cumulativeUnknownChangeMagnitude - (baseline.unknownChangeMagnitude ?? 0)),
         usedFallbackAttribution: false,
         lineAttributionSpans: matchingCheckpoint.lineAttributionSpans
     };
@@ -1423,14 +1461,16 @@ async function resolveCommitBaselineForRollingState(
 function createBaselineEntryFromCheckpoint(checkpoint: SaveAttributionCheckpoint): RepoCleanBaselineEntry {
     return {
         aiChangeMagnitude: checkpoint.cumulativeAiChangeMagnitude,
-        humanChangeMagnitude: checkpoint.cumulativeHumanChangeMagnitude
+        humanChangeMagnitude: checkpoint.cumulativeHumanChangeMagnitude,
+        unknownChangeMagnitude: checkpoint.cumulativeUnknownChangeMagnitude
     };
 }
 
 function createBaselineEntryFromRollingState(rollingState: FileRollingState): RepoCleanBaselineEntry {
     return {
         aiChangeMagnitude: rollingState.cumulativeAiChangeMagnitude,
-        humanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude
+        humanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude,
+        unknownChangeMagnitude: rollingState.cumulativeUnknownChangeMagnitude
     };
 }
 
@@ -1464,6 +1504,9 @@ async function readRollingStateFile(rollingStatePath: string, repoRoot: string):
             cumulativeHumanChangeMagnitude: typeof parsed.cumulativeHumanChangeMagnitude === 'number'
                 ? parsed.cumulativeHumanChangeMagnitude
                 : 0,
+            cumulativeUnknownChangeMagnitude: typeof parsed.cumulativeUnknownChangeMagnitude === 'number'
+                ? parsed.cumulativeUnknownChangeMagnitude
+                : 0,
             saveAttributionCheckpoints: Array.isArray(parsed.saveAttributionCheckpoints)
                 ? parsed.saveAttributionCheckpoints.map((checkpoint: any) => ({
                     gitBlobOid: typeof checkpoint?.gitBlobOid === 'string' ? checkpoint.gitBlobOid : null,
@@ -1472,6 +1515,9 @@ async function readRollingStateFile(rollingStatePath: string, repoRoot: string):
                         : 0,
                     cumulativeHumanChangeMagnitude: typeof checkpoint?.cumulativeHumanChangeMagnitude === 'number'
                         ? checkpoint.cumulativeHumanChangeMagnitude
+                        : 0,
+                    cumulativeUnknownChangeMagnitude: typeof checkpoint?.cumulativeUnknownChangeMagnitude === 'number'
+                        ? checkpoint.cumulativeUnknownChangeMagnitude
                         : 0,
                     lineAttributionSpans: Array.isArray(checkpoint?.lineAttributionSpans)
                         ? checkpoint.lineAttributionSpans.filter((span: any): span is LineAttributionSpan => (
@@ -1530,7 +1576,8 @@ async function refreshCleanBaseline(repoRoot: string): Promise<void> {
             const rollingState = JSON.parse(fileContents) as FileRollingState;
             baselineByRepoRelativePath[rollingState.repoRelativePath] = {
                 aiChangeMagnitude: rollingState.cumulativeAiChangeMagnitude ?? 0,
-                humanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude ?? 0
+                humanChangeMagnitude: rollingState.cumulativeHumanChangeMagnitude ?? 0,
+                unknownChangeMagnitude: rollingState.cumulativeUnknownChangeMagnitude ?? 0
             };
         }
         catch {

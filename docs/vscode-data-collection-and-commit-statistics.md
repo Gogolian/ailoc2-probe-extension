@@ -39,13 +39,13 @@ This is not a count of all changed lines:
 - blank and whitespace-only additions do not count;
 - unresolved lines are assigned to AI, so new summaries write `unknownAddedLineCount: 0`.
 
-The `aiPercentage` shown in `.ailoc2-metrics/summary.json` is a separate, character-weighted statistic:
+The `aiPercentage` shown in `.ailoc2-metrics/summary.json` uses the same nonblank added-line counts:
 
 $$
-\text{AI percentage}=100\times\frac{W_{AI}}{W_{AI}+W_{Human}}
+	ext{AI percentage}=100\times\frac{A}{A+H+U}
 $$
 
-New summaries fold Unknown weight and lines into AI. The compatibility Unknown count remains present and is zero. Character weighting can still make the summary `aiPercentage` differ from the line-derived commit subject percentage when AI and Human lines have different lengths.
+New summaries fold Unknown weight and lines into AI. The compatibility Unknown count remains present and is zero. Character weights remain available in `aiWeightedChangedLines` and `humanWeightedChangedLines` as diagnostic data, but they do not affect the displayed percentages.
 
 Primary implementation: [`src/hooks/commitMessage.ts`](../src/hooks/commitMessage.ts), `createAiLinesAnnotation()` and `applyAiLinesAnnotationToCommitMessage()`.
 

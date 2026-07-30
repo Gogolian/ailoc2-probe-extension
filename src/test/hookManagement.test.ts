@@ -100,7 +100,7 @@ test('commit-msg refresh includes files staged by a delegated pre-commit hook', 
     assert.equal(installResult.status, 'installed');
     assert.equal(
         commitMessage,
-        'final index attribution (AI: 50%)\n\n(AI-Lines: 1/2)'
+        'final index attribution (AI: 50%)\n\n(AI-Lines: 1/2)\n(Unsure: 0/1)'
     );
 });
 

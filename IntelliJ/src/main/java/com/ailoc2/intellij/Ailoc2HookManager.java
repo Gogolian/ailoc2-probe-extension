@@ -723,6 +723,7 @@ final class Ailoc2HookManager {
             MESSAGE_FILE="$1"
             RUNTIME_PATH="./.githooks/%s"
             PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
+            PLACEHOLDER_UNSURE_ANNOTATION='(Unsure: unavailable)'
             PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'
 
             %s
@@ -733,15 +734,16 @@ final class Ailoc2HookManager {
                 fi
 
                 TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
+                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]|[(]Unsure: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]|[(]Unsure: [^)]*[)]))*$//')
                 {
                     if [ -n "$SUBJECT_LINE" ]; then
-                        printf '%%s%%s\n\n%%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUBJECT_SUFFIX" "$PLACEHOLDER_ANNOTATION"
+                        printf '%%s%%s\n\n%%s\n%%s\n' "$SUBJECT_LINE" "$PLACEHOLDER_SUBJECT_SUFFIX" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_UNSURE_ANNOTATION"
                     else
-                        printf '%%s\n\n%%s\n' "${PLACEHOLDER_SUBJECT_SUFFIX# }" "$PLACEHOLDER_ANNOTATION"
+                        printf '%%s\n\n%%s\n%%s\n' "${PLACEHOLDER_SUBJECT_SUFFIX# }" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_UNSURE_ANNOTATION"
                     fi
                     sed '1d' "$MESSAGE_FILE" | awk '
                         /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
+                        /^[[:space:]]*[(]Unsure: [^)]*[)][[:space:]]*$/ { next }
                         !started && /^[[:space:]]*$/ { next }
                         { if (!started) { print ""; started = 1 } print }
                     '
@@ -792,6 +794,7 @@ final class Ailoc2HookManager {
             STATE_DIR=".ailoc2-metrics/intellij-state"
             AUDIT_DIR=".ailoc2-metrics/commit-audits"
             PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
+            PLACEHOLDER_UNSURE_ANNOTATION='(Unsure: unavailable)'
             PLACEHOLDER_SUBJECT_SUFFIX='(AI: unavailable)'
 
             refresh_summary() {
@@ -812,11 +815,12 @@ final class Ailoc2HookManager {
                         gsub(/[[:space:]]/, "", compact)
                         return length(compact)
                     }
-                    function bucket_for(path, line_number, state_file, state_line, parts, found, ai_magnitude, human_magnitude) {
+                    function bucket_for(path, line_number, state_file, state_line, parts, found, ai_magnitude, human_magnitude, unknown_magnitude) {
                         state_file = state_dir "/" safe_state_file(path)
                         found = ""
                         ai_magnitude = 0
                         human_magnitude = 0
+                        unknown_magnitude = 0
                         while ((getline state_line < state_file) > 0) {
                             split(state_line, parts, "\\t")
                             if (parts[1] == "aiMagnitude") {
@@ -824,6 +828,9 @@ final class Ailoc2HookManager {
                             }
                             else if (parts[1] == "humanMagnitude") {
                                 human_magnitude = parts[2] + 0
+                            }
+                            else if (parts[1] == "unknownMagnitude") {
+                                unknown_magnitude = parts[2] + 0
                             }
                             else if (parts[1] == "line" && (parts[2] + 0) == line_number) {
                                 found = parts[3]
@@ -833,10 +840,13 @@ final class Ailoc2HookManager {
                         if (found != "") {
                             return found
                         }
-                        if (ai_magnitude == 0 && human_magnitude == 0) {
+                        if (ai_magnitude == 0 && human_magnitude == 0 && unknown_magnitude == 0) {
                             return "UNKNOWN"
                         }
-                        return ai_magnitude >= human_magnitude ? "AI" : "HUMAN"
+                        if (unknown_magnitude >= ai_magnitude && unknown_magnitude >= human_magnitude) {
+                            return "UNKNOWN"
+                        }
+                        return ai_magnitude > human_magnitude ? "AI" : human_magnitude > ai_magnitude ? "HUMAN" : "UNKNOWN"
                     }
                     /^\\+\\+\\+ / {
                         current_path = substr($0, 5)
@@ -878,6 +888,7 @@ final class Ailoc2HookManager {
                         else if (weight > 0) {
                             ai_weight += weight
                             ai_line_count++
+                            unknown_line_count++
                             ai_by_path[current_path] += weight
                             attributed[current_path] = 1
                         }
@@ -977,21 +988,23 @@ final class Ailoc2HookManager {
                 MESSAGE_FILE="$1"
                 ANNOTATION="$2"
                 SUBJECT_SUFFIX="$3"
+                UNSURE_ANNOTATION="$4"
                 if [ -z "$MESSAGE_FILE" ] || [ ! -f "$MESSAGE_FILE" ]; then
                     return 0
                 fi
 
                 TEMP_FILE="${MESSAGE_FILE}.ailoc2.$$"
-                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]))*$//')
+                SUBJECT_LINE=$(sed -n '1p' "$MESSAGE_FILE" | sed -E 's/(^|[[:space:]]+)([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]|[(]Unsure: [^)]*[)])([[:space:]]+([(]AI:? [^)]*[)]|[(]AI lines: [^)]*[)]|[(]H lines: [^)]*[)]|[(]AI-Lines: [^)]*[)]|[(]Unsure: [^)]*[)]))*$//')
 
                 {
                     if [ -n "$SUBJECT_LINE" ]; then
-                        printf '%s %s\n\n%s\n' "$SUBJECT_LINE" "$SUBJECT_SUFFIX" "$ANNOTATION"
+                        printf '%s %s\n\n%s\n%s\n' "$SUBJECT_LINE" "$SUBJECT_SUFFIX" "$ANNOTATION" "$UNSURE_ANNOTATION"
                     else
-                        printf '%s\n\n%s\n' "$SUBJECT_SUFFIX" "$ANNOTATION"
+                        printf '%s\n\n%s\n%s\n' "$SUBJECT_SUFFIX" "$ANNOTATION" "$UNSURE_ANNOTATION"
                     fi
                     sed '1d' "$MESSAGE_FILE" | awk '
                         /^[[:space:]]*[(]AI-Lines: [^)]*[)][[:space:]]*$/ { next }
+                        /^[[:space:]]*[(]Unsure: [^)]*[)][[:space:]]*$/ { next }
                         !started && /^[[:space:]]*$/ { next }
                         { if (!started) { print ""; started = 1 } print }
                     '
@@ -1007,7 +1020,7 @@ final class Ailoc2HookManager {
                     HUMAN_LINE_COUNT=$(sed -n 's/.*"humanAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     UNKNOWN_LINE_COUNT=$(sed -n 's/.*"unknownAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     if [ -n "$AI_LINE_COUNT" ] && [ -n "$HUMAN_LINE_COUNT" ] && [ -n "$UNKNOWN_LINE_COUNT" ]; then
-                        TOTAL_LINE_COUNT=$((AI_LINE_COUNT + HUMAN_LINE_COUNT + UNKNOWN_LINE_COUNT))
+                        TOTAL_LINE_COUNT=$((AI_LINE_COUNT + HUMAN_LINE_COUNT))
                         if [ "$TOTAL_LINE_COUNT" -gt 0 ]; then
                             AI_LINE_PERCENTAGE=$(awk -v ai="$AI_LINE_COUNT" -v total="$TOTAL_LINE_COUNT" 'BEGIN {
                                 formatted = sprintf("%.2f", (ai / total) * 100)
@@ -1018,11 +1031,11 @@ final class Ailoc2HookManager {
                         else
                             AI_LINE_PERCENTAGE="0"
                         fi
-                        append_annotation "$MESSAGE_FILE" "(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)" "(AI: $AI_LINE_PERCENTAGE%)"
+                        append_annotation "$MESSAGE_FILE" "(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)" "(AI: $AI_LINE_PERCENTAGE%)" "(Unsure: $UNKNOWN_LINE_COUNT/$AI_LINE_COUNT)"
                         return 0
                     fi
                 fi
-                append_annotation "$MESSAGE_FILE" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_SUBJECT_SUFFIX"
+                append_annotation "$MESSAGE_FILE" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_SUBJECT_SUFFIX" "$PLACEHOLDER_UNSURE_ANNOTATION"
             }
 
             # Convert a repo-relative path into the sanitized filename used under intellij-state.

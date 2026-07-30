@@ -8,11 +8,13 @@ import java.util.regex.Pattern;
 
 final class Ailoc2CommitMessageFormatter {
     static final String UNAVAILABLE_ANNOTATION = "(AI-Lines: unavailable)";
+    static final String UNAVAILABLE_UNSURE_ANNOTATION = "(Unsure: unavailable)";
 
     private static final Pattern ATTRIBUTION_SUFFIX_PATTERN = Pattern.compile(
         "(?:^|\\s+)(?:\\((?:AI:?|AI lines:|H lines:|AI-Lines:) [^)]*\\)(?:\\s+|$))+$"
     );
     private static final Pattern AI_LINES_BODY_PATTERN = Pattern.compile("\\s*\\(AI-Lines: [^)]*\\)\\s*");
+    private static final Pattern UNSURE_BODY_PATTERN = Pattern.compile("\\s*\\(Unsure: [^)]*\\)\\s*");
 
     private Ailoc2CommitMessageFormatter() {
     }
@@ -28,7 +30,8 @@ final class Ailoc2CommitMessageFormatter {
             : normalizedSubject + " " + subjectSuffix;
         List<String> bodyLines = new ArrayList<>();
         for (int index = 1; index < lines.length; index++) {
-            if (AI_LINES_BODY_PATTERN.matcher(lines[index]).matches()) {
+            if (AI_LINES_BODY_PATTERN.matcher(lines[index]).matches()
+                || UNSURE_BODY_PATTERN.matcher(lines[index]).matches()) {
                 if (
                     !bodyLines.isEmpty()
                     && bodyLines.getLast().isBlank()
@@ -48,7 +51,9 @@ final class Ailoc2CommitMessageFormatter {
         StringBuilder annotatedMessage = new StringBuilder(annotatedSubject)
             .append(newline)
             .append(newline)
-            .append(createAnnotation(summary));
+            .append(createAnnotation(summary))
+            .append(newline)
+            .append(createUnsureAnnotation(summary));
         if (!bodyLines.isEmpty()) {
             annotatedMessage.append(newline).append(newline).append(String.join(newline, bodyLines));
         }
@@ -65,6 +70,13 @@ final class Ailoc2CommitMessageFormatter {
         }
 
         return "(AI-Lines: " + summary.aiAddedLineCount + "/" + totalLineCount + ")";
+    }
+
+    static String createUnsureAnnotation(Ailoc2GitSummary summary) {
+        if (getTotalLineCount(summary) == null) {
+            return UNAVAILABLE_UNSURE_ANNOTATION;
+        }
+        return "(Unsure: " + summary.unknownAddedLineCount + "/" + summary.aiAddedLineCount + ")";
     }
 
     private static String createSubjectSuffix(Ailoc2GitSummary summary) {
@@ -91,15 +103,13 @@ final class Ailoc2CommitMessageFormatter {
             || summary.aiAddedLineCount < 0L
             || summary.humanAddedLineCount < 0L
             || summary.unknownAddedLineCount < 0L
+            || summary.unknownAddedLineCount > summary.aiAddedLineCount
         ) {
             return null;
         }
 
         try {
-            return Math.addExact(
-                Math.addExact(summary.aiAddedLineCount, summary.humanAddedLineCount),
-                summary.unknownAddedLineCount
-            );
+            return Math.addExact(summary.aiAddedLineCount, summary.humanAddedLineCount);
         }
         catch (ArithmeticException ignored) {
             return null;
