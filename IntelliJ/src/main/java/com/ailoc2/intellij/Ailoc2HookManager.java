@@ -1089,7 +1089,7 @@ final class Ailoc2HookManager {
                     annotate_commit_message "$2"
                     ;;
                 append-placeholder)
-                    append_annotation "$2" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_SUBJECT_SUFFIX"
+                    append_annotation "$2" "$PLACEHOLDER_ANNOTATION" "$PLACEHOLDER_SUBJECT_SUFFIX" "$PLACEHOLDER_UNSURE_ANNOTATION"
                     ;;
                 *)
                     printf '%s\\n' 'Usage: ailoc2-intellij-hook-runtime.sh <refresh-summary|prepare-commit-audit|finalize-commit|annotate-commit-message <messageFile>|append-placeholder <messageFile>>' >&2
