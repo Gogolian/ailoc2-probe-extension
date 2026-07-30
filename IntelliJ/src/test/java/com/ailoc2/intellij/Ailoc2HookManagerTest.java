@@ -22,6 +22,7 @@ class Ailoc2HookManagerTest {
 
         assertTrue(commitMsgHook.contains("(AI-Lines: unavailable)"));
         assertTrue(commitMsgHook.contains("(AI: unavailable)"));
+        assertTrue(commitMsgHook.contains("(Unsure: unavailable)"));
         assertTrue(commitMsgHook.contains("append_placeholder_annotation"));
         assertTrue(commitMsgHook.contains("AI-Lines: [^)]*"));
         assertTrue(runtime.contains("\"aiAddedLineCount\""));
@@ -29,6 +30,7 @@ class Ailoc2HookManagerTest {
         assertTrue(runtime.contains("\"unknownAddedLineCount\""));
         assertTrue(runtime.contains("(AI-Lines: $AI_LINE_COUNT/$TOTAL_LINE_COUNT)"));
         assertTrue(runtime.contains("(AI: $AI_LINE_PERCENTAGE%)"));
+        assertTrue(runtime.contains("(Unsure: $UNKNOWN_LINE_COUNT/$AI_LINE_COUNT)"));
     }
 
     @Test
@@ -61,7 +63,7 @@ class Ailoc2HookManagerTest {
         run(directory, shell, hookPath.toString(), messagePath.toString());
 
         assertEquals(
-            "Ship it (AI: unavailable)\n\n(AI-Lines: unavailable)\n\nBody\n",
+            "Ship it (AI: unavailable)\n\n(AI-Lines: unavailable)\n(Unsure: unavailable)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
     }
@@ -82,7 +84,7 @@ class Ailoc2HookManagerTest {
         run(directory, shell, runtimePath.toString(), "append-placeholder", messagePath.toString());
 
         assertEquals(
-            "Ship it (AI: unavailable)\n\n(AI-Lines: unavailable)\n\nBody\n",
+            "Ship it (AI: unavailable)\n\n(AI-Lines: unavailable)\n(Unsure: unavailable)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
     }
@@ -119,7 +121,7 @@ class Ailoc2HookManagerTest {
         run(repoRoot, shell, runtimePath.toString(), "annotate-commit-message", messagePath.toString());
 
         assertEquals(
-            "Ship it (AI: 75%)\n\n(AI-Lines: 3/4)\n\nBody\n",
+            "Ship it (AI: 75%)\n\n(AI-Lines: 3/4)\n(Unsure: 2/3)\n\nBody\n",
             Files.readString(messagePath, StandardCharsets.UTF_8)
         );
         String summary = Files.readString(repoRoot.resolve(".ailoc2-metrics/summary.json"), StandardCharsets.UTF_8);
@@ -127,7 +129,7 @@ class Ailoc2HookManagerTest {
         assertTrue(summary.contains("\"humanWeightedChangedLines\": 18"));
         assertTrue(summary.contains("\"aiAddedLineCount\": 3"));
         assertTrue(summary.contains("\"humanAddedLineCount\": 1"));
-        assertTrue(summary.contains("\"unknownAddedLineCount\": 0"));
+        assertTrue(summary.contains("\"unknownAddedLineCount\": 2"));
         assertTrue(summary.contains("\"aiPercentage\": 75.000000"));
         assertTrue(summary.contains("\"src/missing.ts\": {\"aiWeightedChangedLines\": 18, \"humanWeightedChangedLines\": 0}"));
     }
