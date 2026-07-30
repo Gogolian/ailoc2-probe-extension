@@ -1219,14 +1219,7 @@ async function readRollingState(repoRoot: string, repoRelativePath: string): Pro
         return null;
     }
 
-    const rollingStatePath = getRollingStatePath(repoRoot, repoRelativePath);
-    try {
-        const fileContents = await fs.promises.readFile(rollingStatePath, 'utf8');
-        return JSON.parse(fileContents) as FileRollingState;
-    }
-    catch {
-        return null;
-    }
+    return readRollingStateFile(getRollingStatePath(repoRoot, repoRelativePath), repoRoot);
 }
 
 async function readRepoSummaryState(repoRoot: string): Promise<RepoSummaryState> {

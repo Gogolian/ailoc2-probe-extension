@@ -48,7 +48,7 @@ test('installRepoHooks installs Git hooks, Claude Code hooks, and managed gitign
         hasUnavailableSubjectSuffix: commitMsgHook.includes("PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'"),
         stripsLegacySuffix: commitMsgHook.includes('AI:? [^)]*'),
         stripsLineSuffixes: commitMsgHook.includes('AI lines: [^)]*') && commitMsgHook.includes('H lines: [^)]*'),
-        writesAnnotationToBody: commitMsgHook.includes("printf '%s\n\n%s\n'")
+        writesAnnotationToBody: commitMsgHook.includes("printf '%s%s\n\n%s\n%s\n'")
     }, {
         status: 'installed',
         gitignoreUpdated: true,

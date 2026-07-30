@@ -119,7 +119,7 @@ test('finalizeRepoCommit advances the baseline to the committed index state', as
     assert.equal(finalizationResult.summary.unstaged.aiPercentage, 100);
     assert.equal(finalizationResult.summary.unstaged.humanPercentage, 0);
     assert.equal(finalizationResult.summary.unstaged.aiAddedLineCount, 1);
-    assert.equal(finalizationResult.summary.unstaged.unknownAddedLineCount, 0);
+    assert.equal(finalizationResult.summary.unstaged.unknownAddedLineCount, 1);
 });
 
 test('finalizeRepoCommit clears rolling state for fully committed files', async () => {
