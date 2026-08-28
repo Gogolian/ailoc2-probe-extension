@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.26] - 2026-08-28
+
+- Fix O(N²) scaling in the IntelliJ Git hook's per-line attribution: the generated shell runtime rescanned each file's entire state file for every added line, so a 4000-line change took over 30 seconds. Each state file is now loaded once and cached in memory for the rest of the refresh; a same-size change now completes in a few seconds regardless of line count.
+- Skip the state lookup entirely for added lines with zero non-whitespace weight (blank or whitespace-only lines).
+- Cache the `pre-commit` summary for reuse by `commit-msg`, keyed by the exact staged tree id (`git write-tree`), so an unchanged index skips a second full diff-and-parse. Any index change between hooks, or a missing/corrupt cache, safely triggers exactly one fresh refresh.
+- Batch the post-commit cleanup's Git calls to a constant number independent of how many files were committed, replacing a pair of Git invocations that ran once per committed file.
+- Add a fast path for an empty (or whitespace-only) staged diff after a commit, skipping the diff-and-parse pass entirely.
+- Fix `summary.json` losing its `unstaged` section: the shell hook and the IntelliJ plugin's commit-time refresh both only ever compute `staged`, and previously overwrote the whole file, silently dropping whatever `unstaged` data the other process had written. Both writers now preserve the existing `unstaged` section when they are not the one recomputing it, and write via a temp file plus rename so no reader ever observes a partially written file.
+
 ## [1.0.25] - 2026-08-28
 
 - Add `attribution.mode: "human-markers"`, which treats every added line as AI unless it sits inside a `Human start` / `Human stop` block. It needs no cooperation from the AI tool, only that the human tags their own edits, and it errs toward over-reporting AI rather than under-reporting it.

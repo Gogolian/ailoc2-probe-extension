@@ -64,13 +64,32 @@ final class Ailoc2Storage {
         }
     }
 
+    /**
+     * Writes only the {@code staged} section, preserving whatever {@code unstaged} section is
+     * already on disk instead of dropping it. Used by the commit-time refresh, which only
+     * recomputes staged attribution; a full {@link #writeSummary(Path, Ailoc2GitSummary,
+     * Ailoc2GitSummary)} call from an on-demand summary replaces both sections outright.
+     */
     void writeSummary(Path repoRoot, Ailoc2GitSummary stagedSummary) {
-        writeSummary(repoRoot, stagedSummary, null);
+        Path summaryPath = repoRoot.resolve(METRICS_DIRECTORY).resolve("summary.json");
+        String preservedUnstagedFragment = readRawJsonFragment(summaryPath, "unstaged");
+        writeSummaryDocument(repoRoot, summaryPath, stagedSummary, null, preservedUnstagedFragment);
     }
 
     void writeSummary(Path repoRoot, Ailoc2GitSummary stagedSummary, Ailoc2GitSummary unstagedSummary) {
         Path summaryPath = repoRoot.resolve(METRICS_DIRECTORY).resolve("summary.json");
+        writeSummaryDocument(repoRoot, summaryPath, stagedSummary, unstagedSummary, null);
+    }
+
+    private void writeSummaryDocument(
+        Path repoRoot,
+        Path summaryPath,
+        Ailoc2GitSummary stagedSummary,
+        Ailoc2GitSummary unstagedSummary,
+        String preservedUnstagedFragment
+    ) {
         String repoName = repoRoot.getFileName() == null ? repoRoot.toString() : repoRoot.getFileName().toString();
+        boolean hasUnstagedSection = unstagedSummary != null || preservedUnstagedFragment != null;
         boolean available = stagedSummary.available && (unstagedSummary == null || unstagedSummary.available);
         String summaryLine = available && unstagedSummary != null
             ? String.format(
@@ -100,6 +119,9 @@ final class Ailoc2Storage {
                 stagedSummary.unknownAddedLineCount
             )
             : repoName + ": summary unavailable";
+        String unstagedFieldJson = unstagedSummary != null
+            ? summaryJson(unstagedSummary)
+            : preservedUnstagedFragment;
         String json = "{\n"
             + "  \"schemaVersion\": \"1\",\n"
             + "  \"recordType\": \"hook-summary\",\n"
@@ -109,15 +131,95 @@ final class Ailoc2Storage {
             + "  \"isGitSummaryAvailable\": " + available + ",\n"
             + "  \"summaryLine\": \"" + escapeJson(summaryLine) + "\",\n"
             + "  \"staged\": " + summaryJson(stagedSummary)
-            + (unstagedSummary == null ? "\n" : ",\n  \"unstaged\": " + summaryJson(unstagedSummary) + "\n")
+            + (hasUnstagedSection ? ",\n  \"unstaged\": " + unstagedFieldJson + "\n" : "\n")
             + "}\n";
 
+        writeFileAtomically(summaryPath, json);
+    }
+
+    /**
+     * Extracts the raw {@code "key": { ... }} value text for a top-level object field from an
+     * existing JSON document, by brace-matching rather than parsing, so the preserved section is
+     * carried through byte-for-byte. Returns {@code null} if the file or the field is absent or
+     * malformed, so a missing/corrupt summary never blocks a write.
+     */
+    private String readRawJsonFragment(Path jsonPath, String key) {
+        String contents;
         try {
-            Files.createDirectories(summaryPath.getParent());
-            Files.writeString(summaryPath, json, StandardCharsets.UTF_8);
+            contents = Files.readString(jsonPath, StandardCharsets.UTF_8);
+        }
+        catch (IOException error) {
+            return null;
+        }
+
+        String needle = "\"" + key + "\"";
+        int keyIndex = contents.indexOf(needle);
+        if (keyIndex < 0) {
+            return null;
+        }
+
+        int braceStart = contents.indexOf('{', keyIndex + needle.length());
+        if (braceStart < 0) {
+            return null;
+        }
+
+        // Tracks whether we are inside a JSON string literal so a brace or backslash that is
+        // part of a file path (e.g. an unusual path containing "{") is not mistaken for
+        // structure; an unbalanced match here would corrupt the whole document, not just drop
+        // the preserved section.
+        int depth = 0;
+        boolean insideString = false;
+        boolean escapeNext = false;
+        for (int i = braceStart; i < contents.length(); i++) {
+            char character = contents.charAt(i);
+            if (escapeNext) {
+                escapeNext = false;
+                continue;
+            }
+            if (character == '\\' && insideString) {
+                escapeNext = true;
+                continue;
+            }
+            if (character == '"') {
+                insideString = !insideString;
+                continue;
+            }
+            if (insideString) {
+                continue;
+            }
+            if (character == '{') {
+                depth++;
+            }
+            else if (character == '}') {
+                depth--;
+                if (depth == 0) {
+                    return contents.substring(braceStart, i + 1);
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Writes via a temp file plus rename so a concurrent reader (the shell hook, or another
+     * IDE process) never observes partially written JSON.
+     */
+    private void writeFileAtomically(Path targetPath, String contents) {
+        Path tempPath = targetPath.resolveSibling(
+            targetPath.getFileName() + "." + ProcessHandle.current().pid() + "." + System.nanoTime() + ".tmp");
+        try {
+            Files.createDirectories(targetPath.getParent());
+            Files.writeString(tempPath, contents, StandardCharsets.UTF_8);
+            Files.move(tempPath, targetPath, StandardCopyOption.REPLACE_EXISTING);
         }
         catch (IOException ignored) {
-            // Summary writing is best effort.
+            // Summary writing is best effort; clean up the temp file so it does not linger.
+            try {
+                Files.deleteIfExists(tempPath);
+            }
+            catch (IOException ignoredCleanupFailure) {
+                // Nothing more we can do.
+            }
         }
     }
 

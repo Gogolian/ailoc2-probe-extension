@@ -739,7 +739,7 @@ final class Ailoc2HookManager {
             %s
 
             if [ -f "$RUNTIME_PATH" ]; then
-                sh "$RUNTIME_PATH" refresh-summary >/dev/null 2>&1 && sh "$RUNTIME_PATH" prepare-commit-audit >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ summary or audit refresh failed; continuing without blocking the commit.' >&2
+                sh "$RUNTIME_PATH" prepare-commit >/dev/null 2>&1 || printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ summary or audit refresh failed; continuing without blocking the commit.' >&2
             else
                 printf '%%s\\n' 'AILoc2 pre-commit warning: IntelliJ hook runtime is unavailable; skipping summary refresh.' >&2
             fi
@@ -828,6 +828,7 @@ final class Ailoc2HookManager {
             SUMMARY_FILE=".ailoc2-metrics/summary.json"
             STATE_DIR=".ailoc2-metrics/intellij-state"
             AUDIT_DIR=".ailoc2-metrics/commit-audits"
+            PENDING_TREE_FILE=".ailoc2-metrics/commit-audits/pending.tree"
             RESOLVED_CONFIG_FILE=".ailoc2-metrics/resolved-config.env"
             PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
             PLACEHOLDER_UNSURE_ANNOTATION='(Unsure: unavailable)'
@@ -841,7 +842,106 @@ final class Ailoc2HookManager {
                 . "$RESOLVED_CONFIG_FILE"
             fi
 
+            # Extracts the raw `"unstaged": { ... }` fragment from an existing summary.json by
+            # brace-matching over the raw text (respecting quoted strings so a path containing
+            # "{" cannot desync the count), rather than parsing JSON. This hook only ever
+            # computes `staged`; without this, every write here would silently erase whatever
+            # `unstaged` section the IntelliJ plugin process last wrote to the same file.
+            # Prints nothing if the file is missing, malformed, or has no such field.
+            read_unstaged_fragment() {
+                [ -f "$SUMMARY_FILE" ] || return 0
+                awk '
+                    BEGIN { depth = 0; in_string = 0; escape = 0; capturing = 0; found_key = 0 }
+                    {
+                        line = $0
+                        if (!found_key) {
+                            key_pos = index(line, "\\"unstaged\\"")
+                            if (key_pos == 0) { next }
+                            found_key = 1
+                            line = substr(line, key_pos)
+                        }
+                        for (i = 1; i <= length(line); i++) {
+                            ch = substr(line, i, 1)
+                            if (capturing) { buffer = buffer ch }
+                            if (escape) { escape = 0; continue }
+                            if (ch == "\\\\" && in_string) { escape = 1; continue }
+                            if (ch == "\\"") { in_string = !in_string; continue }
+                            if (in_string) { continue }
+                            if (ch == "{") {
+                                depth++
+                                if (!capturing) { capturing = 1; buffer = "{" }
+                            }
+                            else if (ch == "}") {
+                                depth--
+                                if (capturing && depth == 0) { print buffer; exit }
+                            }
+                        }
+                        if (capturing) { buffer = buffer "\\n" }
+                    }
+                ' "$SUMMARY_FILE" 2>/dev/null
+            }
+
+            # Writes via a temp file plus rename so a concurrent reader of summary.json never
+            # observes a partially written file.
+            write_summary_atomic() {
+                CONTENT="$1"
+                mkdir -p "$(dirname "$SUMMARY_FILE")"
+                TEMP_SUMMARY_FILE="${SUMMARY_FILE}.$$.tmp"
+                printf '%s' "$CONTENT" > "$TEMP_SUMMARY_FILE" && mv "$TEMP_SUMMARY_FILE" "$SUMMARY_FILE"
+            }
+
+            # Written directly, bypassing `git diff --unified=0` and the AWK parser entirely,
+            # for the common post-commit case where nothing is left staged. `--ignore-all-space`
+            # matches the emptiness test to the same definition `refresh_summary` itself uses,
+            # so a whitespace-only staged diff is treated as empty here exactly as it would be
+            # after going through the full parse.
+            write_empty_staged_summary() {
+                REPO_ROOT=$(pwd)
+                REPO_NAME=${REPO_ROOT##*/}
+                GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+                SUMMARY_LINE="$REPO_NAME: STAGED -> AI 0.00% | Human 0.00% | AI lines 0 | Human lines 0 | Unknown lines 0"
+                ESCAPED_REPO_ROOT=$(printf '%s' "$REPO_ROOT" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+                ESCAPED_REPO_NAME=$(printf '%s' "$REPO_NAME" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+                ESCAPED_SUMMARY_LINE=$(printf '%s' "$SUMMARY_LINE" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
+
+                UNSTAGED_FRAGMENT=$(read_unstaged_fragment)
+                SUMMARY_CONTENT=$(
+                    printf '{\\n'
+                    printf '  "schemaVersion": "1",\\n'
+                    printf '  "recordType": "hook-summary",\\n'
+                    printf '  "generatedAt": "%s",\\n' "$GENERATED_AT"
+                    printf '  "repoRoot": "%s",\\n' "$ESCAPED_REPO_ROOT"
+                    printf '  "repoName": "%s",\\n' "$ESCAPED_REPO_NAME"
+                    printf '  "isGitSummaryAvailable": true,\\n'
+                    printf '  "summaryLine": "%s",\\n' "$ESCAPED_SUMMARY_LINE"
+                    printf '  "staged": {\\n'
+                    printf '    "changedFileCount": 0,\\n'
+                    printf '    "attributedChangedFileCount": 0,\\n'
+                    printf '    "aiWeightedChangedLines": 0,\\n'
+                    printf '    "humanWeightedChangedLines": 0,\\n'
+                    printf '    "aiAddedLineCount": 0,\\n'
+                    printf '    "humanAddedLineCount": 0,\\n'
+                    printf '    "unknownAddedLineCount": 0,\\n'
+                    printf '    "aiPercentage": 0.000000,\\n'
+                    printf '    "humanPercentage": 0.000000,\\n'
+                    printf '    "files": {}\\n'
+                    printf '  }'
+                    if [ -n "$UNSTAGED_FRAGMENT" ]; then
+                        printf ',\\n  "unstaged": %s\\n' "$UNSTAGED_FRAGMENT"
+                    else
+                        printf '\\n'
+                    fi
+                    printf '}\\n'
+                )
+                write_summary_atomic "$SUMMARY_CONTENT"
+            }
+
             refresh_summary() {
+                if git diff --cached --quiet --ignore-all-space; then
+                    write_empty_staged_summary
+                    return 0
+                fi
+
                 REPO_ROOT=$(pwd)
                 REPO_NAME=${REPO_ROOT##*/}
                 DETAILS_FILE="$STATE_DIR/.summary-details.$$"
@@ -859,38 +959,46 @@ final class Ailoc2HookManager {
                         gsub(/[[:space:]]/, "", compact)
                         return length(compact)
                     }
-                    function bucket_for(path, line_number, state_file, state_line, parts, found, ai_magnitude, human_magnitude, unknown_magnitude) {
+                    # Reads a path TSV state at most once per refresh, guarded by loaded[path].
+                    # Populates per-path magnitudes and a line_bucket[path, lineNumber] map so
+                    # later lookups for the same path are O(1) instead of rescanning the whole
+                    # file. Duplicate "line" records keep top-to-bottom "last one wins"
+                    # semantics because a later assignment simply overwrites the same slot.
+                    function load_state(path, state_file, state_line, parts) {
                         state_file = state_dir "/" safe_state_file(path)
-                        found = ""
-                        ai_magnitude = 0
-                        human_magnitude = 0
-                        unknown_magnitude = 0
                         while ((getline state_line < state_file) > 0) {
                             split(state_line, parts, "\\t")
                             if (parts[1] == "aiMagnitude") {
-                                ai_magnitude = parts[2] + 0
+                                ai_magnitude[path] = parts[2] + 0
                             }
                             else if (parts[1] == "humanMagnitude") {
-                                human_magnitude = parts[2] + 0
+                                human_magnitude[path] = parts[2] + 0
                             }
                             else if (parts[1] == "unknownMagnitude") {
-                                unknown_magnitude = parts[2] + 0
+                                unknown_magnitude[path] = parts[2] + 0
                             }
-                            else if (parts[1] == "line" && (parts[2] + 0) == line_number) {
-                                found = parts[3]
+                            else if (parts[1] == "line") {
+                                line_bucket[path, parts[2] + 0] = parts[3]
                             }
                         }
                         close(state_file)
-                        if (found != "") {
-                            return found
+                        loaded[path] = 1
+                    }
+                    function bucket_for(path, line_number,   key) {
+                        if (!(path in loaded)) {
+                            load_state(path)
                         }
-                        if (ai_magnitude == 0 && human_magnitude == 0 && unknown_magnitude == 0) {
+                        key = path SUBSEP line_number
+                        if (key in line_bucket) {
+                            return line_bucket[key]
+                        }
+                        if (ai_magnitude[path] == 0 && human_magnitude[path] == 0 && unknown_magnitude[path] == 0) {
                             return "UNKNOWN"
                         }
-                        if (unknown_magnitude >= ai_magnitude && unknown_magnitude >= human_magnitude) {
+                        if (unknown_magnitude[path] >= ai_magnitude[path] && unknown_magnitude[path] >= human_magnitude[path]) {
                             return "UNKNOWN"
                         }
-                        return ai_magnitude > human_magnitude ? "AI" : human_magnitude > ai_magnitude ? "HUMAN" : "UNKNOWN"
+                        return ai_magnitude[path] > human_magnitude[path] ? "AI" : human_magnitude[path] > ai_magnitude[path] ? "HUMAN" : "UNKNOWN"
                     }
                     /^\\+\\+\\+ / {
                         current_path = substr($0, 5)
@@ -924,26 +1032,28 @@ final class Ailoc2HookManager {
                         next
                     }
                     current_path != "" && current_line > 0 && /^\\+/ && !/^\\+\\+\\+ / {
-                        bucket = bucket_for(current_path, current_line)
                         weight = non_whitespace_length(substr($0, 2))
-                        if (weight > 0 && bucket == "AI") {
-                            ai_weight += weight
-                            ai_line_count++
-                            ai_by_path[current_path] += weight
-                            attributed[current_path] = 1
-                        }
-                        else if (weight > 0 && bucket == "HUMAN") {
-                            human_weight += weight
-                            human_line_count++
-                            human_by_path[current_path] += weight
-                            attributed[current_path] = 1
-                        }
-                        else if (weight > 0) {
-                            ai_weight += weight
-                            ai_line_count++
-                            unknown_line_count++
-                            ai_by_path[current_path] += weight
-                            attributed[current_path] = 1
+                        if (weight > 0) {
+                            bucket = bucket_for(current_path, current_line)
+                            if (bucket == "AI") {
+                                ai_weight += weight
+                                ai_line_count++
+                                ai_by_path[current_path] += weight
+                                attributed[current_path] = 1
+                            }
+                            else if (bucket == "HUMAN") {
+                                human_weight += weight
+                                human_line_count++
+                                human_by_path[current_path] += weight
+                                attributed[current_path] = 1
+                            }
+                            else {
+                                ai_weight += weight
+                                ai_line_count++
+                                unknown_line_count++
+                                ai_by_path[current_path] += weight
+                                attributed[current_path] = 1
+                            }
                         }
                         current_line++
                         next
@@ -989,8 +1099,8 @@ final class Ailoc2HookManager {
                 ESCAPED_REPO_NAME=$(printf '%s' "$REPO_NAME" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
                 ESCAPED_SUMMARY_LINE=$(printf '%s' "$SUMMARY_LINE" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')
 
-                mkdir -p "$(dirname "$SUMMARY_FILE")"
-                {
+                UNSTAGED_FRAGMENT=$(read_unstaged_fragment)
+                SUMMARY_CONTENT=$(
                     printf '{\\n'
                     printf '  "schemaVersion": "1",\\n'
                     printf '  "recordType": "hook-summary",\\n'
@@ -1025,9 +1135,15 @@ final class Ailoc2HookManager {
                         printf '\\n'
                     fi
                     printf '    }\\n'
-                    printf '  }\\n'
+                    printf '  }'
+                    if [ -n "$UNSTAGED_FRAGMENT" ]; then
+                        printf ',\\n  "unstaged": %s\\n' "$UNSTAGED_FRAGMENT"
+                    else
+                        printf '\\n'
+                    fi
                     printf '}\\n'
-                } > "$SUMMARY_FILE"
+                )
+                write_summary_atomic "$SUMMARY_CONTENT"
                 rm -f "$DETAILS_FILE"
             }
 
@@ -1035,6 +1151,30 @@ final class Ailoc2HookManager {
                 [ -f "$SUMMARY_FILE" ] || return 1
                 mkdir -p "$AUDIT_DIR"
                 cp "$SUMMARY_FILE" "$AUDIT_DIR/pending.json"
+            }
+
+            # Identifies the exact staged content a prepared summary was computed from, so a
+            # later phase in the same commit can tell whether it is still safe to reuse it.
+            # `git write-tree` only computes and stores a tree object; it never touches the
+            # working tree, the index, or HEAD.
+            current_index_tree() {
+                git write-tree 2>/dev/null
+            }
+
+            write_pending_tree() {
+                TREE_ID="$1"
+                if [ -n "$TREE_ID" ]; then
+                    mkdir -p "$AUDIT_DIR"
+                    printf '%s' "$TREE_ID" > "$PENDING_TREE_FILE"
+                fi
+            }
+
+            # Single full refresh, reused by pre-commit directly and by commit-msg on a cache
+            # miss, so both call sites stay in sync with what "prepared" means.
+            prepare_commit() {
+                refresh_summary
+                prepare_commit_audit
+                write_pending_tree "$(current_index_tree)"
             }
 
             append_annotation() {
@@ -1064,10 +1204,24 @@ final class Ailoc2HookManager {
                 } > "$TEMP_FILE" && mv "$TEMP_FILE" "$MESSAGE_FILE"
             }
 
+            # Reuses the summary/audit `pre-commit` already prepared when the staged tree has
+            # not changed since, so the diff is not parsed a second time for the same content.
+            # Any mismatch, or a missing/corrupt cache record, falls back to one fresh
+            # `prepare_commit`; this never skips producing a summary, only the redundant one.
+            ensure_current_commit_prepared() {
+                CURRENT_TREE=$(current_index_tree)
+                if [ -n "$CURRENT_TREE" ] && [ -f "$PENDING_TREE_FILE" ] && [ -f "$SUMMARY_FILE" ]; then
+                    CACHED_TREE=$(cat "$PENDING_TREE_FILE" 2>/dev/null || true)
+                    if [ -n "$CACHED_TREE" ] && [ "$CACHED_TREE" = "$CURRENT_TREE" ]; then
+                        return 0
+                    fi
+                fi
+                prepare_commit
+            }
+
             annotate_commit_message() {
                 MESSAGE_FILE="$1"
-                refresh_summary
-                prepare_commit_audit
+                ensure_current_commit_prepared
                 if grep -q '"isGitSummaryAvailable"[[:space:]]*:[[:space:]]*true' "$SUMMARY_FILE"; then
                     AI_LINE_COUNT=$(sed -n 's/.*"aiAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
                     HUMAN_LINE_COUNT=$(sed -n 's/.*"humanAddedLineCount"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "$SUMMARY_FILE" | head -n 1)
@@ -1096,25 +1250,37 @@ final class Ailoc2HookManager {
                 printf '%s' "$1" | sed 's#\\\\#/#g; s#[^A-Za-z0-9._-]#_#g'
             }
 
-            # Return success when the path still has unstaged modifications or untracked content.
-            has_unstaged_work() {
-                REPO_RELATIVE_PATH="$1"
-                if ! git diff --quiet -- "$REPO_RELATIVE_PATH"; then
-                    return 0
-                fi
-                if git ls-files --others --exclude-standard -- "$REPO_RELATIVE_PATH" | grep -q .; then
-                    return 0
-                fi
-                return 1
-            }
-
+            # Three Git calls total, independent of how many files were committed, replacing a
+            # previous `git diff --quiet` + `git ls-files` pair spawned once per committed file.
+            # A committed path keeps its state only if it still has staged, unstaged, or
+            # untracked work; the set comparison itself happens in one AWK process.
             clear_committed_state() {
-                git diff-tree --no-commit-id --name-only -r HEAD | while IFS= read -r COMMITTED_PATH; do
-                    if [ -z "$COMMITTED_PATH" ] || has_unstaged_work "$COMMITTED_PATH"; then
-                        continue
-                    fi
+                COMMITTED_PATHS=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null)
+                [ -n "$COMMITTED_PATHS" ] || return 0
 
-                    STATE_FILE="$STATE_DIR/$(safe_state_file "$COMMITTED_PATH").tsv"
+                REMAINING_WORK_PATHS=$(
+                    {
+                        git diff --cached --name-only --no-color 2>/dev/null
+                        git diff --name-only --no-color 2>/dev/null
+                        git ls-files --others --exclude-standard 2>/dev/null
+                    }
+                )
+
+                STALE_PATHS=$(printf '%s\\n' "$COMMITTED_PATHS" | awk -v remaining="$REMAINING_WORK_PATHS" '
+                    BEGIN {
+                        line_count = split(remaining, remaining_lines, "\\n")
+                        for (i = 1; i <= line_count; i++) {
+                            if (remaining_lines[i] != "") {
+                                has_remaining_work[remaining_lines[i]] = 1
+                            }
+                        }
+                    }
+                    { if ($0 != "" && !($0 in has_remaining_work)) print }
+                ')
+
+                printf '%s\\n' "$STALE_PATHS" | while IFS= read -r STALE_PATH; do
+                    [ -n "$STALE_PATH" ] || continue
+                    STATE_FILE="$STATE_DIR/$(safe_state_file "$STALE_PATH").tsv"
                     rm -f "$STATE_FILE"
                 done
             }
@@ -1124,6 +1290,10 @@ final class Ailoc2HookManager {
                 if [ -n "$COMMIT_HASH" ] && [ -f "$AUDIT_DIR/pending.json" ]; then
                     mv "$AUDIT_DIR/pending.json" "$AUDIT_DIR/$COMMIT_HASH.json"
                 fi
+                # The tree this commit staged no longer describes anything pending; removing the
+                # marker here is what keeps an aborted-then-reattempted commit from reusing a
+                # cache entry left over from a different set of staged changes.
+                rm -f "$PENDING_TREE_FILE"
                 clear_committed_state
                 refresh_summary
             }
@@ -1134,6 +1304,9 @@ final class Ailoc2HookManager {
                     ;;
                 prepare-commit-audit)
                     prepare_commit_audit
+                    ;;
+                prepare-commit)
+                    prepare_commit
                     ;;
                 finalize-commit)
                     finalize_commit
