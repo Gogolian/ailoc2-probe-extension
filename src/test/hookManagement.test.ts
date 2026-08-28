@@ -119,6 +119,51 @@ test('installRepoHooks upgrades a markerless legacy commit-msg hook', async () =
     assert.ok(upgradedHook.includes('(AI-Lines: unavailable)'));
 });
 
+test('installRepoHooks creates a committed probe config file with behavior-preserving defaults', async () => {
+    const repoRoot = createGitRepo('ailoc2-probe-config-install-');
+
+    const installResult = await installRepoHooks({ repoRoot });
+    const configPath = path.join(repoRoot, '.ailoc2-probe.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
+        attribution: { mode: string; largeFileIsAI: boolean; newFileIsAI: boolean; excludePaths: string[] };
+    };
+    const gitignoreContents = fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf8');
+
+    assert.equal(installResult.probeConfigCreated, true);
+    assert.deepEqual(config.attribution, {
+        mode: 'signals',
+        largeFileIsAI: true,
+        newFileIsAI: true,
+        excludePaths: []
+    });
+    assert.equal(
+        gitignoreContents.includes('.ailoc2-probe.json'),
+        false,
+        'the config is team policy and must stay committable'
+    );
+});
+
+test('installRepoHooks never overwrites an existing probe config', async () => {
+    const repoRoot = createGitRepo('ailoc2-probe-config-preserve-');
+    const configPath = path.join(repoRoot, '.ailoc2-probe.json');
+    const userContents = `${JSON.stringify({ attribution: { mode: 'markers' } }, null, 2)}\n`;
+    fs.writeFileSync(configPath, userContents, 'utf8');
+
+    const installResult = await installRepoHooks({ repoRoot });
+
+    assert.equal(installResult.probeConfigCreated, false);
+    assert.equal(fs.readFileSync(configPath, 'utf8'), userContents);
+});
+
+test('uninstallRepoHooks leaves the probe config in place', async () => {
+    const repoRoot = createGitRepo('ailoc2-probe-config-uninstall-');
+    await installRepoHooks({ repoRoot });
+
+    await uninstallRepoHooks({ repoRoot });
+
+    assert.equal(fs.existsSync(path.join(repoRoot, '.ailoc2-probe.json')), true);
+});
+
 test('uninstallRepoHooks removes managed Claude runtime without creating missing Claude settings', async () => {
     const repoRoot = createGitRepo('ailoc2-uninstall-hooks-');
     await installRepoHooks({ repoRoot });

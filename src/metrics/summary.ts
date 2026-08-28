@@ -22,6 +22,9 @@ import {
 } from './pathing';
 import { getIndexGitBlobOid, getIndexGitBlobOids, getWorkingTreeGitBlobOids } from './git';
 import { isRepoRelativePathTrackingIgnored } from './ignore';
+import { ResolvedProbeConfig, readProbeConfig } from './probeConfig';
+import { collectMarkerDiffPaths, parseMarkerDiffAttribution } from './markerAttribution';
+import { MarkerStripResult, stripMarkersFromStagedFiles } from './markerStripping';
 import { getTrackingExclusionReasonForPath } from '../trackingExclusions';
 import { toGitRepoPath, tryRunGitCommand } from '../util/gitCommand';
 import { pathExists, readTextFileIfExists } from '../util/fsUtils';
@@ -47,6 +50,8 @@ type RepoDiffInputs = {
     stagedEntries: GitDiffStatEntry[] | null;
     unstagedTrackedEntries: GitDiffStatEntry[] | null;
     unstagedUntrackedEntries: GitDiffStatEntry[] | null;
+    stagedDiffText: string | null;
+    unstagedDiffText: string | null;
 };
 
 type ChangedLineAttributionSummary = {
@@ -134,7 +139,26 @@ export type RepoCommitFinalizationResult = RepoHookSummaryRefreshResult & {
 export type RepoPreCommitPreparationResult = {
     baseline: RepoCommitBaselinePreparationResult;
     summary: RepoHookSummaryRefreshResult;
+    markerStrip: MarkerStripResult | null;
 };
+
+async function stripMarkersForPreCommit(
+    repoRoot: string,
+    diffInputs: RepoDiffInputs
+): Promise<MarkerStripResult | null> {
+    const probeConfig = await readProbeConfig(repoRoot);
+    if (probeConfig.attribution.mode !== 'markers' || !diffInputs.stagedDiffText) {
+        return null;
+    }
+
+    const markerPaths = collectMarkerDiffPaths(diffInputs.stagedDiffText)
+        .filter((repoRelativePath) => !probeConfig.isAttributionExcluded(repoRelativePath));
+    if (markerPaths.length === 0) {
+        return null;
+    }
+
+    return stripMarkersFromStagedFiles({ repoRoot, repoRelativePaths: markerPaths });
+}
 
 export async function computeRepoUncommittedAttributionSummary(args: {
     repoRoot: string;
@@ -144,13 +168,24 @@ export async function computeRepoUncommittedAttributionSummary(args: {
 }
 
 async function collectRepoDiffInputs(repoRoot: string): Promise<RepoDiffInputs> {
-    const [stagedEntries, unstagedTrackedEntries, unstagedUntrackedEntries] = await Promise.all([
-        getGitDiffEntries(repoRoot, ['diff', '--cached', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']),
-        getGitDiffEntries(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']),
+    const [stagedDiffText, unstagedDiffText, unstagedUntrackedEntries] = await Promise.all([
+        getGitDiffStdout(repoRoot, ['diff', '--cached', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']),
+        getGitDiffStdout(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']),
         getGitUntrackedEntries(repoRoot)
     ]);
 
-    return { stagedEntries, unstagedTrackedEntries, unstagedUntrackedEntries };
+    const [stagedEntries, unstagedTrackedEntries] = await Promise.all([
+        parseGitDiffStdout(repoRoot, stagedDiffText),
+        parseGitDiffStdout(repoRoot, unstagedDiffText)
+    ]);
+
+    return {
+        stagedEntries,
+        unstagedTrackedEntries,
+        unstagedUntrackedEntries,
+        stagedDiffText,
+        unstagedDiffText
+    };
 }
 
 async function computeRepoUncommittedAttributionSummaryFromInputs(
@@ -170,6 +205,18 @@ async function computeRepoUncommittedAttributionSummaryFromInputs(
     if (stagedEntries.length === 0 && unstagedEntries.length === 0) {
         await refreshCleanBaseline(repoRoot);
         return createEmptyRepoSummary(repoRoot, true, true);
+    }
+
+    const probeConfig = await readProbeConfig(repoRoot);
+    if (probeConfig.attribution.mode === 'markers') {
+        return {
+            repoRoot,
+            repoName: path.basename(repoRoot),
+            staged: summarizeMarkerDiffSlice(diffInputs.stagedDiffText, probeConfig),
+            unstaged: summarizeMarkerDiffSlice(diffInputs.unstagedDiffText, probeConfig),
+            baselineRefreshed: false,
+            isGitSummaryAvailable: true
+        };
     }
 
     const summaryState = await readRepoSummaryState(repoRoot);
@@ -294,7 +341,10 @@ export async function prepareRepoPreCommit(args: {
             prepareRepoCommitBaselineForPaths(args.repoRoot, stagedRepoRelativePaths, baselineProfileDetails)
         ));
         const summary = await refreshRepoHookSummaryFromInputs(args.repoRoot, diffInputs);
-        return { baseline, summary };
+        // Strip only after the summary is written, so the recorded attribution always
+        // describes the content that is about to be committed.
+        const markerStrip = await stripMarkersForPreCommit(args.repoRoot, diffInputs);
+        return { baseline, summary, markerStrip };
     });
 }
 
@@ -357,6 +407,39 @@ function createEmptyRepoSummary(
     };
 }
 
+/**
+ * Marker mode is an exclusive replacement: rolling state, chat correlation and Claude
+ * provenance are all ignored, so nothing lands in Unknown.
+ */
+function summarizeMarkerDiffSlice(
+    diffText: string | null,
+    probeConfig: ResolvedProbeConfig
+): DiffSliceAttributionSummary {
+    const summary = createEmptyDiffSliceSummary();
+    if (!diffText) {
+        return summary;
+    }
+
+    const fileAttributions = parseMarkerDiffAttribution(diffText)
+        .filter((attribution) => !probeConfig.isAttributionExcluded(attribution.repoRelativePath));
+
+    for (const attribution of fileAttributions) {
+        summary.changedFileCount += 1;
+        if (attribution.aiAddedLineCount + attribution.humanAddedLineCount === 0) {
+            continue;
+        }
+
+        summary.attributedChangedFileCount += 1;
+        summary.aiAddedLineCount += attribution.aiAddedLineCount;
+        summary.humanAddedLineCount += attribution.humanAddedLineCount;
+        summary.aiWeightedChangedLines += attribution.aiWeight;
+        summary.humanWeightedChangedLines += attribution.humanWeight;
+    }
+
+    finalizeDiffSliceSummary(summary);
+    return summary;
+}
+
 function createEmptyDiffSliceSummary(): DiffSliceAttributionSummary {
     return {
         changedFileCount: 0,
@@ -381,14 +464,24 @@ async function summarizeDiffSlices(
     staged: DiffSliceAttributionSummary;
     unstaged: DiffSliceAttributionSummary;
 }> {
+    // Must run before changedFileCount is set and before the missing-rolling-state branch
+    // below, which would otherwise charge an excluded file as entirely AI.
+    const probeConfig = await readProbeConfig(repoRoot);
+    const attributedStagedEntries = stagedEntries.filter(
+        (entry) => !probeConfig.isAttributionExcluded(entry.repoRelativePath)
+    );
+    const attributedUnstagedEntries = unstagedEntries.filter(
+        (entry) => !probeConfig.isAttributionExcluded(entry.repoRelativePath)
+    );
+
     const stagedSummary = createEmptyDiffSliceSummary();
-    stagedSummary.changedFileCount = stagedEntries.length;
+    stagedSummary.changedFileCount = attributedStagedEntries.length;
 
     const unstagedSummary = createEmptyDiffSliceSummary();
-    unstagedSummary.changedFileCount = unstagedEntries.length;
+    unstagedSummary.changedFileCount = attributedUnstagedEntries.length;
 
-    const stagedEntriesByPath = new Map(stagedEntries.map((entry) => [entry.repoRelativePath, entry]));
-    const unstagedEntriesByPath = new Map(unstagedEntries.map((entry) => [entry.repoRelativePath, entry]));
+    const stagedEntriesByPath = new Map(attributedStagedEntries.map((entry) => [entry.repoRelativePath, entry]));
+    const unstagedEntriesByPath = new Map(attributedUnstagedEntries.map((entry) => [entry.repoRelativePath, entry]));
     const stagedLineWeightsByPath = new Map<string, number[] | null>();
     const workingTreeLineWeightsByPath = new Map<string, number[] | null>();
     const allRepoRelativePaths = Array.from(new Set([
@@ -976,8 +1069,11 @@ function getTextNonWhitespaceWeight(text: string): number {
     return text.replace(/\s/gu, '').length;
 }
 
-async function getGitDiffEntries(repoRoot: string, args: string[]): Promise<GitDiffStatEntry[] | null> {
-    const stdout = await tryRunGitCommand(repoRoot, ['-c', 'core.quotepath=false', ...args]);
+async function getGitDiffStdout(repoRoot: string, args: string[]): Promise<string | null> {
+    return tryRunGitCommand(repoRoot, ['-c', 'core.quotepath=false', ...args]);
+}
+
+async function parseGitDiffStdout(repoRoot: string, stdout: string | null): Promise<GitDiffStatEntry[] | null> {
     if (stdout === null) {
         return null;
     }
@@ -991,6 +1087,7 @@ async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntr
         return null;
     }
 
+    const probeConfig = await readProbeConfig(repoRoot);
     const entries: GitDiffStatEntry[] = [];
     for (const line of stdout.split(/\r?\n/)) {
         const repoRelativePath = normalizeDiffPath(line.trim());
@@ -999,6 +1096,10 @@ async function getGitUntrackedEntries(repoRoot: string): Promise<GitDiffStatEntr
         }
 
         if (await isRepoRelativePathTrackingIgnored(repoRoot, repoRelativePath)) {
+            continue;
+        }
+
+        if (probeConfig.isAttributionExcluded(repoRelativePath)) {
             continue;
         }
 
@@ -1378,7 +1479,10 @@ async function getLastCommitRepoRelativePaths(repoRoot: string): Promise<string[
 }
 
 async function getUnstagedRepoRelativePathSet(repoRoot: string): Promise<Set<string>> {
-    const unstagedTrackedEntries = await getGitDiffEntries(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space']);
+    const unstagedTrackedEntries = await parseGitDiffStdout(
+        repoRoot,
+        await getGitDiffStdout(repoRoot, ['diff', '--unified=0', '--find-renames', '--no-color', '--ignore-all-space'])
+    );
     const unstagedUntrackedEntries = await getGitUntrackedEntries(repoRoot);
     return new Set([
         ...(unstagedTrackedEntries ?? []).map((entry) => entry.repoRelativePath),

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.24] - 2026-08-28
+
+- Add a repo-local attribution config: committed `.ailoc2-probe.json` for team policy plus an optional machine-local `.ailoc2-metrics/config.json` override, created when repo hooks are installed and never overwritten on reinstall.
+- Add `attribution.largeFileIsAI` and `attribution.newFileIsAI` so large insertions and new-file population can be attributed to Human instead of raising the AI percentage. Stronger evidence such as a chat apply or a recorded Claude Code edit still counts as AI.
+- Add `attribution.excludePaths` with gitignore-style patterns and `!` re-inclusion. Excluded files are counted in neither the AI numerator nor the total and get no per-file attribution state.
+- Add `attribution.mode: "markers"` restoring the legacy `AI start` / `AI stop` comment model as an exclusive replacement for passive signals, and strip the markers from the index and working tree at commit time so they never reach the commit.
+- Preserve line endings, trailing-newline state, and the executable bit while stripping markers; skip symlinks, submodules, and binary content; leave the working tree untouched when it no longer matches the staged content.
+- Add `AILoc2 Probe: Attribution Settings` to VS Code and the IntelliJ Tools menu for switching mode and toggling the heuristics; both write the local layer so a toggle never modifies committed team policy.
+- Honor config exclusions in the generated IntelliJ shell hook through a flattened `.ailoc2-metrics/resolved-config.env` sidecar, which also closes the gap where that hook ignored `.ailoc2-metrics/.ignore` entirely.
+- Align the IntelliJ bulk-insert line threshold with the VS Code extension (`2` to `8`).
+- Add configuration guides in English and Polish under `docs/`.
+
 ## [1.0.21] - 2026-07-29
 
 - Attribute unresolved and explicitly Unknown changed lines as AI in newly generated VS Code and IntelliJ summaries.

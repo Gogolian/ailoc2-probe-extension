@@ -42,7 +42,8 @@ No hosted backend is required by this repo. No special commit command to remembe
 - Classifies file changes into AI-leaning and human-leaning signals.
 - Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
 - Builds staged and unstaged summaries from actual Git diff slices, ignoring whitespace-only diff noise in final percentages and line counts.
-- Installs repo-local Git hooks into `.githooks`.
+- Installs repo-local Git hooks into `.githooks` and a committable `.ailoc2-probe.json` attribution config.
+- Lets you disable large-insertion attribution, exclude paths from scoring, or switch to the legacy `AI start` / `AI stop` marker model — per repo, with optional per-machine overrides.
 - Annotates commit subjects with the AI-added-line percentage, for example `(AI: 22.64%)`, and commit bodies with the matching counts, for example `(AI-Lines: 12/53)`.
 - Falls back safely to `(AI: unavailable)` and `(AI-Lines: unavailable)` when summary data cannot be produced.
 
@@ -55,6 +56,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 - **Auditable** — summaries, rolling state, and manifests are inspectable.
 - **Low-friction** — once hooks are installed, the flow feels like normal Git.
 - **Hook-friendly** — managed hooks can chain an existing repo-local `core.hooksPath` instead of bulldozing it.
+- **Tunable** — teams can turn off heuristics they disagree with, exempt vendored or generated paths, or opt back into manual `AI start` / `AI stop` tagging.
 
 ## How it works
 
@@ -77,6 +79,7 @@ At a high level, AILoc2 does four things:
 
 If you want the implementation details rather than the quick-start view, start here:
 
+- [`docs/configuration.md`](docs/configuration.md) — configuration guide: attribution modes, `largeFileIsAI`, per-path exclusions ([polski](docs/konfiguracja.md))
 - [`docs/README.md`](docs/README.md) — technical docs index and source map
 - [`docs/architecture.md`](docs/architecture.md) — extension lifecycle, runtime components, and event flow
 - [`docs/attribution-and-summary.md`](docs/attribution-and-summary.md) — heuristics, rolling state, save checkpoints, and summary computation
@@ -119,6 +122,7 @@ If the target repo already uses a repo-local `core.hooksPath`, AILoc2 can chain 
 - `.ailoc2-metrics/summary.json` inside the tracked repo
 - commit subjects and bodies automatically annotated during `git commit`
 - post-commit baseline advancement and cleanup so fully committed files start fresh while files with remaining unstaged work keep their attribution
+- a `.ailoc2-probe.json` attribution config you can commit and tune — see [Configuration](#configuration)
 - optional `.ailoc2-metrics/.ignore` rules if you want gitignore-style opt-outs for specific tracked files or directories
 
 ### Claude Code companion
@@ -153,8 +157,11 @@ The IntelliJ plugin lives in [`IntelliJ/`](IntelliJ/). It observes IntelliJ edit
 
 ```text
 your-repo/
+├─ .ailoc2-probe.json          # attribution config, meant to be committed
 ├─ .ailoc2-metrics/
 │  ├─ manifest.json
+│  ├─ config.json              # optional machine-local config override
+│  ├─ resolved-config.env      # generated flat config for the IntelliJ shell hook
 │  ├─ .ignore
 │  ├─ summary.json
 │  ├─ performance.jsonl  # only when AILOC2_PROFILE=1
@@ -175,6 +182,9 @@ your-repo/
 
 ### What those files mean
 
+- `.ailoc2-probe.json` — attribution settings for the repo; commit it so the whole team scores commits the same way.
+- `config.json` — optional per-machine override of `.ailoc2-probe.json`; not shared, because `.ailoc2-metrics/` is gitignored.
+- `resolved-config.env` — generated flattened copy of the merged config, read by IntelliJ's generated shell hook, which cannot parse JSON. Edit the JSON, not this file.
 - `summary.json` — generated output consumed by hooks and other local tooling.
 - `.ignore` — optional gitignore-style rules for files or directories that should never get per-file metrics state.
 - `manifest.json` — lightweight bookkeeping and diagnostics for the extension runtime.
@@ -194,10 +204,38 @@ your-repo/
 | `AILoc2 Probe: Log Active Document Metrics Target` | Shows the repo-local metrics target for the active document. |
 | `AILoc2 Probe: Show Summary Output` | Opens the summary output channel. |
 | `AILoc2 Probe: Recompute Repo Summary` | Rebuilds `.ailoc2-metrics/summary.json` for a selected repo. |
+| `AILoc2 Probe: Attribution Settings` | Switches attribution mode and toggles large-insertion / new-file attribution. |
 | `AILoc2 Probe: Install Repo Hooks` | Installs managed AILoc2 hooks into `.githooks`. |
 | `AILoc2 Probe: Uninstall Repo Hooks` | Removes managed AILoc2 hooks and restores prior repo-local hook settings when possible. |
 
 ## Configuration
+
+Attribution behavior is configured per repository in `.ailoc2-probe.json`, created with defaults when you install hooks. An optional `.ailoc2-metrics/config.json` overrides it for one machine.
+
+```json
+{
+  "version": 1,
+  "attribution": {
+    "mode": "signals",
+    "largeFileIsAI": true,
+    "newFileIsAI": true,
+    "excludePaths": []
+  }
+}
+```
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `attribution.mode` | `"signals"` | `"signals"` uses passive editor/chat evidence. `"markers"` counts only lines inside `AI start` / `AI stop` comments and strips the markers when you commit. |
+| `attribution.largeFileIsAI` | `true` | When `false`, a large insertion is attributed to Human instead of raising the AI percentage. |
+| `attribution.newFileIsAI` | `true` | When `false`, filling a brand-new file is attributed to Human. |
+| `attribution.excludePaths` | `[]` | Gitignore-style patterns removed from attribution entirely — counted in neither the AI numerator nor the total. |
+
+The defaults reproduce the previous behavior, so existing repos are unaffected until you change something. Mode and the two toggles are also flippable from `AILoc2 Probe: Attribution Settings` in VS Code and **Tools → AILoc2 Probe: Attribution Settings** in IntelliJ; both write the local layer so a toggle never dirties committed team policy.
+
+Read [`docs/configuration.md`](docs/configuration.md) for the full guide, including marker syntax and pattern rules ([wersja polska](docs/konfiguracja.md)).
+
+### VS Code settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
@@ -205,10 +243,12 @@ your-repo/
 
 ## Attribution model
 
-The current heuristic uses explicit AI and Human signals where available and assigns unresolved output to AI.
+Two models are available, selected by `attribution.mode` in [`.ailoc2-probe.json`](#configuration). The default is `signals`, described below; `markers` instead counts only lines inside `AI start` / `AI stop` comments and ignores every passive signal.
+
+The `signals` heuristic uses explicit AI and Human signals where available and assigns unresolved output to AI.
 
 - The **strongest AI signal** is recent `chat-editing-snapshot-text-model` activity followed almost immediately by a workspace-file change — especially a whole-document replacement.
-- Large one-shot multi-line insertions or expansions require recent chat-editing context to count as probable AI bulk edits. Size alone is not enough to call a paste AI.
+- Large one-shot multi-line insertions or expansions require recent chat-editing context to count as probable AI bulk edits. Size alone is not enough to call a paste AI, and `largeFileIsAI: false` removes size from the picture entirely.
 - A **small localized edit** during an active chat-editing session is treated as more likely human than AI to avoid obvious false positives.
 - Zero-content change events are filtered out as lifecycle noise.
 - Unknown or unattributed changed lines are counted as AI in both line counts and line-derived percentages.
@@ -238,7 +278,8 @@ This project is already useful, but it is not pretending to be magic.
 - Large manual paste operations without supported AI-tool context are treated as human edits; unresolved changes without usable attribution are treated as AI.
 - `(AI: unavailable)` with `(AI-Lines: unavailable)` means summary generation, validation, or hook runtime fallback kicked in; it does **not** mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
-- You can also add repo-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.
+- You can exempt paths from scoring with `attribution.excludePaths`, or add machine-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.
+- In `markers` mode, attribution depends entirely on markers being present in your staged additions, and the markers are deleted from the index and working tree as part of committing.
 
 ## Development
 

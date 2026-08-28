@@ -31,6 +31,44 @@ export async function tryRunGitCommand(repoRoot: string, args: readonly string[]
     }
 }
 
+/**
+ * Byte-exact variant used by marker stripping, where re-encoding through a string
+ * would rewrite line endings and corrupt non-UTF8 content.
+ */
+export async function runGitCommandBuffer(repoRoot: string, args: readonly string[]): Promise<Buffer> {
+    const { stdout } = await execFileAsync('git', [...args], {
+        cwd: repoRoot,
+        windowsHide: true,
+        maxBuffer: 64 * 1024 * 1024,
+        encoding: 'buffer'
+    });
+    return stdout;
+}
+
+export async function runGitCommandWithInput(
+    repoRoot: string,
+    args: readonly string[],
+    input: Buffer
+): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const child = childProcess.execFile(
+            'git',
+            [...args],
+            { cwd: repoRoot, windowsHide: true, maxBuffer: 1024 * 1024 },
+            (error, stdout) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+
+                resolve(stdout);
+            }
+        );
+
+        child.stdin?.end(input);
+    });
+}
+
 export function toGitRepoPath(repoRelativePath: string): string {
     return repoRelativePath.split(path.sep).join('/');
 }

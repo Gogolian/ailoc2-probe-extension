@@ -6,11 +6,12 @@ This folder contains an IntelliJ Platform plugin that mirrors the core AILoc2 be
 - classifies edit signals locally as human-leaning or AI-leaning using editor command context, command group metadata, and bulk-apply heuristics;
 - persists repo-local metrics under `.ailoc2-metrics/intellij-state`;
 - honors optional gitignore-style opt-out rules from `.ailoc2-metrics/.ignore`;
+- reads attribution settings from the repo's `.ailoc2-probe.json`, with an optional machine-local `.ailoc2-metrics/config.json` override, so heuristics and excluded paths match the VS Code extension;
 - calculates staged AI attribution from whitespace-insensitive `git diff --cached` output during IntelliJ commit handling;
 - adds the line-derived staged percentage to the commit subject as `(AI: 32%)` and matching counts to the body as `(AI-Lines: 8/25)`, or unavailable forms when Git summary generation fails;
 - clears metrics for files that were fully committed while preserving metrics for committed paths that still have unstaged work.
 
-The implementation is intentionally local-first. It does not call a hosted service and does not depend on LLM-generated markers in source files.
+The implementation is intentionally local-first. It does not call a hosted service, and by default it does not depend on LLM-generated markers in source files. Teams that still tag AI code by hand can opt into the legacy `AI start` / `AI stop` model by setting `attribution.mode` to `markers`; see [`../docs/configuration.md`](../docs/configuration.md) ([polski](../docs/konfiguracja.md)).
 
 ## Build and run
 
@@ -50,6 +51,7 @@ At commit time the plugin reads the actual staged diff with whitespace-only hunk
 The plugin adds two explicit Tools menu actions:
 
 - **AILoc2 Probe: Recompute Repo Summary**
+- **AILoc2 Probe: Attribution Settings**
 - **AILoc2 Probe: Install Repo Hooks**
 - **AILoc2 Probe: Uninstall Repo Hooks**
 - **AILoc2 Probe: Install Workspace Claude Hooks**
@@ -57,7 +59,9 @@ The plugin adds two explicit Tools menu actions:
 
 The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged percentages plus AI/Human added-line counts on demand.
 
-If you want to exclude files or directories from IntelliJ metrics entirely, add gitignore-style rules to `.ailoc2-metrics/.ignore`. Ignored paths will not get IntelliJ rolling-state files and are skipped from the summary counts as well.
+The attribution settings action switches between signal and marker attribution and toggles large-insertion and new-file attribution. It writes the machine-local `.ailoc2-metrics/config.json` so a quick toggle never modifies committed team policy, then regenerates the shell hook's config sidecar and refreshes the summary.
+
+If you want to exclude files or directories from IntelliJ metrics entirely, use `attribution.excludePaths` in `.ailoc2-probe.json` for team-wide rules, or add gitignore-style rules to `.ailoc2-metrics/.ignore` for machine-local ones. Excluded paths will not get IntelliJ rolling-state files and are skipped from the summary counts as well — including in the generated shell hook, which reads the flattened `.ailoc2-metrics/resolved-config.env`.
 
 Hook installation is opt-in because it writes repo-local Git configuration. The install action resolves the current project's Git root, updates `.gitignore` for AILoc2 artifacts, writes managed hook files under `.githooks`, installs Claude Code hooks under `.claude` when the Claude runtime is bundled, and sets local `core.hooksPath` to `.githooks`. If the repo already uses another local hooks path, the action prompts to either chain to that existing path after AILoc2 runs or replace it while saving the previous value for uninstall. If `.githooks/pre-commit`, `.githooks/commit-msg`, or `.githooks/post-commit` already exists and is not AILoc2-managed, the action asks before wrapping it. Approved wrapping preserves the original file as `.githooks/<hook>.ailoc2-delegate`, runs it after AILoc2, and restores it on uninstall. When automatic wrapping is unsafe, AILoc2 writes inactive `.githooks/<hook>.ailoc2-proposed` files for manual or Copilot-assisted merge.
 

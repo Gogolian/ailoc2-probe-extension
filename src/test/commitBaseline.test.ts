@@ -6,11 +6,14 @@ import * as path from 'path';
 import { afterEach, test } from 'node:test';
 
 import {
+    getLocalProbeConfigFilePath,
     getMetricsIgnoreFilePath,
     getPreparedCommitBaselinePath,
+    getRepoProbeConfigFilePath,
     getRepoSummaryStatePath,
     getRollingStatePath
 } from '../metrics/pathing';
+import { invalidateProbeConfigCache } from '../metrics/probeConfig';
 import { createLineDiffSegments } from '../metrics/lineDiff';
 import { METRICS_SCHEMA_VERSION } from '../metrics/schema';
 import { RepoMetricsStore } from '../metrics/store';
@@ -407,6 +410,159 @@ test('metrics ignore rules skip metrics files and diff attribution for ignored p
     assert.equal(refreshed.summary.staged.aiAddedLineCount, 1);
     assert.equal(refreshed.summary.staged.humanAddedLineCount, 0);
     assert.equal(refreshed.summary.staged.unknownAddedLineCount, 0);
+});
+
+test('config excludePaths drop a file from both the numerator and the denominator', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-config-exclude-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ail*c2@example.com']);
+
+    const excludedGitPath = 'vendor/bundle.js';
+    const includedGitPath = 'src/app.ts';
+    const excludedAbsolutePath = path.join(repoRoot, path.normalize(excludedGitPath));
+    const includedAbsolutePath = path.join(repoRoot, path.normalize(includedGitPath));
+    fs.mkdirSync(path.dirname(excludedAbsolutePath), { recursive: true });
+    fs.mkdirSync(path.dirname(includedAbsolutePath), { recursive: true });
+    fs.writeFileSync(excludedAbsolutePath, 'base vendor\n', 'utf8');
+    fs.writeFileSync(includedAbsolutePath, 'base app\n', 'utf8');
+    runGit(repoRoot, ['add', excludedGitPath, includedGitPath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(getRepoProbeConfigFilePath(repoRoot), JSON.stringify({
+        attribution: { excludePaths: ['vendor/**'] }
+    }), 'utf8');
+    invalidateProbeConfigCache(repoRoot);
+
+    // Neither file gets rolling state, so without the exclusion both would be
+    // charged entirely to AI by the unresolved-added-lines fallback.
+    fs.writeFileSync(excludedAbsolutePath, 'changed vendor\n', 'utf8');
+    fs.writeFileSync(includedAbsolutePath, 'changed app\n', 'utf8');
+    runGit(repoRoot, ['add', excludedGitPath, includedGitPath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.equal(refreshed.summary.staged.changedFileCount, 1, 'excluded file leaves the denominator');
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, 1, 'only the included file is counted');
+});
+
+test('config excludePaths supports extension globs and local negation', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-config-exclude-glob-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ail*c2@example.com']);
+
+    const generatedGitPath = 'src/api.generated.ts';
+    const keptGitPath = 'src/kept.generated.ts';
+    const generatedAbsolutePath = path.join(repoRoot, path.normalize(generatedGitPath));
+    const keptAbsolutePath = path.join(repoRoot, path.normalize(keptGitPath));
+    fs.mkdirSync(path.dirname(generatedAbsolutePath), { recursive: true });
+    fs.writeFileSync(generatedAbsolutePath, 'base generated\n', 'utf8');
+    fs.writeFileSync(keptAbsolutePath, 'base kept\n', 'utf8');
+    runGit(repoRoot, ['add', generatedGitPath, keptGitPath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(getRepoProbeConfigFilePath(repoRoot), JSON.stringify({
+        attribution: { excludePaths: ['*.generated.ts'] }
+    }), 'utf8');
+    const localConfigPath = getLocalProbeConfigFilePath(repoRoot);
+    fs.mkdirSync(path.dirname(localConfigPath), { recursive: true });
+    fs.writeFileSync(localConfigPath, JSON.stringify({
+        attribution: { excludePaths: ['!src/kept.generated.ts'] }
+    }), 'utf8');
+    invalidateProbeConfigCache(repoRoot);
+
+    fs.writeFileSync(generatedAbsolutePath, 'changed generated\n', 'utf8');
+    fs.writeFileSync(keptAbsolutePath, 'changed kept\n', 'utf8');
+    runGit(repoRoot, ['add', generatedGitPath, keptGitPath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.equal(refreshed.summary.staged.changedFileCount, 1, 'local negation re-includes exactly one file');
+});
+
+test('markers mode scores the reported percentage from AI start/stop blocks alone', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-markers-mode-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ail*c2@example.com']);
+
+    const gitRelativePath = 'src/example.ts';
+    const absoluteFilePath = path.join(repoRoot, path.normalize(gitRelativePath));
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const base = 0;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(getRepoProbeConfigFilePath(repoRoot), JSON.stringify({
+        attribution: { mode: 'markers' }
+    }), 'utf8');
+    invalidateProbeConfigCache(repoRoot);
+
+    fs.writeFileSync(absoluteFilePath, [
+        'const base = 0;',
+        'const humanOne = 1;',
+        '// AI start',
+        'const generatedOne = 2;',
+        'const generatedTwo = 3;',
+        'const generatedThree = 4;',
+        '// AI stop',
+        ''
+    ].join('\n'), 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.deepEqual({
+        aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
+        humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
+        unknownAddedLineCount: refreshed.summary.staged.unknownAddedLineCount
+    }, {
+        aiAddedLineCount: 3,
+        humanAddedLineCount: 1,
+        unknownAddedLineCount: 0
+    });
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 75) < FLOATING_POINT_TOLERANCE);
+});
+
+test('markers mode ignores rolling state that signals mode would have trusted', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-markers-exclusive-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ail*c2@example.com']);
+
+    const gitRelativePath = 'src/example.ts';
+    const repoRelativePath = path.normalize(gitRelativePath);
+    const absoluteFilePath = path.join(repoRoot, repoRelativePath);
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const base = 0;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(getRepoProbeConfigFilePath(repoRoot), JSON.stringify({
+        attribution: { mode: 'markers' }
+    }), 'utf8');
+    invalidateProbeConfigCache(repoRoot);
+
+    // Unmarked additions, so markers mode must report 0% AI even though the passive
+    // pipeline would have charged an unresolved file entirely to AI.
+    fs.writeFileSync(absoluteFilePath, 'const base = 0;\nconst added = 1;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, 0);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 1);
+    assert.equal(refreshed.summary.staged.aiPercentage, 0);
+    assert.equal(refreshed.summary.staged.usedFallbackAttribution, false);
 });
 
 test('refreshRepoHookSummary ignores whitespace-only staged changes', async () => {

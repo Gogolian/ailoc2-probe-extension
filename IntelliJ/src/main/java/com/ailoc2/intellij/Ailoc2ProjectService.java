@@ -35,7 +35,7 @@ public final class Ailoc2ProjectService implements Disposable {
     private static final int AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD = 4;
     private static final int AI_BULK_REPLACEMENT_MINIMUM_LENGTH = 400;
     private static final int AI_BULK_INSERT_MINIMUM_LENGTH = 400;
-    private static final int AI_BULK_INSERT_MINIMUM_LINES = 2;
+    private static final int AI_BULK_INSERT_MINIMUM_LINES = 8;
     private static final String AI_UNDEFINED_COMMAND_SENTINEL = "Undefined";
     private static final Duration CLAUDE_PROVENANCE_MAX_AGE = Duration.ofMinutes(2);
     private static final List<String> AI_COMMAND_HINTS = List.of(
@@ -97,6 +97,52 @@ public final class Ailoc2ProjectService implements Disposable {
         );
         storage.writeSummary(repoRoot, summary);
         return summary;
+    }
+
+    /**
+     * Re-flattens the probe config for the generated shell hook, which cannot read JSON.
+     */
+    public void refreshResolvedConfigSidecar(Path repoRoot) {
+        Ailoc2ProbeConfig.invalidate(repoRoot);
+        try {
+            new Ailoc2HookManager().writeResolvedConfigSidecar(repoRoot);
+        }
+        catch (IOException error) {
+            LOG.warn("AILoc2 could not refresh the resolved config sidecar for repo " + repoRoot, error);
+        }
+    }
+
+    /**
+     * In marker mode the markers must not reach the commit. Runs after the summary is written so
+     * the recorded attribution always describes the content that is about to be committed.
+     */
+    public void stripStagedMarkersIfEnabled(Path repoRoot) {
+        Ailoc2ProbeConfig probeConfig = Ailoc2ProbeConfig.read(repoRoot);
+        if (!probeConfig.isMarkerMode()) {
+            return;
+        }
+
+        String diffText = readGitStdout(
+            repoRoot,
+            List.of("diff", "--cached", "--unified=0", "--find-renames", "--no-color")
+        );
+        if (diffText == null || diffText.isEmpty()) {
+            return;
+        }
+
+        List<String> markerPaths = new java.util.ArrayList<>();
+        for (String repoRelativePath : Ailoc2MarkerAttribution.collectMarkerPaths(diffText)) {
+            if (!probeConfig.isAttributionExcluded(repoRelativePath)
+                && !storage.isTrackingIgnored(repoRoot, repoRelativePath)) {
+                markerPaths.add(repoRelativePath);
+            }
+        }
+        if (markerPaths.isEmpty()) {
+            return;
+        }
+
+        List<String> stripped = Ailoc2MarkerStripper.stripStagedMarkers(repoRoot, markerPaths);
+        LOG.info("AILoc2 stripped AI markers from " + stripped.size() + " staged file(s) in repo " + repoRoot);
     }
 
     public void prepareCommitAudit(Path repoRoot) {
@@ -193,6 +239,12 @@ public final class Ailoc2ProjectService implements Disposable {
             return;
         }
 
+        Ailoc2ProbeConfig probeConfig = Ailoc2ProbeConfig.read(repoRoot);
+        if (probeConfig.isAttributionExcluded(repoRelativePath)) {
+            storage.removeState(repoRoot, repoRelativePath);
+            return;
+        }
+
         CommandContext commandContext = currentCommandContext();
         if (commandContext.isReloadFromDisk()) {
             Ailoc2FileState state = storage.reloadState(repoRoot, repoRelativePath);
@@ -215,7 +267,7 @@ public final class Ailoc2ProjectService implements Disposable {
             return;
         }
 
-        ClassificationResult classification = classifyChange(commandContext, event);
+        ClassificationResult classification = classifyChange(commandContext, event, probeConfig);
         Ailoc2AttributionBucket bucket = classification.bucket();
         Ailoc2FileState state = storage.stateFor(repoRoot, repoRelativePath);
         int safeOffset = Math.max(0, Math.min(event.getOffset(), document.getTextLength()));
@@ -244,6 +296,29 @@ public final class Ailoc2ProjectService implements Disposable {
                 + ", newLines=" + countFragmentLines(event.getNewFragment())
                 + ", touchedLines=" + changedLineCount
         );
+    }
+
+    private String readGitStdout(Path repoRoot, List<String> gitArgs) {
+        ProcessBuilder processBuilder = new ProcessBuilder(withGitCommand(gitArgs));
+        processBuilder.directory(repoRoot.toFile());
+        try {
+            Process process = processBuilder.start();
+            StringBuilder stdout = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    stdout.append(line).append('\n');
+                }
+            }
+            return process.waitFor() == 0 ? stdout.toString() : null;
+        }
+        catch (IOException | InterruptedException error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            LOG.warn("AILoc2 git command failed for repo " + repoRoot, error);
+            return null;
+        }
     }
 
     private Ailoc2GitSummary computeGitSummary(Path repoRoot, List<String> gitArgs, String summaryKind) {
@@ -322,13 +397,28 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     private Ailoc2GitSummary summarizeDiff(Path repoRoot, String diffText) {
+        Ailoc2ProbeConfig probeConfig = Ailoc2ProbeConfig.read(repoRoot);
+        if (probeConfig.isMarkerMode()) {
+            // Exclusive replacement: rolling state and Claude provenance are ignored entirely.
+            return Ailoc2MarkerAttribution.summarize(
+                diffText,
+                repoRelativePath -> storage.isTrackingIgnored(repoRoot, repoRelativePath)
+                    || probeConfig.isAttributionExcluded(repoRelativePath)
+            );
+        }
+
         return new Ailoc2GitDiffSummarizer(
             repoRelativePath -> storage.stateFor(repoRoot, repoRelativePath),
             repoRelativePath -> storage.isTrackingIgnored(repoRoot, repoRelativePath)
+                || probeConfig.isAttributionExcluded(repoRelativePath)
         ).summarize(diffText);
     }
 
-    private ClassificationResult classifyChange(CommandContext commandContext, DocumentEvent event) {
+    private ClassificationResult classifyChange(
+        CommandContext commandContext,
+        DocumentEvent event,
+        Ailoc2ProbeConfig probeConfig
+    ) {
         String normalized = commandContext.normalizedSearchText();
         for (String hint : AI_COMMAND_HINTS) {
             if (normalized.contains(hint)) {
@@ -339,14 +429,20 @@ public final class Ailoc2ProjectService implements Disposable {
             && commandContext.hasEmptyCommandGroup()) {
             return new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "undefined-command");
         }
+        // UNKNOWN is folded into the AI weight by Ailoc2GitDiffSummarizer, so a disabled
+        // flag has to resolve to HUMAN or the toggle would not move the reported percentage.
         if (event.getOldLength() == 0
             && isBulkMultilineInsertion(event)) {
-            return new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "bulk-insert");
+            return probeConfig.largeFileIsAi()
+                ? new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "bulk-insert")
+                : new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "bulk-insert-not-attributed");
         }
         if (event.getOldLength() > 0
             && event.getNewLength() > event.getOldLength() * (long) AI_BULK_REPLACEMENT_MULTIPLIER_THRESHOLD
             && event.getNewLength() > AI_BULK_REPLACEMENT_MINIMUM_LENGTH) {
-            return new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "bulk-replacement");
+            return probeConfig.largeFileIsAi()
+                ? new ClassificationResult(Ailoc2AttributionBucket.UNKNOWN, "bulk-replacement")
+                : new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "bulk-replacement-not-attributed");
         }
         return new ClassificationResult(Ailoc2AttributionBucket.HUMAN, "default-human");
     }

@@ -10,6 +10,18 @@ export function getMetricsIgnoreFilePath(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), '.ignore');
 }
 
+export function getRepoProbeConfigFilePath(repoRoot: string): string {
+    return path.join(repoRoot, '.ailoc2-probe.json');
+}
+
+export function getLocalProbeConfigFilePath(repoRoot: string): string {
+    return path.join(getMetricsRoot(repoRoot), 'config.json');
+}
+
+export function getResolvedConfigSidecarPath(repoRoot: string): string {
+    return path.join(getMetricsRoot(repoRoot), 'resolved-config.env');
+}
+
 export function getMetricsSummaryFilePath(repoRoot: string): string {
     return path.join(getMetricsRoot(repoRoot), 'summary.json');
 }

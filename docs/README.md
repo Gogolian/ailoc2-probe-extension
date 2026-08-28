@@ -4,6 +4,13 @@ This folder is the implementation guide for AILoc2.
 
 The top-level [`README.md`](../README.md) explains what the project is and how to try it. These docs explain how the current prototype works internally, where data is stored, which heuristics are used, and where implementation behavior does or does not meet its conservative-attribution goal.
 
+## Configuration
+
+If you want to change how attribution behaves rather than understand how it is implemented, read the configuration guide instead:
+
+- [`configuration.md`](configuration.md) — attribution modes, `largeFileIsAI`, per-path exclusions, and the two config layers
+- [`konfiguracja.md`](konfiguracja.md) — the same guide in Polish / ten sam przewodnik po polsku
+
 ## Reading order
 
 1. [`architecture.md`](architecture.md) — start here for the runtime model, source map, lifecycle, and key moving parts.
@@ -24,6 +31,10 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 | Repo discovery and path normalization | `src/metrics/repoResolver.ts` |
 | Metrics file layout | `src/metrics/pathing.ts` |
 | Shared schema types | `src/metrics/schema.ts` |
+| Probe configuration and layer merge | `src/metrics/probeConfig.ts` |
+| Gitignore-style pattern matching | `src/metrics/globRules.ts` |
+| Marker (`AI start`/`AI stop`) attribution | `src/metrics/markerAttribution.ts` |
+| Marker stripping at commit time | `src/metrics/markerStripping.ts` |
 | Tracking exclusions | `src/trackingExclusions.ts` |
 | Hook install / uninstall | `src/hooks/management.ts` |
 | Commit message suffix logic | `src/hooks/commitMessage.ts` |
@@ -34,6 +45,8 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 | IntelliJ positional line state | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2FileState.java` |
 | IntelliJ Git summary and commit annotation | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2GitDiffSummarizer.java`, `Ailoc2CommitMessageFormatter.java` |
 | IntelliJ Git hook runtime generation | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2HookManager.java` |
+| IntelliJ probe configuration | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2ProbeConfig.java` |
+| IntelliJ marker attribution and stripping | `IntelliJ/src/main/java/com/ailoc2/intellij/Ailoc2MarkerAttribution.java`, `Ailoc2MarkerStripper.java` |
 
 ## Quick reference
 
@@ -42,6 +55,8 @@ The top-level [`README.md`](../README.md) explains what the project is and how t
 - **Detailed output channel:** `AILoc2 Probe`
 - **Summary output channel:** `AILoc2 Summary`
 - **Repo-local metrics root:** `.ailoc2-metrics/`
+- **Team config file:** `.ailoc2-probe.json` (committed)
+- **Local config override:** `.ailoc2-metrics/config.json`
 - **Managed hook directory:** `.githooks/`
 - **Managed hook runtime file:** `.githooks/ailoc2-hook-runtime.cjs`
 - **Claude Code runtime file:** `.claude/ailoc2-claude-code.cjs`

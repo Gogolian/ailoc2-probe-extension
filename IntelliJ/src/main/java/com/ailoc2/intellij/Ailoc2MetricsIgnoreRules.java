@@ -64,7 +64,7 @@ final class Ailoc2MetricsIgnoreRules {
         }
     }
 
-    private CompiledRule compileRule(String line) {
+    static CompiledRule compileRule(String line) {
         if (line.trim().isEmpty()) {
             return null;
         }
@@ -112,7 +112,7 @@ final class Ailoc2MetricsIgnoreRules {
         }
     }
 
-    private String globToRegexSource(String pattern) {
+    static String globToRegexSource(String pattern) {
         StringBuilder source = new StringBuilder(pattern.length() * 2);
         for (int index = 0; index < pattern.length(); index++) {
             char character = pattern.charAt(index);
@@ -162,7 +162,7 @@ final class Ailoc2MetricsIgnoreRules {
         return source.toString();
     }
 
-    private String normalizeRepoRelativePath(String repoRelativePath) {
+    static String normalizeRepoRelativePath(String repoRelativePath) {
         return repoRelativePath
             .replace('\\', '/')
             .replaceFirst("^/+", "")
@@ -170,7 +170,7 @@ final class Ailoc2MetricsIgnoreRules {
             .replaceFirst("/+$", "");
     }
 
-    private String escapeRegexCharacter(char value) {
+    private static String escapeRegexCharacter(char value) {
         return switch (value) {
             case '|', '\\', '{', '}', '(', ')', '[', ']', '^', '$', '+', '*', '?', '.' -> "\\" + value;
             default -> Character.toString(value);
@@ -179,5 +179,5 @@ final class Ailoc2MetricsIgnoreRules {
 
     private record CachedRules(String signature, List<CompiledRule> rules) {}
 
-    private record CompiledRule(boolean negate, Pattern pattern) {}
+    record CompiledRule(boolean negate, Pattern pattern) {}
 }

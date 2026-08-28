@@ -12,6 +12,8 @@ export type WorkspaceFileChangeClassificationInput = {
     isLargeBulkExpansion: boolean;
     hasRecentChatCorrelation: boolean;
     hasRecentSnapshotActivity: boolean;
+    largeFileIsAiEnabled: boolean;
+    newFileIsAiEnabled: boolean;
 };
 
 export function classifyWorkspaceFileChange(input: WorkspaceFileChangeClassificationInput): ChangeClassification {
@@ -43,14 +45,17 @@ export function classifyWorkspaceFileChange(input: WorkspaceFileChangeClassifica
         };
     }
 
-    if (input.hasRecentChatCorrelation && (input.isLargeBulkInsertion || input.isLargeBulkExpansion)) {
+    const isLargeBulkEdit = input.largeFileIsAiEnabled
+        && (input.isLargeBulkInsertion || input.isLargeBulkExpansion);
+
+    if (input.hasRecentChatCorrelation && isLargeBulkEdit) {
         return {
             signal: 'ProbableAIBulkWorkspaceEdit',
             explanation: 'A large workspace-file edit occurred with recent chat-editing context but without stronger snapshot metadata.'
         };
     }
 
-    if (input.isInitialFilePopulation || input.isLargeBulkInsertion || input.isLargeBulkExpansion) {
+    if ((input.newFileIsAiEnabled && input.isInitialFilePopulation) || isLargeBulkEdit) {
         return {
             signal: 'UncorrelatedBulkOrNewFileEdit',
             explanation: 'A new file population or bulk workspace edit occurred without enough evidence to distinguish an AI tool from a human bulk operation.'

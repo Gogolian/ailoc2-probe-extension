@@ -20,6 +20,7 @@ import {
 import {
     getMetricsManifestPath,
     getMetricsRoot,
+    getRepoProbeConfigFilePath,
     getRollingStatePath
 } from './metrics/pathing';
 import {
@@ -32,10 +33,21 @@ import {
 import {
     refreshRepoHookSummary
 } from './metrics/summary';
+import {
+    AttributionMode,
+    ResolvedProbeConfig,
+    createDefaultProbeConfig,
+    createResolvedDefaultProbeConfig,
+    invalidateProbeConfigCache,
+    readProbeConfig,
+    readProbeConfigSync,
+    writeLocalProbeConfigOverride
+} from './metrics/probeConfig';
 import { createLineDiffSegments } from './metrics/lineDiff';
 import { RepoMetricsStore } from './metrics/store';
 import { installRepoHooks, uninstallRepoHooks } from './hooks/management';
 import { getTrackingExclusionReasonForPath as getSharedTrackingExclusionReasonForPath } from './trackingExclusions';
+import { pathExists } from './util/fsUtils';
 import { toErrorMessage } from './util/errors';
 
 type DocumentSnapshot = {
@@ -377,6 +389,20 @@ export function activate(context: vscode.ExtensionContext): void {
                 );
             }
         }),
+        vscode.commands.registerCommand('ailoc2Probe.configureAttribution', async () => {
+            const repoRoot = await promptForRepoRootForCommand({
+                title: 'AILoc2 Probe: Attribution Settings',
+                placeHolder: 'Select the repository whose attribution settings you want to change.'
+            });
+            if (!repoRoot) {
+                return;
+            }
+
+            await runConfigureAttributionCommand(repoRoot, {
+                logEvent,
+                refreshRepoSummary: refreshRepoSummaryForCommand
+            });
+        }),
         vscode.commands.registerCommand('ailoc2Probe.installHooks', async () => {
             const repoRoot = await promptForRepoRootForCommand({
                 title: 'AILoc2 Probe: Install Repo Hooks',
@@ -611,7 +637,8 @@ export function activate(context: vscode.ExtensionContext): void {
             const classification = classifyChangeEvent({
                 document,
                 changeStats,
-                recentChatEditCorrelation
+                recentChatEditCorrelation,
+                attributionConfig: readAttributionConfigForDocument(document)
             });
             const metricCandidate = createChangeMetricCandidate({
                 document,
@@ -1447,6 +1474,7 @@ function classifyChangeEvent(input: {
     document: vscode.TextDocument;
     changeStats: ChangeStats;
     recentChatEditCorrelation: RecentChatEditCorrelation | null;
+    attributionConfig: ResolvedProbeConfig;
 }): ChangeClassification {
     if (isChatEditingDocument(input.document)) {
         return {
@@ -1471,7 +1499,9 @@ function classifyChangeEvent(input: {
             isLargeBulkInsertion: input.changeStats.isLargeBulkInsertion,
             isLargeBulkExpansion: input.changeStats.isLargeBulkExpansion,
             hasRecentChatCorrelation: input.recentChatEditCorrelation !== null,
-            hasRecentSnapshotActivity: input.recentChatEditCorrelation?.hasRecentSnapshotActivity ?? false
+            hasRecentSnapshotActivity: input.recentChatEditCorrelation?.hasRecentSnapshotActivity ?? false,
+            largeFileIsAiEnabled: input.attributionConfig.attribution.largeFileIsAI,
+            newFileIsAiEnabled: input.attributionConfig.attribution.newFileIsAI
         });
     }
 
@@ -1788,6 +1818,14 @@ function tryGetFileStat(uri: vscode.Uri): Record<string, unknown> | null {
     }
 }
 
+/**
+ * Reads synchronously because every observation-time gate on this path is synchronous.
+ */
+function readAttributionConfigForDocument(document: vscode.TextDocument): ResolvedProbeConfig {
+    const repoRoot = resolveRepoLocationForDocument(document)?.repoRoot;
+    return repoRoot ? readProbeConfigSync(repoRoot) : createResolvedDefaultProbeConfig();
+}
+
 function getMetricPersistenceDecision(
     document: vscode.TextDocument,
     metricCandidate: ChangeMetricCandidate
@@ -1841,6 +1879,16 @@ function getMetricPersistenceDecision(
             repoRoot: null,
             repoRelativePath: null,
             logicalPath: metricCandidate.logicalPath
+        };
+    }
+
+    if (readProbeConfigSync(repoLocation.repoRoot).isAttributionExcluded(repoLocation.repoRelativePath)) {
+        return {
+            shouldPersist: false,
+            reason: 'AttributionExcludedByConfig',
+            repoRoot: null,
+            repoRelativePath: null,
+            logicalPath: repoLocation.logicalPath
         };
     }
 
@@ -2005,6 +2053,109 @@ function getTrackingExclusionReasonForPath(candidatePath: string | null | undefi
 
 function formatHookFileList(hookFileNames: readonly string[]): string {
     return hookFileNames.map((hookFileName) => `.githooks/${hookFileName}`).join(', ');
+}
+
+type AttributionActionItem = vscode.QuickPickItem & {
+    action: 'toggle-mode' | 'toggle-large-file' | 'toggle-new-file' | 'edit-exclusions';
+};
+
+/**
+ * Writes to the machine-local override layer so a toggle never dirties committed team policy.
+ */
+async function runConfigureAttributionCommand(
+    repoRoot: string,
+    hooks: {
+        logEvent: (eventName: string, payload: unknown) => void;
+        refreshRepoSummary: (repoRoot: string, reason: string) => Promise<unknown>;
+    }
+): Promise<void> {
+    const config = await readProbeConfig(repoRoot);
+    const isMarkerMode = config.attribution.mode === 'markers';
+    const items: AttributionActionItem[] = [
+        {
+            action: 'toggle-mode',
+            label: isMarkerMode ? 'Switch to signal attribution' : 'Switch to AI start/stop marker attribution',
+            description: `Currently: ${isMarkerMode ? 'markers' : 'signals'}`,
+            detail: isMarkerMode
+                ? 'Attribute from observed editor and chat activity instead of source comments.'
+                : 'Attribute only lines inside AI start/stop comments. Markers are stripped when you commit.'
+        },
+        {
+            action: 'toggle-large-file',
+            label: `${config.attribution.largeFileIsAI ? 'Disable' : 'Enable'} large-insertion attribution`,
+            description: `Currently: ${config.attribution.largeFileIsAI ? 'on' : 'off'}`,
+            detail: 'When disabled, a large paste or bulk insert is no longer counted toward AI.'
+        },
+        {
+            action: 'toggle-new-file',
+            label: `${config.attribution.newFileIsAI ? 'Disable' : 'Enable'} new-file attribution`,
+            description: `Currently: ${config.attribution.newFileIsAI ? 'on' : 'off'}`,
+            detail: 'When disabled, filling a brand-new file is no longer counted toward AI.'
+        },
+        {
+            action: 'edit-exclusions',
+            label: 'Edit excluded paths…',
+            description: config.attribution.excludePaths.length === 0
+                ? 'None configured'
+                : config.attribution.excludePaths.join(', '),
+            detail: `Opens ${path.basename(getRepoProbeConfigFilePath(repoRoot))} so you can edit excludePaths directly.`
+        }
+    ];
+
+    const selection = await vscode.window.showQuickPick(items, {
+        title: `AILoc2 Probe: Attribution Settings — ${path.basename(repoRoot)}`,
+        placeHolder: `Mode: ${isMarkerMode ? 'markers' : 'signals'}; changes are saved for this machine only.`,
+        ignoreFocusOut: true,
+        matchOnDetail: true
+    });
+    if (!selection) {
+        return;
+    }
+
+    if (selection.action === 'edit-exclusions') {
+        const configFilePath = getRepoProbeConfigFilePath(repoRoot);
+        if (!(await pathExists(configFilePath))) {
+            await fs.promises.writeFile(
+                configFilePath,
+                `${JSON.stringify(createDefaultProbeConfig(), null, 2)}\n`,
+                'utf8'
+            );
+            invalidateProbeConfigCache(repoRoot);
+        }
+
+        await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(configFilePath));
+        return;
+    }
+
+    const attributionUpdate = selection.action === 'toggle-mode'
+        ? { mode: (isMarkerMode ? 'signals' : 'markers') as AttributionMode }
+        : selection.action === 'toggle-large-file'
+        ? { largeFileIsAI: !config.attribution.largeFileIsAI }
+        : { newFileIsAI: !config.attribution.newFileIsAI };
+
+    try {
+        const overridePath = await writeLocalProbeConfigOverride(repoRoot, attributionUpdate);
+        const updatedConfig = await readProbeConfig(repoRoot);
+        hooks.logEvent('COMMAND_CONFIGURE_ATTRIBUTION', {
+            repoRoot,
+            overridePath,
+            attribution: updatedConfig.attribution
+        });
+
+        await hooks.refreshRepoSummary(repoRoot, 'command:configure-attribution');
+        void vscode.window.showInformationMessage(
+            `AILoc2 attribution updated for ${path.basename(repoRoot)}: mode ${updatedConfig.attribution.mode}, large insertions ${updatedConfig.attribution.largeFileIsAI ? 'counted' : 'not counted'}, new files ${updatedConfig.attribution.newFileIsAI ? 'counted' : 'not counted'}.`
+        );
+    }
+    catch (error) {
+        hooks.logEvent('COMMAND_CONFIGURE_ATTRIBUTION_FAILED', {
+            repoRoot,
+            error: toErrorMessage(error)
+        });
+        void vscode.window.showErrorMessage(
+            `AILoc2 failed to update attribution settings for ${path.basename(repoRoot)}: ${toErrorMessage(error)}`
+        );
+    }
 }
 
 async function promptForRepoRootForCommand(args: {

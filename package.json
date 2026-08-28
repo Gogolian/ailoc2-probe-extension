@@ -2,7 +2,7 @@
   "name": "ailoc2-probe-extension",
   "displayName": "AILoc2 Probe",
   "description": "Local-first AI attribution for real Git commits. Estimates how much of your staged change was AI-assisted and annotates the commit message automatically via Git hooks.",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "publisher": "Gogolian",
   "license": "MIT",
   "repository": {
@@ -59,6 +59,10 @@
       {
         "command": "ailoc2Probe.recomputeRepoSummary",
         "title": "AILoc2 Probe: Recompute Repo Summary"
+      },
+      {
+        "command": "ailoc2Probe.configureAttribution",
+        "title": "AILoc2 Probe: Attribution Settings"
       },
       {
         "command": "ailoc2Probe.installHooks",

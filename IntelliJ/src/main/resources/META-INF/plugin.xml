@@ -21,6 +21,14 @@
             description="Recompute and show the AILoc2 summary for the current repository">
       <add-to-group group-id="ToolsMenu" anchor="last" />
     </action>
+    <action id="Ailoc2.ConfigureAttribution"
+            class="com.ailoc2.intellij.Ailoc2ConfigureAttributionAction"
+            text="AILoc2 Probe: Attribution Settings"
+            description="Switch between signal and AI start/stop marker attribution and toggle large-insertion attribution">
+      <synonym text="AILoc2 Attribution Mode" />
+      <synonym text="AILoc2 Marker Attribution" />
+      <add-to-group group-id="ToolsMenu" anchor="last" />
+    </action>
     <action id="Ailoc2.InstallHooks"
             class="com.ailoc2.intellij.Ailoc2InstallHooksAction"
             text="AILoc2 Probe: Install Repo Hooks"

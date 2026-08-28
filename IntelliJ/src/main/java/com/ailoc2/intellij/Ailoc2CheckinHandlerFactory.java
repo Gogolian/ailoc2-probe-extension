@@ -23,7 +23,10 @@ public final class Ailoc2CheckinHandlerFactory extends CheckinHandlerFactory {
                     return ReturnResult.COMMIT;
                 }
 
+                // Keeps the shell hook's sidecar in step with a hand-edited config.
+                service.refreshResolvedConfigSidecar(repoRoot);
                 Ailoc2GitSummary stagedSummary = service.refreshStagedSummary(repoRoot);
+                service.stripStagedMarkersIfEnabled(repoRoot);
                 service.prepareCommitAudit(repoRoot);
                 annotate(panel, stagedSummary);
                 return ReturnResult.COMMIT;

@@ -6,6 +6,8 @@ import {
     installClaudeCodeHooks,
     uninstallClaudeCodeHooks
 } from '../integrations/claudeCode/runtime';
+import { createDefaultProbeConfig, invalidateProbeConfigCache } from '../metrics/probeConfig';
+import { getRepoProbeConfigFilePath } from '../metrics/pathing';
 import { runGitCommand, tryRunGitCommand } from '../util/gitCommand';
 import { makeFilesExecutable, pathExists } from '../util/fsUtils';
 
@@ -59,6 +61,7 @@ export type RepoHookInstallResult = {
     migrationPackageFiles: string[];
     claudeCodeHooks: ClaudeCodeHooksInstallResult | null;
     gitignoreUpdated: boolean;
+    probeConfigCreated: boolean;
 };
 
 export type RepoHookUninstallResult = {
@@ -108,7 +111,8 @@ export async function installRepoHooks(args: {
             migrationPackagePath: null,
             migrationPackageFiles: [],
             claudeCodeHooks: null,
-            gitignoreUpdated: false
+            gitignoreUpdated: false,
+            probeConfigCreated: false
         };
     }
 
@@ -128,7 +132,8 @@ export async function installRepoHooks(args: {
             migrationPackagePath: null,
             migrationPackageFiles: [],
             claudeCodeHooks: null,
-            gitignoreUpdated: false
+            gitignoreUpdated: false,
+            probeConfigCreated: false
         };
     }
 
@@ -153,13 +158,15 @@ export async function installRepoHooks(args: {
                 migrationPackagePath,
                 migrationPackageFiles: wrapResult.manualMergeHookFiles,
                 claudeCodeHooks: null,
-                gitignoreUpdated: false
+                gitignoreUpdated: false,
+                probeConfigCreated: false
             };
         }
         wrappedHookFiles = wrapResult.wrappedHookFiles;
     }
 
     const gitignoreUpdated = await ensureManagedPathsIgnored(repoRoot);
+    const probeConfigCreated = await ensureProbeConfigFile(repoRoot);
     try {
         await ensureManagedRepoHookAssetsInstalled(repoRoot, delegatedHooksPath, wrappedHookFiles);
     }
@@ -188,7 +195,8 @@ export async function installRepoHooks(args: {
             migrationPackagePath: null,
             migrationPackageFiles: [],
             claudeCodeHooks,
-            gitignoreUpdated
+            gitignoreUpdated,
+            probeConfigCreated
         };
     }
 
@@ -224,7 +232,8 @@ export async function installRepoHooks(args: {
         migrationPackagePath: null,
         migrationPackageFiles: [],
         claudeCodeHooks,
-        gitignoreUpdated
+        gitignoreUpdated,
+        probeConfigCreated
     };
 }
 
@@ -633,6 +642,25 @@ async function ensureManagedPathsIgnored(repoRoot: string): Promise<boolean> {
         `${existingContents}${separator}${missingPatterns.join('\n')}\n`,
         'utf8'
     );
+    return true;
+}
+
+/**
+ * Committed on purpose so attribution policy travels with the repo; never overwrites
+ * an existing file because it is meant to be hand-edited after install.
+ */
+async function ensureProbeConfigFile(repoRoot: string): Promise<boolean> {
+    const configFilePath = getRepoProbeConfigFilePath(repoRoot);
+    if (await pathExists(configFilePath)) {
+        return false;
+    }
+
+    await fs.promises.writeFile(
+        configFilePath,
+        `${JSON.stringify(createDefaultProbeConfig(), null, 2)}\n`,
+        'utf8'
+    );
+    invalidateProbeConfigCache(repoRoot);
     return true;
 }
 
