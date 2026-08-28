@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.25] - 2026-08-28
+
+- Add `attribution.mode: "human-markers"`, which treats every added line as AI unless it sits inside a `Human start` / `Human stop` block. It needs no cooperation from the AI tool, only that the human tags their own edits, and it errs toward over-reporting AI rather than under-reporting it.
+- Recognize the `Human start` / `Human stop` family with the same case-insensitive, comment-syntax-agnostic matching as the AI family, and strip only the active mode's markers at commit time.
+- Exclude the committed `.ailoc2-probe.json` and all `.ailoc2-metrics/` artifacts from attribution in every mode, including the generated IntelliJ shell hook, so the commit that adds the config no longer scores itself.
+- Offer all three modes in the VS Code and IntelliJ attribution settings actions.
+
 ## [1.0.24] - 2026-08-28
 
 - Add a repo-local attribution config: committed `.ailoc2-probe.json` for team policy plus an optional machine-local `.ailoc2-metrics/config.json` override, created when repo hooks are installed and never overwritten on reinstall.

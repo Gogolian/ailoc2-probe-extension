@@ -69,6 +69,38 @@ class Ailoc2ProbeConfigTest {
     }
 
     @Test
+    void humanMarkersModeMapsToHumanPolarity(@TempDir Path repoRoot) throws IOException {
+        writeRepoLayer(repoRoot, """
+            { "attribution": { "mode": "human-markers" } }
+            """);
+
+        Ailoc2ProbeConfig config = Ailoc2ProbeConfig.read(repoRoot);
+
+        assertEquals(Ailoc2ProbeConfig.MODE_HUMAN_MARKERS, config.mode());
+        assertTrue(config.isMarkerMode());
+        assertEquals(Ailoc2MarkerAttribution.Polarity.HUMAN, config.markerPolarity());
+    }
+
+    @Test
+    void aiMarkersModeMapsToAiPolarity(@TempDir Path repoRoot) throws IOException {
+        writeRepoLayer(repoRoot, """
+            { "attribution": { "mode": "markers" } }
+            """);
+
+        Ailoc2ProbeConfig config = Ailoc2ProbeConfig.read(repoRoot);
+
+        assertTrue(config.isMarkerMode());
+        assertEquals(Ailoc2MarkerAttribution.Polarity.AI, config.markerPolarity());
+    }
+
+    @Test
+    void signalsModeIsNotAMarkerMode(@TempDir Path repoRoot) {
+        Ailoc2ProbeConfig.invalidate(repoRoot);
+
+        assertFalse(Ailoc2ProbeConfig.read(repoRoot).isMarkerMode());
+    }
+
+    @Test
     void unknownModeIsRejected(@TempDir Path repoRoot) throws IOException {
         writeRepoLayer(repoRoot, """
             { "attribution": { "mode": "wat", "largeFileIsAI": "yes" } }

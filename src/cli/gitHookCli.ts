@@ -12,7 +12,7 @@ import {
     prepareRepoPreCommit,
     refreshRepoHookSummary
 } from '../metrics/summary';
-import { readProbeConfig } from '../metrics/probeConfig';
+import { isMarkerAttributionMode, readProbeConfig } from '../metrics/probeConfig';
 import { resolveRepoRootArgument, runCli } from './cliRuntime';
 import { toErrorMessage } from '../util/errors';
 
@@ -77,9 +77,9 @@ async function runAnnotateCommitMessage(
     const messageFilePath = path.resolve(process.cwd(), messageFilePathArgument);
 
     try {
-        // In markers mode the pre-commit step already counted and then stripped the markers,
-        // so recomputing here would score marker-free content and report 0%.
-        if ((await readProbeConfig(repoRoot)).attribution.mode !== 'markers') {
+        // In marker modes the pre-commit step already counted and then stripped the markers,
+        // so recomputing here would score marker-free content and misreport the split.
+        if (!isMarkerAttributionMode((await readProbeConfig(repoRoot)).attribution.mode)) {
             await prepareRepoPreCommit({ repoRoot });
         }
 

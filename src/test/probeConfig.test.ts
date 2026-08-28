@@ -6,7 +6,9 @@ import { test } from 'node:test';
 
 import {
     createDefaultProbeConfig,
+    getMarkerPolarityForMode,
     invalidateProbeConfigCache,
+    isMarkerAttributionMode,
     readProbeConfig,
     readProbeConfigSync,
     writeLocalProbeConfigOverride
@@ -109,6 +111,26 @@ test('malformed JSON degrades to defaults instead of throwing into a git hook', 
 
     assert.equal(config.attribution.mode, 'signals');
     assert.equal(config.attribution.largeFileIsAI, true);
+});
+
+test('human-markers is accepted and maps to human polarity', async () => {
+    const repoRoot = createTempRepo();
+    writeRepoLayer(repoRoot, { attribution: { mode: 'human-markers' } });
+
+    const config = await readProbeConfig(repoRoot);
+
+    assert.equal(config.attribution.mode, 'human-markers');
+    assert.equal(isMarkerAttributionMode(config.attribution.mode), true);
+    assert.equal(getMarkerPolarityForMode(config.attribution.mode), 'human');
+});
+
+test('marker mode helpers classify all three modes', () => {
+    assert.equal(isMarkerAttributionMode('signals'), false);
+    assert.equal(isMarkerAttributionMode('markers'), true);
+    assert.equal(isMarkerAttributionMode('human-markers'), true);
+    assert.equal(getMarkerPolarityForMode('signals'), 'ai');
+    assert.equal(getMarkerPolarityForMode('markers'), 'ai');
+    assert.equal(getMarkerPolarityForMode('human-markers'), 'human');
 });
 
 test('unknown mode values fall back instead of being trusted', async () => {

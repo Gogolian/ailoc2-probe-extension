@@ -11,7 +11,7 @@ This folder contains an IntelliJ Platform plugin that mirrors the core AILoc2 be
 - adds the line-derived staged percentage to the commit subject as `(AI: 32%)` and matching counts to the body as `(AI-Lines: 8/25)`, or unavailable forms when Git summary generation fails;
 - clears metrics for files that were fully committed while preserving metrics for committed paths that still have unstaged work.
 
-The implementation is intentionally local-first. It does not call a hosted service, and by default it does not depend on LLM-generated markers in source files. Teams that still tag AI code by hand can opt into the legacy `AI start` / `AI stop` model by setting `attribution.mode` to `markers`; see [`../docs/configuration.md`](../docs/configuration.md) ([polski](../docs/konfiguracja.md)).
+The implementation is intentionally local-first. It does not call a hosted service, and by default it does not depend on LLM-generated markers in source files. Teams that prefer manual tagging can set `attribution.mode` to `markers` (tag AI code) or `human-markers` (tag only your own code; everything else counts as AI); see [`../docs/configuration.md`](../docs/configuration.md) ([polski](../docs/konfiguracja.md)).
 
 ## Build and run
 
@@ -59,7 +59,7 @@ The plugin adds two explicit Tools menu actions:
 
 The recompute action resolves the current project's Git root, refreshes `.ailoc2-metrics/summary.json`, and displays staged and unstaged percentages plus AI/Human added-line counts on demand.
 
-The attribution settings action switches between signal and marker attribution and toggles large-insertion and new-file attribution. It writes the machine-local `.ailoc2-metrics/config.json` so a quick toggle never modifies committed team policy, then regenerates the shell hook's config sidecar and refreshes the summary.
+The attribution settings action switches between the three attribution modes and toggles large-insertion and new-file attribution. It writes the machine-local `.ailoc2-metrics/config.json` so a quick toggle never modifies committed team policy, then regenerates the shell hook's config sidecar and refreshes the summary.
 
 If you want to exclude files or directories from IntelliJ metrics entirely, use `attribution.excludePaths` in `.ailoc2-probe.json` for team-wide rules, or add gitignore-style rules to `.ailoc2-metrics/.ignore` for machine-local ones. Excluded paths will not get IntelliJ rolling-state files and are skipped from the summary counts as well — including in the generated shell hook, which reads the flattened `.ailoc2-metrics/resolved-config.env`.
 

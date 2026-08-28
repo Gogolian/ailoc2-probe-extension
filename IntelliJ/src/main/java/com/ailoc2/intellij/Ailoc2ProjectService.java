@@ -113,8 +113,8 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     /**
-     * In marker mode the markers must not reach the commit. Runs after the summary is written so
-     * the recorded attribution always describes the content that is about to be committed.
+     * In either marker mode the markers must not reach the commit. Runs after the summary is
+     * written so the recorded attribution always describes the content about to be committed.
      */
     public void stripStagedMarkersIfEnabled(Path repoRoot) {
         Ailoc2ProbeConfig probeConfig = Ailoc2ProbeConfig.read(repoRoot);
@@ -131,8 +131,9 @@ public final class Ailoc2ProjectService implements Disposable {
         }
 
         List<String> markerPaths = new java.util.ArrayList<>();
-        for (String repoRelativePath : Ailoc2MarkerAttribution.collectMarkerPaths(diffText)) {
-            if (!probeConfig.isAttributionExcluded(repoRelativePath)
+        for (String repoRelativePath : Ailoc2MarkerAttribution.collectMarkerPaths(diffText, probeConfig.markerPolarity())) {
+            if (!isExcludedArtifactPath(repoRelativePath)
+                && !probeConfig.isAttributionExcluded(repoRelativePath)
                 && !storage.isTrackingIgnored(repoRoot, repoRelativePath)) {
                 markerPaths.add(repoRelativePath);
             }
@@ -141,8 +142,9 @@ public final class Ailoc2ProjectService implements Disposable {
             return;
         }
 
-        List<String> stripped = Ailoc2MarkerStripper.stripStagedMarkers(repoRoot, markerPaths);
-        LOG.info("AILoc2 stripped AI markers from " + stripped.size() + " staged file(s) in repo " + repoRoot);
+        List<String> stripped = Ailoc2MarkerStripper.stripStagedMarkers(repoRoot, markerPaths, probeConfig.markerPolarity());
+        LOG.info("AILoc2 stripped " + probeConfig.markerPolarity() + " markers from " + stripped.size()
+            + " staged file(s) in repo " + repoRoot);
     }
 
     public void prepareCommitAudit(Path repoRoot) {
@@ -402,8 +404,10 @@ public final class Ailoc2ProjectService implements Disposable {
             // Exclusive replacement: rolling state and Claude provenance are ignored entirely.
             return Ailoc2MarkerAttribution.summarize(
                 diffText,
-                repoRelativePath -> storage.isTrackingIgnored(repoRoot, repoRelativePath)
-                    || probeConfig.isAttributionExcluded(repoRelativePath)
+                repoRelativePath -> isExcludedArtifactPath(repoRelativePath)
+                    || storage.isTrackingIgnored(repoRoot, repoRelativePath)
+                    || probeConfig.isAttributionExcluded(repoRelativePath),
+                probeConfig.markerPolarity()
             );
         }
 
@@ -495,13 +499,21 @@ public final class Ailoc2ProjectService implements Disposable {
         if (!filePath.startsWith(repoRoot)) {
             return true;
         }
-        String repoRelativePath = repoRoot.relativize(filePath).toString().replace('\\', '/');
+        return isExcludedArtifactPath(repoRoot.relativize(filePath).toString().replace('\\', '/'));
+    }
+
+    /**
+     * Metrics artifacts and the committed config file must never be attributed, or a commit that
+     * adds them would score itself.
+     */
+    static boolean isExcludedArtifactPath(String repoRelativePath) {
         return repoRelativePath.startsWith(".git/")
             || repoRelativePath.startsWith(".ailoc2-metrics/")
             || repoRelativePath.startsWith(".idea/")
             || repoRelativePath.equals(".git")
             || repoRelativePath.equals(".ailoc2-metrics")
-            || repoRelativePath.equals(".idea");
+            || repoRelativePath.equals(".idea")
+            || repoRelativePath.equals(Ailoc2ProbeConfig.REPO_CONFIG_FILE_NAME);
     }
 
     private boolean hasRecentClaudeProvenance(Ailoc2FileState state) {

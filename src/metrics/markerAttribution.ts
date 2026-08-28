@@ -1,12 +1,24 @@
 /**
- * Legacy "AI start" / "AI stop" marker attribution, ported from the predecessor tool.
+ * Comment-marker attribution, ported from the predecessor tool.
  *
  * The markers are matched anywhere in a line and the comment syntax is deliberately
  * irrelevant, which is how a single pattern covered `//`, `#`, `/* *\/`, `<!-- -->` and `--`.
+ *
+ * Two polarities are supported. `markers` tags AI code and treats everything else as human.
+ * `human-markers` inverts that: unmarked lines are AI and only tagged blocks are human, which
+ * suits workflows where AI writes most of the code and the human annotates their own edits.
  */
 
 export const AI_MARKER_START_PATTERN = /ai[\s_\-]*start\b/i;
 export const AI_MARKER_STOP_PATTERN = /ai[\s_\-]*stop\b/i;
+export const HUMAN_MARKER_START_PATTERN = /human[\s_\-]*start\b/i;
+export const HUMAN_MARKER_STOP_PATTERN = /human[\s_\-]*stop\b/i;
+
+/**
+ * Which author a marker block attributes its contents to. Lines outside any block get the
+ * opposite bucket.
+ */
+export type MarkerPolarity = 'ai' | 'human';
 
 export type MarkerFileAttribution = {
     repoRelativePath: string;
@@ -20,20 +32,38 @@ export function isAiMarkerLine(text: string): boolean {
     return AI_MARKER_START_PATTERN.test(text) || AI_MARKER_STOP_PATTERN.test(text);
 }
 
+export function isHumanMarkerLine(text: string): boolean {
+    return HUMAN_MARKER_START_PATTERN.test(text) || HUMAN_MARKER_STOP_PATTERN.test(text);
+}
+
+export function isMarkerLineForPolarity(text: string, polarity: MarkerPolarity): boolean {
+    return polarity === 'human' ? isHumanMarkerLine(text) : isAiMarkerLine(text);
+}
+
 export function stripAiMarkerLines(lines: readonly string[]): string[] {
     return lines.filter((line) => !isAiMarkerLine(line));
 }
 
+function getMarkerPatterns(polarity: MarkerPolarity): { start: RegExp; stop: RegExp } {
+    return polarity === 'human'
+        ? { start: HUMAN_MARKER_START_PATTERN, stop: HUMAN_MARKER_STOP_PATTERN }
+        : { start: AI_MARKER_START_PATTERN, stop: AI_MARKER_STOP_PATTERN };
+}
+
 /**
- * Counts added lines per file from a unified diff, attributing lines inside an
- * `AI start`/`AI stop` block to AI and everything else to Human.
+ * Counts added lines per file from a unified diff. Lines inside a marker block are attributed
+ * to `polarity`; every other added line gets the opposite bucket.
  *
  * Deliberately diverges from the legacy Python implementation, which: never reset block
  * state between files (so an unclosed block bled into every later file), did not support
  * nesting, and counted blank lines despite documenting otherwise. Marker lines themselves
  * are excluded from both the numerator and the denominator.
  */
-export function parseMarkerDiffAttribution(diffText: string): MarkerFileAttribution[] {
+export function parseMarkerDiffAttribution(
+    diffText: string,
+    polarity: MarkerPolarity = 'ai'
+): MarkerFileAttribution[] {
+    const { start: startPattern, stop: stopPattern } = getMarkerPatterns(polarity);
     const attributionByPath = new Map<string, MarkerFileAttribution>();
     let currentPath: string | null = null;
     let blockDepth = 0;
@@ -61,12 +91,12 @@ export function parseMarkerDiffAttribution(diffText: string): MarkerFileAttribut
 
         const content = line.slice(1);
 
-        if (AI_MARKER_START_PATTERN.test(content)) {
+        if (startPattern.test(content)) {
             blockDepth += 1;
             continue;
         }
 
-        if (AI_MARKER_STOP_PATTERN.test(content)) {
+        if (stopPattern.test(content)) {
             blockDepth = Math.max(0, blockDepth - 1);
             continue;
         }
@@ -84,7 +114,9 @@ export function parseMarkerDiffAttribution(diffText: string): MarkerFileAttribut
             humanWeight: 0
         };
 
-        if (blockDepth > 0) {
+        const isInsideBlock = blockDepth > 0;
+        const isAiLine = polarity === 'ai' ? isInsideBlock : !isInsideBlock;
+        if (isAiLine) {
             attribution.aiAddedLineCount += 1;
             attribution.aiWeight += weight;
         }
@@ -100,9 +132,9 @@ export function parseMarkerDiffAttribution(diffText: string): MarkerFileAttribut
 }
 
 /**
- * Returns the repo-relative paths of files whose staged content still contains markers.
+ * Returns the repo-relative paths of files whose staged additions still contain markers.
  */
-export function collectMarkerDiffPaths(diffText: string): string[] {
+export function collectMarkerDiffPaths(diffText: string, polarity: MarkerPolarity = 'ai'): string[] {
     const paths = new Set<string>();
     let currentPath: string | null = null;
 
@@ -116,7 +148,7 @@ export function collectMarkerDiffPaths(diffText: string): string[] {
             continue;
         }
 
-        if (isAiMarkerLine(line.slice(1))) {
+        if (isMarkerLineForPolarity(line.slice(1), polarity)) {
             paths.add(currentPath);
         }
     }

@@ -34,6 +34,7 @@ import {
     refreshRepoHookSummary
 } from './metrics/summary';
 import {
+    ATTRIBUTION_MODES,
     AttributionMode,
     ResolvedProbeConfig,
     createDefaultProbeConfig,
@@ -2056,7 +2057,23 @@ function formatHookFileList(hookFileNames: readonly string[]): string {
 }
 
 type AttributionActionItem = vscode.QuickPickItem & {
-    action: 'toggle-mode' | 'toggle-large-file' | 'toggle-new-file' | 'edit-exclusions';
+    action: 'set-mode' | 'toggle-large-file' | 'toggle-new-file' | 'edit-exclusions';
+    mode?: AttributionMode;
+};
+
+const ATTRIBUTION_MODE_LABELS: Record<AttributionMode, { label: string; detail: string }> = {
+    'signals': {
+        label: 'Signal attribution',
+        detail: 'Attribute from observed editor, chat, and Claude Code activity. No tags needed.'
+    },
+    'markers': {
+        label: 'AI marker attribution',
+        detail: 'Only lines inside AI start/stop comments count as AI; everything else is human. Markers are stripped when you commit.'
+    },
+    'human-markers': {
+        label: 'Human marker attribution',
+        detail: 'Everything counts as AI except lines inside Human start/stop comments. Markers are stripped when you commit.'
+    }
 };
 
 /**
@@ -2070,16 +2087,15 @@ async function runConfigureAttributionCommand(
     }
 ): Promise<void> {
     const config = await readProbeConfig(repoRoot);
-    const isMarkerMode = config.attribution.mode === 'markers';
+    const currentMode = config.attribution.mode;
     const items: AttributionActionItem[] = [
-        {
-            action: 'toggle-mode',
-            label: isMarkerMode ? 'Switch to signal attribution' : 'Switch to AI start/stop marker attribution',
-            description: `Currently: ${isMarkerMode ? 'markers' : 'signals'}`,
-            detail: isMarkerMode
-                ? 'Attribute from observed editor and chat activity instead of source comments.'
-                : 'Attribute only lines inside AI start/stop comments. Markers are stripped when you commit.'
-        },
+        ...ATTRIBUTION_MODES.filter((mode) => mode !== currentMode).map((mode): AttributionActionItem => ({
+            action: 'set-mode',
+            mode,
+            label: `Switch to ${ATTRIBUTION_MODE_LABELS[mode].label.toLowerCase()}`,
+            description: `Currently: ${currentMode}`,
+            detail: ATTRIBUTION_MODE_LABELS[mode].detail
+        })),
         {
             action: 'toggle-large-file',
             label: `${config.attribution.largeFileIsAI ? 'Disable' : 'Enable'} large-insertion attribution`,
@@ -2104,7 +2120,7 @@ async function runConfigureAttributionCommand(
 
     const selection = await vscode.window.showQuickPick(items, {
         title: `AILoc2 Probe: Attribution Settings — ${path.basename(repoRoot)}`,
-        placeHolder: `Mode: ${isMarkerMode ? 'markers' : 'signals'}; changes are saved for this machine only.`,
+        placeHolder: `Mode: ${currentMode}; changes are saved for this machine only.`,
         ignoreFocusOut: true,
         matchOnDetail: true
     });
@@ -2127,8 +2143,8 @@ async function runConfigureAttributionCommand(
         return;
     }
 
-    const attributionUpdate = selection.action === 'toggle-mode'
-        ? { mode: (isMarkerMode ? 'signals' : 'markers') as AttributionMode }
+    const attributionUpdate = selection.action === 'set-mode' && selection.mode
+        ? { mode: selection.mode }
         : selection.action === 'toggle-large-file'
         ? { largeFileIsAI: !config.attribution.largeFileIsAI }
         : { newFileIsAI: !config.attribution.newFileIsAI };

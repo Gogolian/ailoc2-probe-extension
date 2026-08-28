@@ -2,11 +2,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { CompiledRule, compileRules, matchesCompiledRules } from './globRules';
+import { MarkerPolarity } from './markerAttribution';
 import { getLocalProbeConfigFilePath, getRepoProbeConfigFilePath } from './pathing';
 
 export const PROBE_CONFIG_VERSION = 1;
 
-export type AttributionMode = 'signals' | 'markers';
+export type AttributionMode = 'signals' | 'markers' | 'human-markers';
+
+export const ATTRIBUTION_MODES: readonly AttributionMode[] = ['signals', 'markers', 'human-markers'];
+
+export function isMarkerAttributionMode(mode: AttributionMode): boolean {
+    return mode === 'markers' || mode === 'human-markers';
+}
+
+export function getMarkerPolarityForMode(mode: AttributionMode): MarkerPolarity {
+    return mode === 'human-markers' ? 'human' : 'ai';
+}
 
 export type ProbeConfig = {
     version: number;
@@ -224,7 +235,7 @@ function readNumber(value: unknown): number | null {
 }
 
 function readAttributionMode(value: unknown): AttributionMode | null {
-    return value === 'signals' || value === 'markers' ? value : null;
+    return ATTRIBUTION_MODES.includes(value as AttributionMode) ? value as AttributionMode : null;
 }
 
 function readStringArray(value: unknown): string[] {

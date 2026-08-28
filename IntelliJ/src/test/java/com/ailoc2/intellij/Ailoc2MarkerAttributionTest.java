@@ -147,6 +147,91 @@ class Ailoc2MarkerAttributionTest {
     }
 
     @Test
+    void humanPolarityAttributesUnmarkedLinesToAi() {
+        Ailoc2GitSummary summary = Ailoc2MarkerAttribution.summarize(diff("src/app.ts",
+            "const generatedOne = 1;",
+            "// Human start",
+            "const handWrittenOne = 2;",
+            "const handWrittenTwo = 3;",
+            "// Human stop",
+            "const generatedTwo = 4;"
+        ), path -> false, Ailoc2MarkerAttribution.Polarity.HUMAN);
+
+        assertEquals(2L, summary.aiAddedLineCount, "lines outside a human block are AI");
+        assertEquals(2L, summary.humanAddedLineCount);
+        assertEquals(0L, summary.unknownAddedLineCount);
+    }
+
+    @Test
+    void humanPolarityTreatsUntaggedFileAsEntirelyAi() {
+        Ailoc2GitSummary summary = Ailoc2MarkerAttribution.summarize(
+            diff("src/untagged.ts", "const one = 1;", "const two = 2;", "const three = 3;"),
+            path -> false,
+            Ailoc2MarkerAttribution.Polarity.HUMAN);
+
+        assertEquals(3L, summary.aiAddedLineCount);
+        assertEquals(0L, summary.humanAddedLineCount);
+        assertEquals(100.0d, summary.aiPercentage, 0.000001d);
+    }
+
+    @Test
+    void markerFamiliesAreIndependent() {
+        String diffText = diff("src/mixed.ts", "// AI start", "const line = 1;", "// AI stop");
+
+        Ailoc2GitSummary human = Ailoc2MarkerAttribution.summarize(
+            diffText, path -> false, Ailoc2MarkerAttribution.Polarity.HUMAN);
+        Ailoc2GitSummary ai = Ailoc2MarkerAttribution.summarize(
+            diffText, path -> false, Ailoc2MarkerAttribution.Polarity.AI);
+
+        assertEquals(3L, human.aiAddedLineCount, "AI markers are ordinary lines under human polarity");
+        assertEquals(1L, ai.aiAddedLineCount, "and are consumed as markers under AI polarity");
+    }
+
+    @Test
+    void humanPolarityResetsBlockStatePerFile() {
+        String diffText = diff("src/leaky.ts", "// Human start", "const handWritten = 1;")
+            + diff("src/next.ts", "const generated = 2;");
+
+        Ailoc2GitSummary summary = Ailoc2MarkerAttribution.summarize(
+            diffText, path -> false, Ailoc2MarkerAttribution.Polarity.HUMAN);
+
+        assertEquals(1L, summary.humanAddedLineCount);
+        assertEquals(1L, summary.aiAddedLineCount, "an unclosed human block must not bleed forward");
+    }
+
+    @Test
+    void humanMarkerSyntaxMatchesTheAiFamilyConventions() {
+        String[] markers = {
+            "// Human start", "# human start", "/* HUMAN START */", "<!-- human_start -->",
+            "-- Human-Start", "// human stop", "# HUMAN_STOP"
+        };
+
+        for (String marker : markers) {
+            assertTrue(
+                Ailoc2MarkerAttribution.isMarkerLine(marker, Ailoc2MarkerAttribution.Polarity.HUMAN),
+                "expected to recognize " + marker);
+        }
+
+        assertFalse(Ailoc2MarkerAttribution.isMarkerLine(
+            "const humanStartupTime = 1;", Ailoc2MarkerAttribution.Polarity.HUMAN), "requires a word boundary");
+        assertFalse(Ailoc2MarkerAttribution.isMarkerLine(
+            "// AI start", Ailoc2MarkerAttribution.Polarity.HUMAN), "AI markers are a separate family");
+    }
+
+    @Test
+    void collectMarkerPathsHonorsPolarity() {
+        String diffText = diff("src/human.ts", "// Human start", "const one = 1;", "// Human stop")
+            + diff("src/ai.ts", "// AI start", "const two = 2;", "// AI stop");
+
+        assertEquals(
+            java.util.List.of("src/human.ts"),
+            Ailoc2MarkerAttribution.collectMarkerPaths(diffText, Ailoc2MarkerAttribution.Polarity.HUMAN));
+        assertEquals(
+            java.util.List.of("src/ai.ts"),
+            Ailoc2MarkerAttribution.collectMarkerPaths(diffText, Ailoc2MarkerAttribution.Polarity.AI));
+    }
+
+    @Test
     void deletedFilesAreSkipped() {
         String diffText = """
             diff --git a/src/gone.ts b/src/gone.ts

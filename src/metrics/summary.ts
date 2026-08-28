@@ -22,7 +22,12 @@ import {
 } from './pathing';
 import { getIndexGitBlobOid, getIndexGitBlobOids, getWorkingTreeGitBlobOids } from './git';
 import { isRepoRelativePathTrackingIgnored } from './ignore';
-import { ResolvedProbeConfig, readProbeConfig } from './probeConfig';
+import {
+    ResolvedProbeConfig,
+    getMarkerPolarityForMode,
+    isMarkerAttributionMode,
+    readProbeConfig
+} from './probeConfig';
 import { collectMarkerDiffPaths, parseMarkerDiffAttribution } from './markerAttribution';
 import { MarkerStripResult, stripMarkersFromStagedFiles } from './markerStripping';
 import { getTrackingExclusionReasonForPath } from '../trackingExclusions';
@@ -147,17 +152,19 @@ async function stripMarkersForPreCommit(
     diffInputs: RepoDiffInputs
 ): Promise<MarkerStripResult | null> {
     const probeConfig = await readProbeConfig(repoRoot);
-    if (probeConfig.attribution.mode !== 'markers' || !diffInputs.stagedDiffText) {
+    if (!isMarkerAttributionMode(probeConfig.attribution.mode) || !diffInputs.stagedDiffText) {
         return null;
     }
 
-    const markerPaths = collectMarkerDiffPaths(diffInputs.stagedDiffText)
-        .filter((repoRelativePath) => !probeConfig.isAttributionExcluded(repoRelativePath));
+    const polarity = getMarkerPolarityForMode(probeConfig.attribution.mode);
+    const markerPaths = collectMarkerDiffPaths(diffInputs.stagedDiffText, polarity)
+        .filter((repoRelativePath) => getTrackingExclusionReasonForPath(repoRelativePath) === null
+            && !probeConfig.isAttributionExcluded(repoRelativePath));
     if (markerPaths.length === 0) {
         return null;
     }
 
-    return stripMarkersFromStagedFiles({ repoRoot, repoRelativePaths: markerPaths });
+    return stripMarkersFromStagedFiles({ repoRoot, repoRelativePaths: markerPaths, polarity });
 }
 
 export async function computeRepoUncommittedAttributionSummary(args: {
@@ -208,7 +215,7 @@ async function computeRepoUncommittedAttributionSummaryFromInputs(
     }
 
     const probeConfig = await readProbeConfig(repoRoot);
-    if (probeConfig.attribution.mode === 'markers') {
+    if (isMarkerAttributionMode(probeConfig.attribution.mode)) {
         return {
             repoRoot,
             repoName: path.basename(repoRoot),
@@ -420,8 +427,9 @@ function summarizeMarkerDiffSlice(
         return summary;
     }
 
-    const fileAttributions = parseMarkerDiffAttribution(diffText)
-        .filter((attribution) => !probeConfig.isAttributionExcluded(attribution.repoRelativePath));
+    const fileAttributions = parseMarkerDiffAttribution(diffText, getMarkerPolarityForMode(probeConfig.attribution.mode))
+        .filter((attribution) => getTrackingExclusionReasonForPath(attribution.repoRelativePath) === null
+            && !probeConfig.isAttributionExcluded(attribution.repoRelativePath));
 
     for (const attribution of fileAttributions) {
         summary.changedFileCount += 1;

@@ -565,6 +565,82 @@ test('markers mode ignores rolling state that signals mode would have trusted', 
     assert.equal(refreshed.summary.staged.usedFallbackAttribution, false);
 });
 
+test('human-markers mode reports untagged additions as AI and tagged blocks as human', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-human-markers-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ail*c2@example.com']);
+
+    const gitRelativePath = 'src/example.ts';
+    const absoluteFilePath = path.join(repoRoot, path.normalize(gitRelativePath));
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const base = 0;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(getRepoProbeConfigFilePath(repoRoot), JSON.stringify({
+        attribution: { mode: 'human-markers' }
+    }), 'utf8');
+    invalidateProbeConfigCache(repoRoot);
+
+    fs.writeFileSync(absoluteFilePath, [
+        'const base = 0;',
+        'const generatedOne = 1;',
+        'const generatedTwo = 2;',
+        'const generatedThree = 3;',
+        '// Human start',
+        'const handWritten = 4;',
+        '// Human stop',
+        ''
+    ].join('\n'), 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.deepEqual({
+        aiAddedLineCount: refreshed.summary.staged.aiAddedLineCount,
+        humanAddedLineCount: refreshed.summary.staged.humanAddedLineCount,
+        unknownAddedLineCount: refreshed.summary.staged.unknownAddedLineCount
+    }, {
+        aiAddedLineCount: 3,
+        humanAddedLineCount: 1,
+        unknownAddedLineCount: 0
+    });
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 75) < FLOATING_POINT_TOLERANCE);
+});
+
+test('human-markers mode reports a fully untagged change as entirely AI', async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-human-markers-untagged-'));
+    tempDirectories.push(repoRoot);
+
+    runGit(repoRoot, ['init']);
+    runGit(repoRoot, ['config', 'user.name', 'AILoc2 Test']);
+    runGit(repoRoot, ['config', 'user.email', 'ail*c2@example.com']);
+
+    const gitRelativePath = 'src/example.ts';
+    const absoluteFilePath = path.join(repoRoot, path.normalize(gitRelativePath));
+    fs.mkdirSync(path.dirname(absoluteFilePath), { recursive: true });
+    fs.writeFileSync(absoluteFilePath, 'const base = 0;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+    runGit(repoRoot, ['commit', '-m', 'initial']);
+
+    fs.writeFileSync(getRepoProbeConfigFilePath(repoRoot), JSON.stringify({
+        attribution: { mode: 'human-markers' }
+    }), 'utf8');
+    invalidateProbeConfigCache(repoRoot);
+
+    fs.writeFileSync(absoluteFilePath, 'const base = 0;\nconst added = 1;\n', 'utf8');
+    runGit(repoRoot, ['add', gitRelativePath]);
+
+    const refreshed = await refreshRepoHookSummary({ repoRoot });
+
+    assert.equal(refreshed.summary.staged.aiAddedLineCount, 1);
+    assert.equal(refreshed.summary.staged.humanAddedLineCount, 0);
+    assert.ok(Math.abs(refreshed.summary.staged.aiPercentage - 100) < FLOATING_POINT_TOLERANCE);
+});
+
 test('refreshRepoHookSummary ignores whitespace-only staged changes', async () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-whitespace-only-'));
     tempDirectories.push(repoRoot);

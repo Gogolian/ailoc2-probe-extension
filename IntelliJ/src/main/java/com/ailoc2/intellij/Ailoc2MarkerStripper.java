@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Removes {@code AI start} / {@code AI stop} lines from the index and, when it is safe, the
+ * Removes marker lines from the index and, when it is safe, the
  * working tree — the legacy behavior where markers never reach a commit.
  *
  * <p>Mirrors {@code src/metrics/markerStripping.ts}. Deliberately diverges from the legacy
@@ -30,16 +30,28 @@ final class Ailoc2MarkerStripper {
      * @return the repo-relative paths whose staged content was rewritten
      */
     static List<String> stripStagedMarkers(Path repoRoot, List<String> repoRelativePaths) {
+        return stripStagedMarkers(repoRoot, repoRelativePaths, Ailoc2MarkerAttribution.Polarity.AI);
+    }
+
+    static List<String> stripStagedMarkers(
+        Path repoRoot,
+        List<String> repoRelativePaths,
+        Ailoc2MarkerAttribution.Polarity polarity
+    ) {
         List<String> stripped = new ArrayList<>();
         for (String repoRelativePath : repoRelativePaths) {
-            if (stripStagedFile(repoRoot, repoRelativePath)) {
+            if (stripStagedFile(repoRoot, repoRelativePath, polarity)) {
                 stripped.add(repoRelativePath);
             }
         }
         return stripped;
     }
 
-    private static boolean stripStagedFile(Path repoRoot, String repoRelativePath) {
+    private static boolean stripStagedFile(
+        Path repoRoot,
+        String repoRelativePath,
+        Ailoc2MarkerAttribution.Polarity polarity
+    ) {
         String gitPath = repoRelativePath.replace('\\', '/');
         String mode = readIndexMode(repoRoot, gitPath);
         if (mode == null || !REGULAR_FILE_MODES.contains(mode)) {
@@ -51,7 +63,7 @@ final class Ailoc2MarkerStripper {
             return false;
         }
 
-        byte[] cleaned = stripMarkerLinesPreservingBytes(stagedContent);
+        byte[] cleaned = stripMarkerLinesPreservingBytes(stagedContent, polarity);
         if (Arrays.equals(cleaned, stagedContent)) {
             return false;
         }
@@ -90,6 +102,10 @@ final class Ailoc2MarkerStripper {
      * round-trip unchanged.
      */
     static byte[] stripMarkerLinesPreservingBytes(byte[] content) {
+        return stripMarkerLinesPreservingBytes(content, Ailoc2MarkerAttribution.Polarity.AI);
+    }
+
+    static byte[] stripMarkerLinesPreservingBytes(byte[] content, Ailoc2MarkerAttribution.Polarity polarity) {
         ByteArrayOutputStream kept = new ByteArrayOutputStream(content.length);
         int lineStart = 0;
         for (int index = 0; index < content.length; index++) {
@@ -98,20 +114,26 @@ final class Ailoc2MarkerStripper {
             }
 
             int lineEnd = index + 1;
-            appendUnlessMarker(kept, content, lineStart, lineEnd);
+            appendUnlessMarker(kept, content, lineStart, lineEnd, polarity);
             lineStart = lineEnd;
         }
 
         if (lineStart < content.length) {
-            appendUnlessMarker(kept, content, lineStart, content.length);
+            appendUnlessMarker(kept, content, lineStart, content.length, polarity);
         }
 
         return kept.toByteArray();
     }
 
-    private static void appendUnlessMarker(ByteArrayOutputStream target, byte[] content, int start, int end) {
+    private static void appendUnlessMarker(
+        ByteArrayOutputStream target,
+        byte[] content,
+        int start,
+        int end,
+        Ailoc2MarkerAttribution.Polarity polarity
+    ) {
         String line = new String(content, start, end - start, StandardCharsets.UTF_8);
-        if (Ailoc2MarkerAttribution.isMarkerLine(line)) {
+        if (Ailoc2MarkerAttribution.isMarkerLine(line, polarity)) {
             return;
         }
         target.write(content, start, end - start);

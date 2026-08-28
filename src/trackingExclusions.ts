@@ -6,7 +6,9 @@ export const TRACKING_EXCLUDED_DIRECTORY_NAMES = new Set([
 ]);
 
 export const TRACKING_EXCLUDED_FILE_NAMES = new Set([
-    '.gitignore'
+    '.gitignore',
+    // Committed by design, so it would otherwise attribute itself on the commit that adds it.
+    '.ailoc2-probe.json'
 ]);
 
 export function getTrackingExclusionReasonForPath(candidatePath: string | null | undefined): string | null {

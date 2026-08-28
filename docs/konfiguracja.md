@@ -51,7 +51,7 @@ Każde ustawienie poza `excludePaths` łączy się **per klucz**: jeśli plik lo
 | Klucz | Typ | Domyślnie | Znaczenie |
 | --- | --- | --- | --- |
 | `version` | number | `1` | Wersja schematu konfiguracji. |
-| `attribution.mode` | `"signals"` \| `"markers"` | `"signals"` | Sposób ustalania atrybucji. Zobacz [Tryby atrybucji](#tryby-atrybucji). |
+| `attribution.mode` | `"signals"` \| `"markers"` \| `"human-markers"` | `"signals"` | Sposób ustalania atrybucji. Zobacz [Tryby atrybucji](#tryby-atrybucji). |
 | `attribution.largeFileIsAI` | boolean | `true` | Czy duża wstawka jest liczona jako AI. |
 | `attribution.newFileIsAI` | boolean | `true` | Czy wypełnienie zupełnie nowego pliku jest liczone jako AI. |
 | `attribution.excludePaths` | string[] | `[]` | Wzorce w stylu `.gitignore` wykluczone z atrybucji. |
@@ -84,26 +84,55 @@ const alsoHandWritten = 4;
 
 Powyższy przykład raportuje 2 linie AI i 2 linie Human.
 
+### `human-markers`
+
+Ten sam mechanizm z odwróconą polaryzacją. Wszystko jest AI, **chyba że** oznaczysz to jako swoje:
+
+- dodana linia wewnątrz bloku `Human start` / `Human stop` → **Human**
+- każda inna dodana linia → **AI**
+
+```ts
+const generatedOne = 1;
+const generatedTwo = 2;
+// Human start
+const handWritten = 3;
+// Human stop
+const generatedThree = 4;
+```
+
+Powyższy przykład raportuje 3 linie AI i 1 linię Human. Plik bez żadnych znaczników jest raportowany jako 100% AI.
+
+Ten tryb odpowiada odwrotnemu przepływowi pracy: jeśli AI pisze większość Twojego kodu, a Ty ingerujesz ręcznie tylko sporadycznie, oznaczanie wyjątków jest znacznie mniejszą pracą niż oznaczanie reguły — a błąd wypada w stronę *zawyżania* udziału AI, nie zaniżania, co jest bezpieczniejszym kierunkiem, jeśli masz obowiązek raportować użycie AI. Nie wymaga żadnej współpracy ze strony narzędzia AI; oznaczasz własne edycje.
+
+Kompromis polega na tym, że pominięcie znacznika po cichu odbiera Ci zasługę za własną pracę, podczas gdy w trybie `markers` pominięcie znacznika po cichu zaniża udział AI.
+
+Oba tryby znaczników są wyłącznymi zastąpieniami i oba usuwają swoje znaczniki przy commicie. Wszystko poniżej dotyczy obu; różni się tylko słowo kluczowe znacznika i znaczenie „wewnątrz bloku”.
+
 **Składnia znaczników.** Znacznik jest dopasowywany w dowolnym miejscu linii, a znak komentarza nie ma znaczenia, więc jedna reguła obsługuje każdy język:
 
 ```
 // AI start        # AI start        -- AI start
 /* AI start */     <!-- AI start -->
+
+// Human start     # human start     -- Human-Start
+/* HUMAN START */  <!-- human_stop -->
 ```
 
-Dopasowanie nie zwraca uwagi na wielkość liter i toleruje separatory, więc `AI stop`, `ai_stop`, `AI-STOP` i `Ai   Stop` są rozpoznawane. Wymagana jest granica słowa, więc identyfikator w rodzaju `aiStartupCost` nie zostanie pomylony ze znacznikiem.
+Dopasowanie nie zwraca uwagi na wielkość liter i toleruje separatory, więc `AI stop`, `ai_stop`, `AI-STOP` i `Ai   Stop` są rozpoznawane, podobnie jak `Human stop`, `human_stop` i `HUMAN-STOP`. Wymagana jest granica słowa, więc identyfikatory w rodzaju `aiStartupCost` czy `humanStartupTime` nie zostaną pomylone ze znacznikami.
+
+Obie rodziny są niezależne: w trybie `human-markers` komentarz `AI start` jest zwykłą linią kodu (i liczy się jako AI), i odwrotnie.
 
 **Zasady liczenia.**
 
 - Same linie znaczników są wyłączone zarówno z liczby AI, jak i z sumy.
-- Bloki się zagnieżdżają: wewnętrzny `AI stop` zamyka tylko blok wewnętrzny.
+- Bloki się zagnieżdżają: wewnętrzny znacznik zamykający zamyka tylko blok wewnętrzny.
 - Stan bloku zeruje się przy każdym pliku, więc niezamknięty blok nigdy nie „przecieka” do następnego pliku w diffie.
 - Linie puste i zawierające wyłącznie białe znaki nie są liczone.
 - Liczone są tylko linie dodane (`+`); usunięcia i linie kontekstu są pomijane.
 
 ### Znaczniki są usuwane przy commicie
 
-W trybie `markers` AILoc2 liczy zmiany z przechowalni (staged), a następnie **usuwa linie znaczników z indeksu i z katalogu roboczego**, więc znaczniki nigdy nie trafiają do commita. Odtwarza to zachowanie pierwotnego narzędzia, w którym znaczniki były tymczasową pomocą przy edycji.
+W obu trybach znaczników AILoc2 liczy zmiany z przechowalni (staged), a następnie **usuwa linie znaczników z indeksu i z katalogu roboczego**, więc znaczniki nigdy nie trafiają do commita. Odtwarza to zachowanie pierwotnego narzędzia, w którym znaczniki były tymczasową pomocą przy edycji. Usuwana jest tylko rodzina aktywnego trybu: `human-markers` usuwa `Human start` / `Human stop` i nie rusza komentarzy `AI start`.
 
 Wszystko pozostałe zostaje bajt w bajt identyczne. Mechanizm usuwania:
 
@@ -114,7 +143,11 @@ Wszystko pozostałe zostaje bajt w bajt identyczne. Mechanizm usuwania:
 
 Jeśli wolisz zachować znaczniki w kodzie źródłowym, pozostań w trybie `signals`.
 
+Zacommitowany `.ailoc2-probe.json` oraz cała zawartość `.ailoc2-metrics/` nigdy nie podlegają atrybucji w żadnym trybie, więc commit dodający Twoją konfigurację nie liczy sam siebie.
+
 ## Duże wstawki i nowe pliki
+
+Te dwa przełączniki działają wyłącznie w trybie `signals`. Oba tryby znaczników wyprowadzają wszystko ze znaczników, więc rozmiar zmiany nie ma tam znaczenia.
 
 Dwa osobne przełączniki, bo odpowiadają na różne pytania.
 
@@ -178,7 +211,7 @@ Oba przyjmują tę samą składnię wzorców i oba wyłączają plik z liczenia.
 
 Typowych przełączników nie musisz ustawiać, edytując JSON ręcznie.
 
-- **VS Code** — uruchom `AILoc2 Probe: Attribution Settings` z palety komend. Wybierz repozytorium, a potem przełącz tryb, `largeFileIsAI` lub `newFileIsAI`. Pozycja **Edit excluded paths…** otwiera bezpośrednio `.ailoc2-probe.json`.
+- **VS Code** — uruchom `AILoc2 Probe: Attribution Settings` z palety komend. Wybierz repozytorium, a potem wybierz jeden z dwóch pozostałych trybów albo przełącz `largeFileIsAI` lub `newFileIsAI`. Pozycja **Edit excluded paths…** otwiera bezpośrednio `.ailoc2-probe.json`.
 - **IntelliJ IDEA** — **Tools → AILoc2 Probe: Attribution Settings**.
 
 Oba zapisują do warstwy **lokalnej** (`.ailoc2-metrics/config.json`), więc szybkie przełączenie nigdy nie modyfikuje zacommitowanej polityki zespołu. Aby zmienić politykę zespołu, edytuj `.ailoc2-probe.json` samodzielnie. Oba odświeżają też natychmiast podsumowanie repozytorium, więc efekt jest widoczny od razu.
@@ -205,10 +238,13 @@ Oba IDE cache'ują konfigurację i czytają ją ponownie, gdy zmieni się znaczn
 Najprawdopodobniej AILoc2 miał dowód silniejszy niż rozmiar — zastosowanie zmiany z czatu albo edycję Claude Code — którego ta flaga nie tłumi. Zwróć też uwagę, że plik bez żadnego zapisanego stanu atrybucji nadal jest liczony jako AI przez mechanizm awaryjny dla nierozstrzygniętych linii; ten mechanizm jest niezależny od tego ustawienia. Jeśli chcesz całkowicie wyłączyć plik z liczenia, użyj `excludePaths`.
 
 **W trybie `markers` wszystko jest raportowane jako Human.**
-Tryb znaczników liczy tylko to, co znajduje się wewnątrz bloków `AI start` / `AI stop`, i tylko te znaczniki, które są częścią Twoich dodanych zmian **w przechowalni**. Sprawdź, czy blok jest dodany do przechowalni i czy linia znacznika przetrwała usuwanie przy poprzednim commicie.
+Ten tryb liczy tylko to, co znajduje się wewnątrz bloków `AI start` / `AI stop`, i tylko te znaczniki, które są częścią Twoich dodanych zmian **w przechowalni**. Sprawdź, czy blok jest dodany do przechowalni i czy linia znacznika przetrwała usuwanie przy poprzednim commicie. Jeśli wolisz, aby nieoznaczony kod domyślnie trafiał do AI, użyj `human-markers`.
+
+**W trybie `human-markers` wszystko jest raportowane jako AI.**
+To oczekiwane, gdy nic nie jest oznaczone — taka jest domyślna zasada tego trybu. Dodaj `Human start` / `Human stop` wokół własnych edycji. Sprawdź też słowo kluczowe: `AI start` nie ma w tym trybie żadnego efektu.
 
 **Moje znaczniki zniknęły.**
-W trybie `markers` jest to zamierzone — zobacz [Znaczniki są usuwane przy commicie](#znaczniki-są-usuwane-przy-commicie). Aby je zachować, przełącz się na tryb `signals`.
+W obu trybach znaczników jest to zamierzone — zobacz [Znaczniki są usuwane przy commicie](#znaczniki-są-usuwane-przy-commicie). Aby je zachować, przełącz się na tryb `signals`.
 
 **Commit raportuje `(AI: unavailable)`.**
 Zadziałał mechanizm awaryjny generowania podsumowania albo hooka. To nie jest stwierdzenie na temat użycia AI. Sprawdź kanał wyjściowy `AILoc2 Summary` lub log IDE, aby znaleźć źródłowe ostrzeżenie.

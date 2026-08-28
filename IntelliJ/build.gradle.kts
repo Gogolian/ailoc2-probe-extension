@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.ailoc2"
-version = "1.0.24"
+version = "1.0.25"
 
 val repositoryRoot = rootProject.layout.projectDirectory.dir("..")
 val claudeRuntime = repositoryRoot.file("out/claude-code/ailoc2-claude-code.cjs")

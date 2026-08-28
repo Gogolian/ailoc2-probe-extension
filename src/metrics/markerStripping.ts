@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { AI_MARKER_START_PATTERN, AI_MARKER_STOP_PATTERN } from './markerAttribution';
+import { MarkerPolarity, isMarkerLineForPolarity } from './markerAttribution';
 import {
     runGitCommandBuffer,
     runGitCommandWithInput,
@@ -24,19 +24,27 @@ export type MarkerStripResult = {
 };
 
 /**
- * Removes `AI start` / `AI stop` lines from the index and, when it is safe, the working
- * tree — the legacy behavior where markers never reach a commit.
+ * Removes marker lines from the index and, when it is safe, the working tree — the legacy
+ * behavior where markers never reach a commit. The polarity selects which marker family is
+ * removed, so `human-markers` mode strips `Human start` / `Human stop` instead.
  *
  * Runs after counting so the recorded attribution matches what was committed.
  */
 export async function stripMarkersFromStagedFiles(args: {
     repoRoot: string;
     repoRelativePaths: readonly string[];
+    polarity?: MarkerPolarity;
     dryRun?: boolean;
 }): Promise<MarkerStripResult> {
+    const polarity = args.polarity ?? 'ai';
     const outcomes: MarkerStripOutcome[] = [];
     for (const repoRelativePath of args.repoRelativePaths) {
-        outcomes.push(await stripMarkersFromStagedFile(args.repoRoot, repoRelativePath, args.dryRun === true));
+        outcomes.push(await stripMarkersFromStagedFile(
+            args.repoRoot,
+            repoRelativePath,
+            polarity,
+            args.dryRun === true
+        ));
     }
 
     return {
@@ -48,6 +56,7 @@ export async function stripMarkersFromStagedFiles(args: {
 async function stripMarkersFromStagedFile(
     repoRoot: string,
     repoRelativePath: string,
+    polarity: MarkerPolarity,
     dryRun: boolean
 ): Promise<MarkerStripOutcome> {
     const gitPath = toGitRepoPath(repoRelativePath);
@@ -74,7 +83,7 @@ async function stripMarkersFromStagedFile(
         return createOutcome(repoRelativePath, 'skipped-binary');
     }
 
-    const stripped = stripMarkerLinesPreservingBytes(stagedContent);
+    const stripped = stripMarkerLinesPreservingBytes(stagedContent, polarity);
     if (stripped.removedLineCount === 0) {
         return createOutcome(repoRelativePath, 'no-markers');
     }
@@ -130,7 +139,7 @@ async function stripMarkersFromStagedFile(
  * Splits on line boundaries while keeping each terminator attached, so CRLF files and
  * files without a trailing newline round-trip unchanged.
  */
-export function stripMarkerLinesPreservingBytes(content: Buffer): {
+export function stripMarkerLinesPreservingBytes(content: Buffer, polarity: MarkerPolarity = 'ai'): {
     content: Buffer;
     removedLineCount: number;
 } {
@@ -145,7 +154,7 @@ export function stripMarkerLinesPreservingBytes(content: Buffer): {
 
         const lineEnd = index + 1;
         const chunk = content.subarray(lineStart, lineEnd);
-        if (isMarkerChunk(chunk)) {
+        if (isMarkerChunk(chunk, polarity)) {
             removedLineCount += 1;
         }
         else {
@@ -157,7 +166,7 @@ export function stripMarkerLinesPreservingBytes(content: Buffer): {
 
     if (lineStart < content.length) {
         const chunk = content.subarray(lineStart);
-        if (isMarkerChunk(chunk)) {
+        if (isMarkerChunk(chunk, polarity)) {
             removedLineCount += 1;
         }
         else {
@@ -171,9 +180,8 @@ export function stripMarkerLinesPreservingBytes(content: Buffer): {
     };
 }
 
-function isMarkerChunk(chunk: Buffer): boolean {
-    const text = chunk.toString('utf8');
-    return AI_MARKER_START_PATTERN.test(text) || AI_MARKER_STOP_PATTERN.test(text);
+function isMarkerChunk(chunk: Buffer, polarity: MarkerPolarity): boolean {
+    return isMarkerLineForPolarity(chunk.toString('utf8'), polarity);
 }
 
 async function readIndexEntry(repoRoot: string, gitPath: string): Promise<{ mode: string } | null> {

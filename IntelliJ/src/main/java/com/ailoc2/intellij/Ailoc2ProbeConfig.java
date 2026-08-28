@@ -28,6 +28,8 @@ final class Ailoc2ProbeConfig {
 
     static final String MODE_SIGNALS = "signals";
     static final String MODE_MARKERS = "markers";
+    static final String MODE_HUMAN_MARKERS = "human-markers";
+    static final List<String> MODES = List.of(MODE_SIGNALS, MODE_MARKERS, MODE_HUMAN_MARKERS);
 
     private static final Map<Path, CachedConfig> cachedConfigByRepoRoot = new ConcurrentHashMap<>();
 
@@ -81,7 +83,17 @@ final class Ailoc2ProbeConfig {
     }
 
     boolean isMarkerMode() {
-        return MODE_MARKERS.equals(mode);
+        return MODE_MARKERS.equals(mode) || MODE_HUMAN_MARKERS.equals(mode);
+    }
+
+    /**
+     * Which author a marker block attributes its contents to. Lines outside any block get the
+     * opposite bucket, so {@code human-markers} treats untagged code as AI.
+     */
+    Ailoc2MarkerAttribution.Polarity markerPolarity() {
+        return MODE_HUMAN_MARKERS.equals(mode)
+            ? Ailoc2MarkerAttribution.Polarity.HUMAN
+            : Ailoc2MarkerAttribution.Polarity.AI;
     }
 
     boolean largeFileIsAi() {
@@ -298,7 +310,7 @@ final class Ailoc2ProbeConfig {
         }
 
         String mode = value.getAsString();
-        return MODE_SIGNALS.equals(mode) || MODE_MARKERS.equals(mode) ? mode : null;
+        return MODES.contains(mode) ? mode : null;
     }
 
     private static Boolean readBoolean(JsonObject attribution, String key) {

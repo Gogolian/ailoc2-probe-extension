@@ -8,22 +8,40 @@ import java.util.function.Predicate;
 import java.util.regex.Pattern;
 
 /**
- * Legacy {@code AI start} / {@code AI stop} marker attribution.
+ * Comment-marker attribution.
  *
  * <p>Mirrors {@code src/metrics/markerAttribution.ts}; the two must stay in agreement or the
  * IDE and the terminal will report different percentages for the same commit. Markers are
  * matched anywhere in a line and the comment syntax is deliberately irrelevant, which is how a
  * single pattern covered {@code //}, {@code #}, {@code /* *}{@code /}, {@code <!-- -->} and {@code --}.
+ *
+ * <p>Two polarities are supported. {@link Polarity#AI} tags AI code and treats everything else
+ * as human. {@link Polarity#HUMAN} inverts that: unmarked lines are AI and only tagged blocks
+ * are human, which suits workflows where AI writes most of the code.
  */
 final class Ailoc2MarkerAttribution {
     static final Pattern AI_MARKER_START = Pattern.compile("ai[\\s_\\-]*start\\b", Pattern.CASE_INSENSITIVE);
     static final Pattern AI_MARKER_STOP = Pattern.compile("ai[\\s_\\-]*stop\\b", Pattern.CASE_INSENSITIVE);
+    static final Pattern HUMAN_MARKER_START = Pattern.compile("human[\\s_\\-]*start\\b", Pattern.CASE_INSENSITIVE);
+    static final Pattern HUMAN_MARKER_STOP = Pattern.compile("human[\\s_\\-]*stop\\b", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Which author a marker block attributes its contents to. Lines outside any block get the
+     * opposite bucket, so {@link Polarity#HUMAN} treats untagged code as AI.
+     */
+    enum Polarity { AI, HUMAN }
 
     private Ailoc2MarkerAttribution() {
     }
 
     static boolean isMarkerLine(String text) {
-        return AI_MARKER_START.matcher(text).find() || AI_MARKER_STOP.matcher(text).find();
+        return isMarkerLine(text, Polarity.AI);
+    }
+
+    static boolean isMarkerLine(String text, Polarity polarity) {
+        Pattern start = polarity == Polarity.HUMAN ? HUMAN_MARKER_START : AI_MARKER_START;
+        Pattern stop = polarity == Polarity.HUMAN ? HUMAN_MARKER_STOP : AI_MARKER_STOP;
+        return start.matcher(text).find() || stop.matcher(text).find();
     }
 
     /**
@@ -36,6 +54,16 @@ final class Ailoc2MarkerAttribution {
      * the denominator.
      */
     static Ailoc2GitSummary summarize(String diffText, Predicate<String> ignoredPathPredicate) {
+        return summarize(diffText, ignoredPathPredicate, Polarity.AI);
+    }
+
+    static Ailoc2GitSummary summarize(
+        String diffText,
+        Predicate<String> ignoredPathPredicate,
+        Polarity polarity
+    ) {
+        Pattern startPattern = polarity == Polarity.HUMAN ? HUMAN_MARKER_START : AI_MARKER_START;
+        Pattern stopPattern = polarity == Polarity.HUMAN ? HUMAN_MARKER_STOP : AI_MARKER_STOP;
         Map<String, long[]> weightsByPath = new LinkedHashMap<>();
         long aiWeight = 0;
         long humanWeight = 0;
@@ -70,11 +98,11 @@ final class Ailoc2MarkerAttribution {
             }
 
             String content = line.substring(1);
-            if (AI_MARKER_START.matcher(content).find()) {
+            if (startPattern.matcher(content).find()) {
                 blockDepth++;
                 continue;
             }
-            if (AI_MARKER_STOP.matcher(content).find()) {
+            if (stopPattern.matcher(content).find()) {
                 blockDepth = Math.max(0, blockDepth - 1);
                 continue;
             }
@@ -85,7 +113,8 @@ final class Ailoc2MarkerAttribution {
             }
 
             long[] pathWeights = weightsByPath.computeIfAbsent(currentPath, key -> new long[2]);
-            if (blockDepth > 0) {
+            boolean isInsideBlock = blockDepth > 0;
+            if (polarity == Polarity.AI ? isInsideBlock : !isInsideBlock) {
                 aiWeight += weight;
                 aiLineCount++;
                 pathWeights[0] += weight;
@@ -119,6 +148,10 @@ final class Ailoc2MarkerAttribution {
      * Repo-relative paths whose staged additions still contain markers.
      */
     static List<String> collectMarkerPaths(String diffText) {
+        return collectMarkerPaths(diffText, Polarity.AI);
+    }
+
+    static List<String> collectMarkerPaths(String diffText, Polarity polarity) {
         List<String> paths = new ArrayList<>();
         String currentPath = null;
 
@@ -132,7 +165,7 @@ final class Ailoc2MarkerAttribution {
                 continue;
             }
 
-            if (isMarkerLine(line.substring(1)) && !paths.contains(currentPath)) {
+            if (isMarkerLine(line.substring(1), polarity) && !paths.contains(currentPath)) {
                 paths.add(currentPath);
             }
         }

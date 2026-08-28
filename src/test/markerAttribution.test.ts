@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import {
     collectMarkerDiffPaths,
     isAiMarkerLine,
+    isHumanMarkerLine,
     parseMarkerDiffAttribution,
     stripAiMarkerLines
 } from '../metrics/markerAttribution';
+import { getTrackingExclusionReasonForPath } from '../trackingExclusions';
 
 function buildDiff(files: Array<{ path: string; addedLines: string[] }>): string {
     return files
@@ -192,6 +194,100 @@ test('stripAiMarkerLines removes only the marker lines', () => {
     ]);
 
     assert.deepEqual(stripped, ['const before = 1;', 'const generated = 2;', 'const after = 3;']);
+});
+
+// human polarity: everything is AI unless wrapped in Human start/stop.
+test('human polarity attributes unmarked lines to AI and marked blocks to human', () => {
+    const diffText = buildDiff([{
+        path: 'src/app.ts',
+        addedLines: [
+            'const generatedOne = 1;',
+            '// Human start',
+            'const handWrittenOne = 2;',
+            'const handWrittenTwo = 3;',
+            '// Human stop',
+            'const generatedTwo = 4;'
+        ]
+    }]);
+
+    const attribution = parseMarkerDiffAttribution(diffText, 'human').find(
+        (entry) => entry.repoRelativePath === 'src/app.ts'
+    );
+
+    assert.equal(attribution?.aiAddedLineCount, 2, 'lines outside a human block are AI');
+    assert.equal(attribution?.humanAddedLineCount, 2);
+});
+
+test('human polarity treats a file with no markers as entirely AI', () => {
+    const diffText = buildDiff([{
+        path: 'src/untagged.ts',
+        addedLines: ['const one = 1;', 'const two = 2;', 'const three = 3;']
+    }]);
+
+    const attribution = parseMarkerDiffAttribution(diffText, 'human').find(
+        (entry) => entry.repoRelativePath === 'src/untagged.ts'
+    );
+
+    assert.equal(attribution?.aiAddedLineCount, 3);
+    assert.equal(attribution?.humanAddedLineCount, 0);
+});
+
+test('human polarity ignores AI markers and vice versa', () => {
+    const diffText = buildDiff([{
+        path: 'src/mixed.ts',
+        addedLines: ['// AI start', 'const line = 1;', '// AI stop']
+    }]);
+
+    const humanRun = parseMarkerDiffAttribution(diffText, 'human')[0];
+    assert.equal(humanRun.aiAddedLineCount, 3, 'AI markers are ordinary lines under human polarity');
+    assert.equal(humanRun.humanAddedLineCount, 0);
+
+    const aiRun = parseMarkerDiffAttribution(diffText, 'ai')[0];
+    assert.equal(aiRun.aiAddedLineCount, 1, 'and AI polarity consumes them as markers');
+});
+
+test('human polarity supports nesting and per-file reset', () => {
+    const diffText = buildDiff([
+        { path: 'src/leaky.ts', addedLines: ['// Human start', 'const handWritten = 1;'] },
+        { path: 'src/next.ts', addedLines: ['const generated = 2;'] }
+    ]);
+
+    const leaky = parseMarkerDiffAttribution(diffText, 'human')[0];
+    const next = parseMarkerDiffAttribution(diffText, 'human')[1];
+
+    assert.equal(leaky.humanAddedLineCount, 1);
+    assert.equal(next.aiAddedLineCount, 1, 'an unclosed human block must not bleed forward');
+    assert.equal(next.humanAddedLineCount, 0);
+});
+
+test('human marker syntax matches the AI family conventions', () => {
+    for (const line of [
+        '// Human start', '# human start', '/* HUMAN START */', '<!-- human_start -->',
+        '-- Human-Start', '// human stop', '# HUMAN_STOP'
+    ]) {
+        assert.equal(isHumanMarkerLine(line), true, `expected to recognize ${line}`);
+    }
+
+    assert.equal(isHumanMarkerLine('const humanStartupTime = 1;'), false, 'requires a word boundary');
+    assert.equal(isHumanMarkerLine('// AI start'), false, 'AI markers are a separate family');
+});
+
+test('collectMarkerDiffPaths honors polarity', () => {
+    const diffText = buildDiff([
+        { path: 'src/human.ts', addedLines: ['// Human start', 'const one = 1;', '// Human stop'] },
+        { path: 'src/ai.ts', addedLines: ['// AI start', 'const two = 2;', '// AI stop'] }
+    ]);
+
+    assert.deepEqual(collectMarkerDiffPaths(diffText, 'human'), ['src/human.ts']);
+    assert.deepEqual(collectMarkerDiffPaths(diffText, 'ai'), ['src/ai.ts']);
+});
+
+test('the committed config file is excluded from tracking so it cannot score itself', () => {
+    // Regression: in human-markers mode an untagged .ailoc2-probe.json would otherwise be
+    // attributed to AI on the very commit that adds it.
+    assert.notEqual(getTrackingExclusionReasonForPath('.ailoc2-probe.json'), null);
+    assert.notEqual(getTrackingExclusionReasonForPath('.ailoc2-metrics/summary.json'), null);
+    assert.equal(getTrackingExclusionReasonForPath('src/app.ts'), null);
 });
 
 test('deleted files are skipped instead of attributed', () => {

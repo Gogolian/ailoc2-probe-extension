@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Quick toggle for the attribution settings that otherwise require hand-editing JSON.
@@ -36,34 +38,45 @@ public final class Ailoc2ConfigureAttributionAction extends AnAction {
         }
 
         Ailoc2ProbeConfig config = Ailoc2ProbeConfig.read(repoRoot);
-        String[] options = {
-            config.isMarkerMode()
-                ? "Switch to signal attribution (currently: AI start/stop markers)"
-                : "Switch to AI start/stop marker attribution (currently: signals)",
-            (config.largeFileIsAi() ? "Disable" : "Enable") + " large-insertion attribution (currently: "
-                + (config.largeFileIsAi() ? "on" : "off") + ")",
-            (config.newFileIsAi() ? "Disable" : "Enable") + " new-file attribution (currently: "
-                + (config.newFileIsAi() ? "on" : "off") + ")",
-            "Cancel"
-        };
+        List<String> switchableModes = new ArrayList<>();
+        for (String mode : Ailoc2ProbeConfig.MODES) {
+            if (!mode.equals(config.mode())) {
+                switchableModes.add(mode);
+            }
+        }
+
+        List<String> options = new ArrayList<>();
+        for (String mode : switchableModes) {
+            options.add("Switch to " + describeMode(mode));
+        }
+        options.add((config.largeFileIsAi() ? "Disable" : "Enable") + " large-insertion attribution (currently: "
+            + (config.largeFileIsAi() ? "on" : "off") + ")");
+        options.add((config.newFileIsAi() ? "Disable" : "Enable") + " new-file attribution (currently: "
+            + (config.newFileIsAi() ? "on" : "off") + ")");
+        options.add("Cancel");
 
         int choice = Messages.showDialog(
             project,
             describeCurrentConfig(config),
             DIALOG_TITLE,
-            options,
-            options.length - 1,
+            options.toArray(new String[0]),
+            options.size() - 1,
             Messages.getQuestionIcon()
         );
 
-        Ailoc2ProbeConfig updated = switch (choice) {
-            case 0 -> config.withMode(config.isMarkerMode()
-                ? Ailoc2ProbeConfig.MODE_SIGNALS
-                : Ailoc2ProbeConfig.MODE_MARKERS);
-            case 1 -> config.withLargeFileIsAi(!config.largeFileIsAi());
-            case 2 -> config.withNewFileIsAi(!config.newFileIsAi());
-            default -> null;
-        };
+        Ailoc2ProbeConfig updated;
+        if (choice >= 0 && choice < switchableModes.size()) {
+            updated = config.withMode(switchableModes.get(choice));
+        }
+        else if (choice == switchableModes.size()) {
+            updated = config.withLargeFileIsAi(!config.largeFileIsAi());
+        }
+        else if (choice == switchableModes.size() + 1) {
+            updated = config.withNewFileIsAi(!config.newFileIsAi());
+        }
+        else {
+            updated = null;
+        }
 
         if (updated == null) {
             return;
@@ -97,8 +110,16 @@ public final class Ailoc2ConfigureAttributionAction extends AnAction {
         event.getPresentation().setEnabledAndVisible(event.getData(CommonDataKeys.PROJECT) != null);
     }
 
+    private String describeMode(String mode) {
+        return switch (mode) {
+            case Ailoc2ProbeConfig.MODE_MARKERS -> "AI marker attribution (only AI start/stop blocks count as AI)";
+            case Ailoc2ProbeConfig.MODE_HUMAN_MARKERS -> "human marker attribution (everything is AI except Human start/stop blocks)";
+            default -> "signal attribution (observed editor and chat activity, no tags)";
+        };
+    }
+
     private String describeCurrentConfig(Ailoc2ProbeConfig config) {
-        return "Mode: " + (config.isMarkerMode() ? "AI start/stop markers" : "signals")
+        return "Mode: " + describeMode(config.mode())
             + "\nLarge insertions count as AI: " + (config.largeFileIsAi() ? "yes" : "no")
             + "\nNew files count as AI: " + (config.newFileIsAi() ? "yes" : "no")
             + "\nExcluded paths: " + (config.excludePaths().isEmpty() ? "none" : String.join(", ", config.excludePaths()))

@@ -51,7 +51,7 @@ Every setting except `excludePaths` merges **per key**: if the local file specif
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `version` | number | `1` | Config schema version. |
-| `attribution.mode` | `"signals"` \| `"markers"` | `"signals"` | How attribution is decided. See [Attribution modes](#attribution-modes). |
+| `attribution.mode` | `"signals"` \| `"markers"` \| `"human-markers"` | `"signals"` | How attribution is decided. See [Attribution modes](#attribution-modes). |
 | `attribution.largeFileIsAI` | boolean | `true` | Whether a large insertion counts toward AI. |
 | `attribution.newFileIsAI` | boolean | `true` | Whether filling a brand-new file counts toward AI. |
 | `attribution.excludePaths` | string[] | `[]` | Gitignore-style patterns excluded from attribution. |
@@ -84,26 +84,55 @@ const alsoHandWritten = 4;
 
 The example above reports 2 AI lines and 2 Human lines.
 
+### `human-markers`
+
+The same machinery with the polarity inverted. Everything is AI **unless** you tag it as yours:
+
+- an added line inside a `Human start` / `Human stop` block → **Human**
+- every other added line → **AI**
+
+```ts
+const generatedOne = 1;
+const generatedTwo = 2;
+// Human start
+const handWritten = 3;
+// Human stop
+const generatedThree = 4;
+```
+
+The example above reports 3 AI lines and 1 Human line. A file with no markers at all is reported as 100% AI.
+
+This suits the inverse workflow: if an AI writes most of your code and you only occasionally intervene by hand, tagging the exceptions is far less work than tagging the rule — and it fails toward *over*-reporting AI rather than under-reporting it, which is the safer direction if you are being asked to disclose AI usage. It requires no cooperation from the AI tool at all; you tag your own edits.
+
+The trade-off is that forgetting a tag silently costs you credit for your own work, whereas in `markers` mode forgetting a tag silently understates AI.
+
+Both marker modes are exclusive replacements and both strip their markers at commit time. Everything below applies to both; only the marker keyword and the meaning of "inside a block" differ.
+
 **Marker syntax.** The marker is matched anywhere in the line and the comment character is irrelevant, so every language works with one rule:
 
 ```
 // AI start        # AI start        -- AI start
 /* AI start */     <!-- AI start -->
+
+// Human start     # human start     -- Human-Start
+/* HUMAN START */  <!-- human_stop -->
 ```
 
-Matching is case-insensitive and tolerates separators, so `AI stop`, `ai_stop`, `AI-STOP` and `Ai   Stop` are all recognized. A word boundary is required, so an identifier like `aiStartupCost` is not mistaken for a marker.
+Matching is case-insensitive and tolerates separators, so `AI stop`, `ai_stop`, `AI-STOP` and `Ai   Stop` are all recognized, as are `Human stop`, `human_stop` and `HUMAN-STOP`. A word boundary is required, so identifiers like `aiStartupCost` or `humanStartupTime` are not mistaken for markers.
+
+The two families are independent: in `human-markers` mode an `AI start` comment is just an ordinary line of code (and counts as AI), and vice versa.
 
 **Counting rules.**
 
 - Marker lines themselves are excluded from both the AI count and the total.
-- Blocks nest: an inner `AI stop` closes only the inner block.
+- Blocks nest: an inner stop marker closes only the inner block.
 - Block state resets at each file, so an unclosed block never bleeds into the next file in the diff.
 - Blank and whitespace-only lines are not counted.
 - Only added (`+`) lines count; removals and context lines are ignored.
 
 ### Markers are removed when you commit
 
-In `markers` mode, AILoc2 counts your staged changes and then **deletes the marker lines from the index and the working tree**, so markers never reach the commit. This reproduces the original tool's behavior, where markers were temporary editing aids.
+In either marker mode, AILoc2 counts your staged changes and then **deletes the marker lines from the index and the working tree**, so markers never reach the commit. This reproduces the original tool's behavior, where markers were temporary editing aids. Only the active mode's family is removed: `human-markers` strips `Human start` / `Human stop` and leaves any `AI start` comments alone.
 
 Everything else is left byte-for-byte identical. The stripper:
 
@@ -114,7 +143,11 @@ Everything else is left byte-for-byte identical. The stripper:
 
 If you would rather keep your markers in the source, stay in `signals` mode.
 
+The committed `.ailoc2-probe.json` and everything under `.ailoc2-metrics/` are never attributed in any mode, so the commit that adds your config does not score itself.
+
 ## Large insertions and new files
+
+These two switches apply to `signals` mode only. Both marker modes derive everything from tags, so the size of a change is irrelevant there.
 
 Two separate switches, because they answer different questions.
 
@@ -178,7 +211,7 @@ Both accept the same pattern syntax, and both keep a file out of scoring. Prefer
 
 You do not have to hand-edit JSON for the common toggles.
 
-- **VS Code** — run `AILoc2 Probe: Attribution Settings` from the Command Palette. Pick a repository, then flip the mode, `largeFileIsAI`, or `newFileIsAI`. An **Edit excluded paths…** entry opens `.ailoc2-probe.json` directly.
+- **VS Code** — run `AILoc2 Probe: Attribution Settings` from the Command Palette. Pick a repository, then choose one of the other two modes, or toggle `largeFileIsAI` or `newFileIsAI`. An **Edit excluded paths…** entry opens `.ailoc2-probe.json` directly.
 - **IntelliJ IDEA** — **Tools → AILoc2 Probe: Attribution Settings**.
 
 Both write to the **local** layer (`.ailoc2-metrics/config.json`), so a quick toggle never dirties committed team policy. To change team policy, edit `.ailoc2-probe.json` yourself. Both also refresh the repo summary immediately, so the effect is visible right away.
@@ -205,10 +238,13 @@ Both IDEs cache the config and re-read it when the file's timestamp or size chan
 Most likely AILoc2 had stronger evidence than size — a chat apply or a Claude Code edit — which the flag does not suppress. Note too that a file with no recorded attribution state at all is still counted as AI by the unresolved-lines fallback; that fallback is independent of this setting. Use `excludePaths` if you want a file out of scoring entirely.
 
 **In `markers` mode everything is reported as Human.**
-Marker mode counts only what is inside `AI start` / `AI stop` blocks, and only markers that are part of your **staged** additions. Check that the block is staged and that the marker line survived a previous commit's stripping pass.
+That mode counts only what is inside `AI start` / `AI stop` blocks, and only markers that are part of your **staged** additions. Check that the block is staged and that the marker line survived a previous commit's stripping pass. If you would rather have untagged code default to AI, use `human-markers`.
+
+**In `human-markers` mode everything is reported as AI.**
+Expected when nothing is tagged — that is the mode's default. Add `Human start` / `Human stop` around your own edits. Check the keyword too: `AI start` has no effect in this mode.
 
 **My markers disappeared.**
-That is intended in `markers` mode — see [Markers are removed when you commit](#markers-are-removed-when-you-commit). Switch to `signals` mode to keep them.
+That is intended in both marker modes — see [Markers are removed when you commit](#markers-are-removed-when-you-commit). Switch to `signals` mode to keep them.
 
 **A commit reports `(AI: unavailable)`.**
 Summary generation or the hook runtime fell back. This is not a statement about AI usage. Check the `AILoc2 Summary` output channel, or the IDE log, for the underlying warning.

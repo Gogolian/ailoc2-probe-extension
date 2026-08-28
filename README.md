@@ -43,7 +43,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 - Persists rolling per-file attribution state in `.ailoc2-metrics/state/files/**/*.metrics.json`.
 - Builds staged and unstaged summaries from actual Git diff slices, ignoring whitespace-only diff noise in final percentages and line counts.
 - Installs repo-local Git hooks into `.githooks` and a committable `.ailoc2-probe.json` attribution config.
-- Lets you disable large-insertion attribution, exclude paths from scoring, or switch to the legacy `AI start` / `AI stop` marker model — per repo, with optional per-machine overrides.
+- Lets you disable large-insertion attribution, exclude paths from scoring, or switch to a comment-marker model — either tagging AI code (`AI start`) or tagging only your own (`Human start`, everything else counted as AI) — per repo, with optional per-machine overrides.
 - Annotates commit subjects with the AI-added-line percentage, for example `(AI: 22.64%)`, and commit bodies with the matching counts, for example `(AI-Lines: 12/53)`.
 - Falls back safely to `(AI: unavailable)` and `(AI-Lines: unavailable)` when summary data cannot be produced.
 
@@ -56,7 +56,7 @@ No hosted backend is required by this repo. No special commit command to remembe
 - **Auditable** — summaries, rolling state, and manifests are inspectable.
 - **Low-friction** — once hooks are installed, the flow feels like normal Git.
 - **Hook-friendly** — managed hooks can chain an existing repo-local `core.hooksPath` instead of bulldozing it.
-- **Tunable** — teams can turn off heuristics they disagree with, exempt vendored or generated paths, or opt back into manual `AI start` / `AI stop` tagging.
+- **Tunable** — teams can turn off heuristics they disagree with, exempt vendored or generated paths, or opt into manual tagging from either direction.
 
 ## How it works
 
@@ -226,9 +226,9 @@ Attribution behavior is configured per repository in `.ailoc2-probe.json`, creat
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `attribution.mode` | `"signals"` | `"signals"` uses passive editor/chat evidence. `"markers"` counts only lines inside `AI start` / `AI stop` comments and strips the markers when you commit. |
-| `attribution.largeFileIsAI` | `true` | When `false`, a large insertion is attributed to Human instead of raising the AI percentage. |
-| `attribution.newFileIsAI` | `true` | When `false`, filling a brand-new file is attributed to Human. |
+| `attribution.mode` | `"signals"` | `"signals"` uses passive editor/chat evidence. `"markers"` counts only lines inside `AI start` / `AI stop` comments as AI. `"human-markers"` inverts that: everything is AI except `Human start` / `Human stop` blocks. Both marker modes strip their markers when you commit. |
+| `attribution.largeFileIsAI` | `true` | `signals` mode only. When `false`, a large insertion is attributed to Human instead of raising the AI percentage. |
+| `attribution.newFileIsAI` | `true` | `signals` mode only. When `false`, filling a brand-new file is attributed to Human. |
 | `attribution.excludePaths` | `[]` | Gitignore-style patterns removed from attribution entirely — counted in neither the AI numerator nor the total. |
 
 The defaults reproduce the previous behavior, so existing repos are unaffected until you change something. Mode and the two toggles are also flippable from `AILoc2 Probe: Attribution Settings` in VS Code and **Tools → AILoc2 Probe: Attribution Settings** in IntelliJ; both write the local layer so a toggle never dirties committed team policy.
@@ -243,7 +243,7 @@ Read [`docs/configuration.md`](docs/configuration.md) for the full guide, includ
 
 ## Attribution model
 
-Two models are available, selected by `attribution.mode` in [`.ailoc2-probe.json`](#configuration). The default is `signals`, described below; `markers` instead counts only lines inside `AI start` / `AI stop` comments and ignores every passive signal.
+Three models are available, selected by `attribution.mode` in [`.ailoc2-probe.json`](#configuration). The default is `signals`, described below. `markers` instead counts only lines inside `AI start` / `AI stop` comments, and `human-markers` counts everything as AI except lines inside `Human start` / `Human stop` blocks; both ignore every passive signal.
 
 The `signals` heuristic uses explicit AI and Human signals where available and assigns unresolved output to AI.
 
@@ -279,7 +279,7 @@ This project is already useful, but it is not pretending to be magic.
 - `(AI: unavailable)` with `(AI-Lines: unavailable)` means summary generation, validation, or hook runtime fallback kicked in; it does **not** mean “no AI was used.”
 - The extension currently excludes metrics artifact paths such as `.ailoc2-metrics` from tracking to avoid self-feedback loops.
 - You can exempt paths from scoring with `attribution.excludePaths`, or add machine-local opt-out rules in `.ailoc2-metrics/.ignore`; ignored files or directories do not get per-file metrics state in either plugin.
-- In `markers` mode, attribution depends entirely on markers being present in your staged additions, and the markers are deleted from the index and working tree as part of committing.
+- In either marker mode, attribution depends entirely on markers being present in your staged additions, and the markers are deleted from the index and working tree as part of committing. `markers` under-reports AI when you forget a tag; `human-markers` over-reports it.
 
 ## Development
 

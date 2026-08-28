@@ -901,6 +901,10 @@ final class Ailoc2HookManager {
                         }
                         sub(/^b\\//, "", current_path)
                         current_line = 0
+                        # Metrics artifacts and the committed config file must never score themselves.
+                        if (current_path ~ /^(\\.git|\\.idea|\\.ailoc2-metrics)(\\/|$)/ || current_path == ".ailoc2-probe.json") {
+                            current_path = ""
+                        }
                         if (current_path != "" && exclude_re != "" && current_path ~ exclude_re) {
                             if (reinclude_re == "" || current_path !~ reinclude_re) {
                                 current_path = ""
