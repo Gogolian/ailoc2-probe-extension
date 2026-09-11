@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -364,7 +365,10 @@ public final class Ailoc2ProjectService implements Disposable {
     }
 
     private List<String> withGitCommand(List<String> gitArgs) {
-        return java.util.stream.Stream.concat(java.util.stream.Stream.of("git"), gitArgs.stream()).toList();
+        return java.util.stream.Stream.concat(
+            java.util.stream.Stream.of("git", "-c", "core.quotepath=false"),
+            gitArgs.stream()
+        ).toList();
     }
 
     private Set<String> readGitPathSet(Path repoRoot, List<String> gitArgs) {
@@ -377,10 +381,17 @@ public final class Ailoc2ProjectService implements Disposable {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String repoRelativePath = line.strip();
-                    if (!repoRelativePath.isEmpty()
-                        && !shouldIgnore(repoRoot, repoRoot.resolve(repoRelativePath))
-                        && !storage.isTrackingIgnored(repoRoot, repoRelativePath)) {
-                        repoRelativePaths.add(repoRelativePath.replace('\\', '/'));
+                    if (repoRelativePath.isEmpty()) {
+                        continue;
+                    }
+                    try {
+                        if (!shouldIgnore(repoRoot, repoRoot.resolve(repoRelativePath))
+                            && !storage.isTrackingIgnored(repoRoot, repoRelativePath)) {
+                            repoRelativePaths.add(repoRelativePath.replace('\\', '/'));
+                        }
+                    }
+                    catch (InvalidPathException error) {
+                        LOG.warn("AILoc2 skipped path with characters illegal on this filesystem: " + repoRelativePath, error);
                     }
                 }
             }

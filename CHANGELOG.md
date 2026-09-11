@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.27] - 2026-09-11
+
+- Fix an IntelliJ commit-time crash (`InvalidPathException`) when a repo has a path with characters Git quotes by default (e.g. non-ASCII filenames): all Git invocations now pass `-c core.quotepath=false`, and a single unresolvable path is now skipped and logged instead of aborting commit finalization.
+- Fix the IntelliJ plugin flagging purely human deletions as AI: deleting a selection that merges two lines together (the common case — a multi-line selection rarely ends exactly at a line boundary) forced the merged line's attribution to `Unknown`, which the commit summary folds into the AI percentage. The merged line now keeps the bucket the deletion itself was classified as (normally `Human`).
+
 ## [1.0.26] - 2026-08-28
 
 - Fix O(N²) scaling in the IntelliJ Git hook's per-line attribution: the generated shell runtime rescanned each file's entire state file for every added line, so a 4000-line change took over 30 seconds. Each state file is now loaded once and cached in memory for the rest of the refresh; a same-size change now completes in a few seconds regardless of line count.

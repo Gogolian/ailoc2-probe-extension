@@ -64,7 +64,7 @@ final class Ailoc2FileState {
             }
         }
         else if (!oldFragment.isEmpty() && !oldEndsAtLineBoundary) {
-            shiftedBuckets.put(safeStartLine, Ailoc2AttributionBucket.UNKNOWN);
+            shiftedBuckets.put(safeStartLine, bucket);
         }
 
         lineBuckets.clear();
