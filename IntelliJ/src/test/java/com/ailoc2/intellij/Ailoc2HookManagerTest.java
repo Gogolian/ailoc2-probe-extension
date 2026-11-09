@@ -134,6 +134,60 @@ class Ailoc2HookManagerTest {
         assertTrue(summary.contains("\"src/missing.ts\": {\"aiWeightedChangedLines\": 18, \"humanWeightedChangedLines\": 0}"));
     }
 
+    @Test
+    void commitMsgHookAnnotatesFromMainWorktreeRuntimeInLinkedWorktree(@TempDir Path workspaceParent) throws Exception {
+        String shell = findShell();
+        Assumptions.assumeTrue(shell != null, "A POSIX shell is required for the generated worktree hook smoke test");
+
+        Path repoRoot = workspaceParent.resolve("main");
+        Files.createDirectories(repoRoot);
+        run(repoRoot, "git", "init");
+        run(repoRoot, "git", "config", "user.name", "AILoc2 Test");
+        run(repoRoot, "git", "config", "user.email", "ailoc2@example.com");
+
+        Path sourceDirectory = repoRoot.resolve("src");
+        Files.createDirectories(sourceDirectory);
+        Files.writeString(sourceDirectory.resolve("ai.ts"), "const value = \"base\";\n", StandardCharsets.UTF_8);
+
+        Ailoc2HookManager manager = new Ailoc2HookManager();
+        Path hooksDirectory = repoRoot.resolve(".githooks");
+        Files.createDirectories(hooksDirectory);
+        Path commitMsgHook = hooksDirectory.resolve("commit-msg");
+        Files.writeString(commitMsgHook, manager.createManagedCommitMsgHookScript(), StandardCharsets.UTF_8);
+        commitMsgHook.toFile().setExecutable(true);
+        // The runtime is an untracked build artifact: present in the main worktree, absent from a
+        // fresh linked worktree even though the committed hook script travels with the checkout.
+        Files.writeString(
+            hooksDirectory.resolve("ailoc2-intellij-hook-runtime.sh"),
+            manager.createManagedRuntimeScript(),
+            StandardCharsets.UTF_8
+        );
+        Files.writeString(repoRoot.resolve(".gitignore"), ".githooks/\n.ailoc2-metrics/\n", StandardCharsets.UTF_8);
+
+        run(repoRoot, "git", "config", "core.hooksPath", ".githooks");
+        run(repoRoot, "git", "add", "src/ai.ts", ".gitignore");
+        run(repoRoot, "git", "add", "-f", ".githooks/commit-msg");
+        run(repoRoot, "git", "commit", "-m", "initial");
+
+        Path worktreeRoot = workspaceParent.resolve("worktree");
+        run(repoRoot, "git", "worktree", "add", worktreeRoot.toString(), "-b", "feature");
+
+        assertTrue(Files.isRegularFile(repoRoot.resolve(".githooks/ailoc2-intellij-hook-runtime.sh")));
+        assertTrue(Files.isRegularFile(worktreeRoot.resolve(".githooks/commit-msg")));
+        assertTrue(!Files.exists(worktreeRoot.resolve(".githooks/ailoc2-intellij-hook-runtime.sh")));
+
+        Files.writeString(worktreeRoot.resolve("src/ai.ts"), "const value = \"next\";\n", StandardCharsets.UTF_8);
+        writeState(worktreeRoot, "src/ai.ts", "AI", 10L, 0L);
+        run(worktreeRoot, "git", "add", "src/ai.ts");
+
+        run(worktreeRoot, "git", "commit", "-m", "worktree change");
+        String message = run(worktreeRoot, "git", "log", "-1", "--pretty=%B").trim();
+
+        assertEquals("worktree change (AI: 100%)\n\n(AI-Lines: 1/1)\n(Unsure: 0/1)", message);
+
+        run(repoRoot, "git", "worktree", "remove", "--force", worktreeRoot.toString());
+    }
+
     private void writeState(Path repoRoot, String repoRelativePath, String bucket, long aiMagnitude, long humanMagnitude) throws IOException {
         String stateFileName = repoRelativePath.replace('\\', '/').replaceAll("[^A-Za-z0-9._-]", "_") + ".tsv";
         Path statePath = repoRoot.resolve(".ailoc2-metrics/intellij-state").resolve(stateFileName);

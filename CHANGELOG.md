@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.28] - 2026-11-09
+
+- Raise the IntelliJ plugin's `until-build` to `263.*` so it installs and loads on 2026.3 (build 263) IDEs; the previous `262.*` cap made the Marketplace and IDE reject it as incompatible.
+- Fix commits made from a linked Git worktree being annotated `(AI: unavailable)`. The bundled hook runtime is an untracked build artifact, so a worktree carries the tracked hook scripts without a runtime beside them; the managed pre-commit, commit-msg, and post-commit hooks (both the VS Code and IntelliJ variants) now fall back to the main worktree's runtime, located through the shared Git common directory, and still attribute the worktree being committed.
+
 ## [1.0.27] - 2026-09-11
 
 - Fix an IntelliJ commit-time crash (`InvalidPathException`) when a repo has a path with characters Git quotes by default (e.g. non-ASCII filenames): all Git invocations now pass `-c core.quotepath=false`, and a single unresolvable path is now skipped and logged instead of aborting commit finalization.

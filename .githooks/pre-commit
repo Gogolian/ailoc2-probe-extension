@@ -3,6 +3,15 @@
 
 
 CLI_PATH="./.githooks/ailoc2-hook-runtime.cjs"
+if [ ! -f "$CLI_PATH" ]; then
+    AILOC2_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null) || AILOC2_COMMON_DIR=""
+    if [ -n "$AILOC2_COMMON_DIR" ]; then
+        AILOC2_MAIN_WORKTREE=$(CDPATH= cd -- "$AILOC2_COMMON_DIR/.." 2>/dev/null && pwd) || AILOC2_MAIN_WORKTREE=""
+        if [ -n "$AILOC2_MAIN_WORKTREE" ] && [ -f "$AILOC2_MAIN_WORKTREE/.githooks/ailoc2-hook-runtime.cjs" ]; then
+            CLI_PATH="$AILOC2_MAIN_WORKTREE/.githooks/ailoc2-hook-runtime.cjs"
+        fi
+    fi
+fi
 
 run_delegate_hooks() {
     return 0

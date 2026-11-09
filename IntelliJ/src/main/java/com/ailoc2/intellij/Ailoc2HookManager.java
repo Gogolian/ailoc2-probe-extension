@@ -728,13 +728,35 @@ final class Ailoc2HookManager {
         };
     }
 
+    /**
+     * The generated runtime is a build artifact kept out of version control, so a linked worktree
+     * never carries its own copy even when the hook scripts are tracked. Without this fallback a
+     * commit made from such a worktree would be annotated "(AI: unavailable)". When the local copy
+     * is missing we locate the main worktree through the shared Git common directory and run its
+     * runtime; the runtime still resolves the repository from the current working directory, so it
+     * operates on the worktree being committed.
+     */
+    private String createRuntimePathResolutionBlock() {
+        return """
+            RUNTIME_PATH="./.githooks/%1$s"
+            if [ ! -f "$RUNTIME_PATH" ]; then
+                AILOC2_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null) || AILOC2_COMMON_DIR=""
+                if [ -n "$AILOC2_COMMON_DIR" ]; then
+                    AILOC2_MAIN_WORKTREE=$(CDPATH= cd -- "$AILOC2_COMMON_DIR/.." 2>/dev/null && pwd) || AILOC2_MAIN_WORKTREE=""
+                    if [ -n "$AILOC2_MAIN_WORKTREE" ] && [ -f "$AILOC2_MAIN_WORKTREE/.githooks/%1$s" ]; then
+                        RUNTIME_PATH="$AILOC2_MAIN_WORKTREE/.githooks/%1$s"
+                    fi
+                fi
+            fi""".formatted(RUNTIME_FILE_NAME);
+    }
+
     private String createManagedPreCommitHookScript(List<HookDelegateSpec> delegateSpecs) {
         return """
             #!/bin/sh
             # AILoc2 managed IntelliJ hook: pre-commit
             %s
 
-            RUNTIME_PATH="./.githooks/%s"
+            %s
 
             %s
 
@@ -746,7 +768,7 @@ final class Ailoc2HookManager {
 
             run_delegate_hooks "$@"
             exit $?
-            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
+            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), createRuntimePathResolutionBlock(), createDelegateHookFunction(delegateSpecs));
     }
 
     private String createManagedCommitMsgHookScript(List<HookDelegateSpec> delegateSpecs) {
@@ -756,7 +778,7 @@ final class Ailoc2HookManager {
             %s
 
             MESSAGE_FILE="$1"
-            RUNTIME_PATH="./.githooks/%s"
+            %s
             PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
             PLACEHOLDER_UNSURE_ANNOTATION='(Unsure: unavailable)'
             PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'
@@ -794,7 +816,7 @@ final class Ailoc2HookManager {
 
             run_delegate_hooks "$@"
             exit $?
-            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
+            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), createRuntimePathResolutionBlock(), createDelegateHookFunction(delegateSpecs));
     }
 
     String createManagedCommitMsgHookScript() {
@@ -807,7 +829,7 @@ final class Ailoc2HookManager {
             # AILoc2 managed IntelliJ hook: post-commit
             %s
 
-            RUNTIME_PATH="./.githooks/%s"
+            %s
 
             %s
 
@@ -817,7 +839,7 @@ final class Ailoc2HookManager {
 
             run_delegate_hooks "$@"
             exit $?
-            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), RUNTIME_FILE_NAME, createDelegateHookFunction(delegateSpecs));
+            """.formatted(createWrappedDelegateMarkerBlock(delegateSpecs), createRuntimePathResolutionBlock(), createDelegateHookFunction(delegateSpecs));
     }
 
     String createManagedRuntimeScript() {

@@ -235,6 +235,8 @@ First things to check:
 - `git config --local --get core.hooksPath` resolves to `.githooks`
 - the extension has actually observed edits for the repo and written rolling state
 
+The runtime is an untracked build artifact, so a freshly added **linked worktree** carries the committed hook scripts without a runtime beside them. The managed hooks handle this by falling back to the main worktree's runtime (located through `git rev-parse --git-common-dir`); for that to work the main worktree must still contain `.githooks/ailoc2-hook-runtime.cjs`.
+
 ### Hook install reports a conflict
 
 This means the repo already has a different **local** `core.hooksPath`. The extension can either:

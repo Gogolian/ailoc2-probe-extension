@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.ailoc2"
-version = "1.0.27"
+version = "1.0.28"
 
 val repositoryRoot = rootProject.layout.projectDirectory.dir("..")
 val claudeRuntime = repositoryRoot.file("out/claude-code/ailoc2-claude-code.cjs")
@@ -38,7 +38,7 @@ intellijPlatform {
         name = "AILoc2 Probe"
         ideaVersion {
             sinceBuild = "252"
-            untilBuild = "262.*"
+            untilBuild = "263.*"
         }
     }
     pluginVerification {
