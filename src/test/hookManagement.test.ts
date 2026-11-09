@@ -104,6 +104,60 @@ test('commit-msg refresh includes files staged by a delegated pre-commit hook', 
     );
 });
 
+test('commit-msg annotates a commit made from a linked worktree whose runtime is not checked out', async () => {
+    const repoRoot = createGitRepo('ailoc2-worktree-main-');
+    const trackedGitPath = 'src/app.ts';
+    fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, trackedGitPath), 'const value = "base";\n', 'utf8');
+    runGit(repoRoot, ['add', trackedGitPath]);
+    runGit(repoRoot, ['commit', '-m', 'add tracked file']);
+
+    const installResult = await installRepoHooks({ repoRoot });
+
+    // Reproduces the real-world setup: the hook scripts are committed so teammates share them,
+    // but the bundled runtime stays an untracked build artifact. A fresh worktree therefore
+    // carries the hooks without the runtime next to them.
+    runGit(repoRoot, ['add', '-f', '.githooks/commit-msg', '.githooks/pre-commit', '.githooks/post-commit']);
+    runGit(repoRoot, ['commit', '-m', 'track managed hook scripts']);
+    assert.equal(
+        fs.existsSync(path.join(repoRoot, '.githooks', 'ailoc2-hook-runtime.cjs')),
+        true,
+        'the runtime exists in the main worktree'
+    );
+
+    const worktreeParent = fs.mkdtempSync(path.join(os.tmpdir(), 'ailoc2-worktree-linked-'));
+    tempDirectories.push(worktreeParent);
+    const worktreeRoot = path.join(worktreeParent, 'wt');
+    runGit(repoRoot, ['worktree', 'add', worktreeRoot, '-b', 'feature']);
+
+    assert.equal(
+        fs.existsSync(path.join(worktreeRoot, '.githooks', 'commit-msg')),
+        true,
+        'the tracked hook script is checked out into the linked worktree'
+    );
+    assert.equal(
+        fs.existsSync(path.join(worktreeRoot, '.githooks', 'ailoc2-hook-runtime.cjs')),
+        false,
+        'the untracked runtime is absent from the linked worktree'
+    );
+
+    fs.writeFileSync(path.join(worktreeRoot, trackedGitPath), 'const value = "next";\n', 'utf8');
+    runGit(worktreeRoot, ['add', trackedGitPath]);
+    writeRollingState(worktreeRoot, path.normalize(trackedGitPath), 'AI');
+
+    runGit(worktreeRoot, ['commit', '-m', 'worktree change']);
+    const commitMessage = runGit(worktreeRoot, ['log', '-1', '--pretty=%B']).trim();
+
+    assert.equal(installResult.status, 'installed');
+    assert.equal(
+        commitMessage,
+        'worktree change (AI: 100%)\n\n(AI-Lines: 1/1)\n(Unsure: 0/1)',
+        'the worktree commit is annotated by the main worktree runtime instead of falling back to unavailable'
+    );
+
+    runGit(repoRoot, ['worktree', 'remove', '--force', worktreeRoot]);
+});
+
 test('installRepoHooks upgrades a markerless legacy commit-msg hook', async () => {
     const repoRoot = createGitRepo('ailoc2-legacy-hook-upgrade-');
     const hooksDirectoryPath = path.join(repoRoot, '.githooks');

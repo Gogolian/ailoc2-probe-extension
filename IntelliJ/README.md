@@ -24,7 +24,7 @@ gradle buildPlugin
 The project produces one universal plugin package:
 
 - compiled against IntelliJ IDEA Community 2025.2.3 and JDK 21;
-- compatible with Community and Ultimate builds from `252` through `262.*`;
+- compatible with Community and Ultimate builds from `252` through `263.*`;
 - verified against Community 2025.2.3 and Ultimate 2026.2.
 
 GitHub Actions builds and verifies the universal plugin ZIP. Run the `Build IntelliJ Plugin` workflow manually, then download the `ailoc2-intellij-plugin-2025.2-2026.2` artifact. The downloaded artifact ZIP is prepared with the plugin root directory at the top level and can be uploaded directly to the IntelliJ Marketplace.

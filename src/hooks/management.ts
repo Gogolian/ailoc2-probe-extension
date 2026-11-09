@@ -703,6 +703,28 @@ function getLegacyManagedHookRuntimeDirectoryPath(repoRoot: string): string {
     return path.join(getRepoHooksDirectoryPath(repoRoot), LEGACY_MANAGED_HOOK_RUNTIME_DIRECTORY_NAME);
 }
 
+/**
+ * Resolves the bundled runtime, which is a build artifact kept out of version control. A linked
+ * worktree therefore never carries its own copy even when the hook scripts themselves are tracked,
+ * so without this fallback the hook would treat every commit made from a worktree as if Node were
+ * unavailable and annotate it `(AI: unavailable)`. When the local copy is missing we locate the
+ * main worktree through the shared Git common directory and run its runtime instead; the CLI still
+ * resolves the repository from the current working directory, so it operates on the worktree being
+ * committed.
+ */
+function createCliPathResolutionBlock(): string {
+    return `CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
+if [ ! -f "$CLI_PATH" ]; then
+    AILOC2_COMMON_DIR=$(git rev-parse --git-common-dir 2>/dev/null) || AILOC2_COMMON_DIR=""
+    if [ -n "$AILOC2_COMMON_DIR" ]; then
+        AILOC2_MAIN_WORKTREE=$(CDPATH= cd -- "$AILOC2_COMMON_DIR/.." 2>/dev/null && pwd) || AILOC2_MAIN_WORKTREE=""
+        if [ -n "$AILOC2_MAIN_WORKTREE" ] && [ -f "$AILOC2_MAIN_WORKTREE/.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}" ]; then
+            CLI_PATH="$AILOC2_MAIN_WORKTREE/.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
+        fi
+    fi
+fi`;
+}
+
 function createManagedHookFileContents(hookFileName: RepoHookFileName, delegateSpecs: readonly HookDelegateSpec[]): string {
     switch (hookFileName) {
         case 'pre-commit':
@@ -721,7 +743,7 @@ function createManagedPreCommitHookScript(delegateSpecs: readonly HookDelegateSp
 # AILoc2 managed hook: pre-commit
 ${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
-CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
+${createCliPathResolutionBlock()}
 
 ${createDelegateHookFunction(delegateSpecs)}
 
@@ -741,7 +763,7 @@ function createManagedPostCommitHookScript(delegateSpecs: readonly HookDelegateS
 # AILoc2 managed hook: post-commit
 ${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
-CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
+${createCliPathResolutionBlock()}
 
 ${createDelegateHookFunction(delegateSpecs)}
 
@@ -762,7 +784,7 @@ function createManagedCommitMsgHookScript(delegateSpecs: readonly HookDelegateSp
 ${createWrappedDelegateMarkerBlock(delegateSpecs)}
 
 MESSAGE_FILE="$1"
-CLI_PATH="./.githooks/${MANAGED_HOOK_RUNTIME_FILE_NAME}"
+${createCliPathResolutionBlock()}
 PLACEHOLDER_ANNOTATION='(AI-Lines: unavailable)'
 PLACEHOLDER_UNSURE_ANNOTATION='(Unsure: unavailable)'
 PLACEHOLDER_SUBJECT_SUFFIX=' (AI: unavailable)'
